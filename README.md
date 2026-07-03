@@ -75,4 +75,7 @@ Bundled third-party components (WTelegramClient, MaterialSkin.2, LibVLCSharp / l
 
 ## Credits
 
-Built on [WTelegramClient](https://github.com/wiz0u/WTelegramClient) by Wizou. Developed with assistance from Claude (Anthropic).
+Built on [WTelegramClient](https://github.com/wiz0u/WTelegramClient). Developed with assistance from Claude (Anthropic).
+Thanks to Wizou for his contributions and his amazing library WTelegramClient.
+
+
