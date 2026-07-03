@@ -1,0 +1,343 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{0BE14FF9-F66B-4B3D-B34B-47B8DE8F836B}</ProjectGuid>
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>TelegArm</RootNamespace>
+    <AssemblyName>TelegArm</AssemblyName>
+    <TargetFrameworkVersion>v4.7</TargetFrameworkVersion>
+    <!-- WinRT access for the Win8.1-RT camera probe (Windows.Media.Capture). Reversible: remove this +
+         the Windows/System.Runtime.WindowsRuntime references to revert. Targets the 8.1 WinRT API surface. -->
+    <TargetPlatformVersion>8.1</TargetPlatformVersion>
+    <FileAlignment>512</FileAlignment>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <Deterministic>true</Deterministic>
+    <LangVersion>7.3</LangVersion>
+    <ApplicationIcon>..\icon.ico</ApplicationIcon>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Xml.Linq" />
+    <Reference Include="System.Data.DataSetExtensions" />
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="System.Data" />
+    <Reference Include="System.Deployment" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
+    <!-- WinRT (Win8.1-RT camera probe). Resolved via TargetPlatformVersion 8.1; reversible. -->
+    <Reference Include="System.Runtime.WindowsRuntime" />
+    <Reference Include="Windows">
+      <HintPath>C:\Program Files (x86)\Windows Kits\8.1\References\CommonConfiguration\Neutral\Windows.winmd</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.Security" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Xml" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Core\AccountContext.cs" />
+    <Compile Include="Core\AccountStore.cs" />
+    <Compile Include="Core\AppSettings.cs" />
+    <Compile Include="Core\AudioPlayer.cs" />
+    <Compile Include="Core\AuthManager.cs" />
+    <Compile Include="Core\AvatarStore.cs" />
+    <Compile Include="UI\DownloadsPanel.cs" />
+    <Compile Include="Core\ChatEntry.cs" />
+    <Compile Include="Core\ComposerState.cs" />
+    <Compile Include="Core\Countries.cs" />
+    <Compile Include="Core\DownloadHandle.cs" />
+    <Compile Include="Core\LruImageCache.cs" />
+    <Compile Include="Core\MediaCache.cs" />
+    <Compile Include="Core\MediaClassifier.cs" />
+    <Compile Include="Core\MediaSaver.cs" />
+    <Compile Include="Core\MediaSender.cs" />
+    <Compile Include="Core\VideoProbe.cs" />
+    <Compile Include="Core\VoiceRecorder.cs" />
+    <Compile Include="Core\MediaItem.cs" />
+    <Compile Include="Core\MediaPolicy.cs" />
+    <Compile Include="Core\StoragePaths.cs" />
+    <Compile Include="Core\Camera\ICameraRecorder.cs" />
+    <Compile Include="Core\Camera\CameraCapture.cs" />
+    <Compile Include="Core\Camera\WinRtCameraRecorder.cs" />
+    <Compile Include="Core\Camera\VlcCameraRecorder.cs" />
+    <Compile Include="Core\ApiCredentials.cs" />
+    <!-- Real api_id/api_hash. Gitignored; conditioned on existence so a fresh clone (without it) still
+         compiles against the ApiCredentials.cs placeholders. -->
+    <Compile Include="Core\ApiCredentials.Local.cs" Condition="Exists('$(MSBuildProjectDirectory)\Core\ApiCredentials.Local.cs')" />
+    <None Include="Core\ApiCredentials.Local.cs.example" />
+    <Compile Include="Core\TelegramService.cs" />
+    <Compile Include="Core\VlcBootstrap.cs" />
+    <Compile Include="Core\VlcEnvironment.cs" />
+    <Compile Include="Core\WebmAlphaProbe.cs" />
+    <Compile Include="Helpers\DrawHelper.cs" />
+    <Compile Include="Helpers\ThemedChrome.cs" />
+    <Compile Include="Helpers\TextEntities.cs" />
+    <Compile Include="Helpers\PerfLog.cs" />
+    <Compile Include="Helpers\FileLog.cs" />
+    <Compile Include="Helpers\Logger.cs" />
+    <Compile Include="Helpers\CrashLog.cs" />
+    <Compile Include="Helpers\HangWatch.cs" />
+    <Compile Include="Helpers\WinRtKeyboard.cs" />
+    <Compile Include="Helpers\EmojiRenderer.cs" />
+    <Compile Include="Helpers\FontHelper.cs" />
+    <Compile Include="Helpers\ImageDecoder.cs" />
+    <Compile Include="Helpers\NativeLibraries.cs" />
+    <Compile Include="Helpers\RLottie.cs" />
+    <Compile Include="Helpers\ScrollbarTheme.cs" />
+    <Compile Include="Helpers\Security.cs" />
+    <Compile Include="Helpers\ThemeHelper.cs" />
+    <Compile Include="Helpers\TouchKeyboard.cs" />
+    <Compile Include="UI\Controls\AttachButton.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="UI\Controls\ChatListItemControl.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="UI\Controls\MessageBubbleControl.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="UI\LoginForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="UI\MainForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="UI\MediaViewerForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="UI\SendMediaDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="UI\SettingsForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="UI\ThemedDialog.cs" />
+    <Compile Include="UI\CreatePollForm.cs" />
+    <Compile Include="UI\PeoplePickerForm.cs" />
+    <Compile Include="UI\Admin\EditChatInfoForm.cs" />
+    <Compile Include="UI\Admin\ChatMembersForm.cs" />
+    <Compile Include="UI\Admin\RightsChecklistForm.cs" />
+    <Compile Include="UI\Admin\DefaultPermsForm.cs" />
+    <Compile Include="UI\Admin\InviteLinksForm.cs" />
+    <Compile Include="UI\Admin\ChannelExtrasForm.cs" />
+    <Compile Include="UI\Admin\ManageChatForm.cs" />
+    <Compile Include="UI\CreateChatForm.cs" />
+    <Compile Include="UI\PollVotersForm.cs" />
+    <Compile Include="UI\RoundProbeForm.cs" />
+    <Compile Include="UI\RoundRecorderForm.cs" />
+    <Compile Include="UI\CountryPickerForm.cs" />
+    <Compile Include="UI\ProfileForm.cs" />
+    <Compile Include="UI\ProfilePhotoViewer.cs" />
+    <Compile Include="UI\ThemedContextMenuStrip.cs" />
+    <Compile Include="UI\EmojiPicker.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="UI\ForwardPickerDialog.cs" />
+    <Compile Include="UI\Controls\ZoomableImagePanel.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="UI\Controls\MediaControlButton.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="UI\Controls\MicButton.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="UI\Controls\EmojiGlyphButton.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="UI\Controls\SelectionBar.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="UI\Controls\ThemedScrollBar.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="UI\Controls\NoNativeScroll.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="UI\Controls\ThemedListBox.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="UI\Controls\ScrollHost.cs" />
+    <Compile Include="UI\Controls\RichInfoLabel.cs" />
+    <Compile Include="UI\Controls\InlineTextSelection.cs" />
+    <Compile Include="UI\Controls\TouchScroller.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="UI\Controls\InlineText.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="UI\Controls\JumpToBottomButton.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="UI\Controls\ServiceLineControl.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="UI\Controls\PinnedRowControl.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="UI\Controls\SponsoredCardControl.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="UI\PinnedListForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="UI\Controls\IFlashable.cs" />
+    <Compile Include="UI\Controls\MiniPlayerBar.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="UI\Controls\PinnedBar.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="UI\Controls\ComposerFooterBar.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="UI\Controls\SessionRowControl.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="UI\Controls\VideoControlBar.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="UI\Controls\VlcVideoControl.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="UI\Controls\WebmAnimator.cs" />
+    <Compile Include="UI\AboutForm.cs" />
+    <Compile Include="UI\Controls\VoiceBubbleControl.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="UI\Controls\ReplyKeyboardControl.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="UI\Controls\QrControl.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="Program.cs" />
+    <Compile Include="Properties\AssemblyInfo.cs" />
+    <EmbeddedResource Include="Properties\Resources.resx">
+      <Generator>ResXFileCodeGenerator</Generator>
+      <LastGenOutput>Resources.Designer.cs</LastGenOutput>
+      <SubType>Designer</SubType>
+    </EmbeddedResource>
+    <Compile Include="Properties\Resources.Designer.cs">
+      <AutoGen>True</AutoGen>
+      <DependentUpon>Resources.resx</DependentUpon>
+    </Compile>
+    <None Include="Properties\Settings.settings">
+      <Generator>SettingsSingleFileGenerator</Generator>
+      <LastGenOutput>Settings.Designer.cs</LastGenOutput>
+    </None>
+    <Compile Include="Properties\Settings.Designer.cs">
+      <AutoGen>True</AutoGen>
+      <DependentUpon>Settings.settings</DependentUpon>
+      <DesignTimeSharedInput>True</DesignTimeSharedInput>
+    </Compile>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="App.config" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Native rlottie (.tgs / Lottie). Per-arch; loaded by NativeLibraries.Init via SetDllDirectory. -->
+    <Content Include="rlottie\ARM\rlottie.dll">
+      <Link>rlottie\ARM\rlottie.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="rlottie\x86\rlottie.dll">
+      <Link>rlottie\x86\rlottie.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <!-- Packed Noto Emoji (Apache-2.0; LICENSE bundled inside the zip). One file replaces the loose
+         Emoji\72x72 PNG folder; EmojiRenderer reads it once at startup. Lives at the repo root. -->
+    <Content Include="..\noto-emoji.zip">
+      <Link>noto-emoji.zip</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\TelegArm.png">
+      <Link>TelegArm.png</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <!-- Bundled libVLC runtimes (per-arch). Shipped as zips; VlcBootstrap extracts the matching-arch one
+         to a libvlc/ folder on first run (LoadLibrary/plugins can't load from inside a zip). Repo root. -->
+    <Content Include="..\libvlc-x86.zip">
+      <Link>libvlc-x86.zip</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\libvlc-arm32.zip">
+      <Link>libvlc-arm32.zip</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <!-- Tray icons (unread-aware): swapped live by unread count. Repo root → copied beside the exe. -->
+    <Content Include="..\trayicon.ico">
+      <Link>trayicon.ico</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\trayicon-unread.ico">
+      <Link>trayicon-unread.ico</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Fonts\Roboto-Regular.ttf" />
+    <EmbeddedResource Include="Fonts\Roboto-Medium.ttf" />
+    <EmbeddedResource Include="Fonts\Roboto-Bold.ttf" />
+    <EmbeddedResource Include="Fonts\Vazirmatn-Regular.ttf" />
+    <EmbeddedResource Include="Fonts\Vazirmatn-Bold.ttf" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="MaterialSkin.2">
+      <Version>2.3.1</Version>
+    </PackageReference>
+    <PackageReference Include="WTelegramClient">
+      <Version>4.4.6</Version>
+    </PackageReference>
+    <PackageReference Include="Newtonsoft.Json">
+      <Version>13.0.4</Version>
+    </PackageReference>
+    <PackageReference Include="LibVLCSharp">
+      <Version>3.9.7</Version>
+    </PackageReference>
+    <PackageReference Include="LibVLCSharp.WinForms">
+      <Version>3.9.7</Version>
+    </PackageReference>
+    <PackageReference Include="NAudio">
+      <Version>1.10.0</Version>
+    </PackageReference>
+    <PackageReference Include="Concentus">
+      <Version>1.1.7</Version>
+    </PackageReference>
+    <PackageReference Include="Concentus.OggFile">
+      <Version>1.0.4</Version>
+    </PackageReference>
+    <PackageReference Include="SixLabors.ImageSharp">
+      <Version>2.1.3</Version>
+    </PackageReference>
+    <PackageReference Include="QRCoder">
+      <Version>1.8.0</Version>
+    </PackageReference>
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>

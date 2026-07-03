@@ -1,0 +1,34 @@
+# ── Secrets — NEVER commit ────────────────────────────────────────────────
+# Real Telegram api_id/api_hash live here (partial class; see TelegArm/Core/ApiCredentials.cs).
+# The committed template is ApiCredentials.Local.cs.example (placeholders only).
+ApiCredentials.Local.cs
+
+# ── Build output ──────────────────────────────────────────────────────────
+[Bb]in/
+[Oo]bj/
+.vs/
+*.user
+*.suo
+
+# ── Sensitive runtime / auth material (if it ever lands in-tree) ──────────
+*.session
+TelegArm.session
+TelegArm.phone
+settings.json
+accounts/
+Cache/
+
+# ── Distributable app builds (compiled binary WITH embedded keys) — never commit ──
+# NOTE: intentionally NOT "*.zip" — noto-emoji.zip / libvlc-*.zip are required build
+# Content (see TelegArm.csproj) and must stay tracked for a clean clone to build.
+TelegArm*.zip
+installer/Output/
+TelegArm-Setup-*.exe
+
+# ── Tooling / packages ────────────────────────────────────────────────────
+nuget.exe
+packages/
+telegarm-debug.log
+
+# ── Local Claude Code settings ────────────────────────────────────────────
+.claude/settings.local.json
