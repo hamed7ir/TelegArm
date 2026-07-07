@@ -21,9 +21,9 @@ namespace TelegArm
             try
             {
                 var v = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
-                return v != null ? v.Major + "." + v.Minor + "." + v.Build : "0.9.0";
+                return v != null ? v.Major + "." + v.Minor + "." + v.Build : "1.0.0";
             }
-            catch { return "0.9.0"; }
+            catch { return "1.0.0"; }
         }
 
         /// <summary>Physical system DPI captured at startup (96 = 100%). The login screen reads this to offer the
@@ -56,6 +56,25 @@ namespace TelegArm
         // which makes Telegram revoke the session.
         private const string MutexName = @"Global\TelegArm_SingleInstance";
 
+        // ── SINGLE-INSTANCE ACTIVATE-EXISTING ─────────────────────────────────────────────────────────────
+        // A second launch must NOT start a second Client. Instead it broadcasts a RegisterWindowMessage that the
+        // already-running MainForm listens for and surfaces itself, then exits silently (HWND-find-free; both
+        // instances register the same system-unique id). See MainForm.WndProc + Program.ActivateExistingInstance.
+        internal static readonly int WM_ShowExisting = RegisterWindowMessage("TelegArm_ShowExisting");
+        private static readonly IntPtr HWND_BROADCAST = new IntPtr(0xFFFF);
+
+        /// <summary>STARTUP-SETTING: true when launched with "--startup" (the HKCU Run-key auto-start at login) →
+        /// MainForm starts minimized to the tray (silent, Telegram-Desktop style) instead of a full window.</summary>
+        internal static bool StartupLaunch;
+        private const int ASFW_ANY = -1;
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int RegisterWindowMessage(string lpString);
+        [DllImport("user32.dll")]
+        private static extern bool PostMessage(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam);
+        [DllImport("user32.dll")]
+        private static extern bool AllowSetForegroundWindow(int dwProcessId);
+
         [STAThread]
         static void Main()
         {
@@ -64,6 +83,16 @@ namespace TelegArm
             // The per-control ImmAssociateContext sever that replaced it was itself proven INERT on RT and also
             // removed — see the dead-ends note above EditInputProbe in MainForm.cs (~L218): the productized input
             // shim (EditInputProbe) is what carries composer input in the CUAS dead mode.
+
+            // A DPI-rescue self-restart (login screen) relaunches with "--restarted"; that path WAITS for the
+            // outgoing instance to release the mutex (below) and, if the old instance somehow survives, exits
+            // WITHOUT surfacing it — activate-existing is only for a NORMAL second launch.
+            bool restarted = false;
+            foreach (var arg in Environment.GetCommandLineArgs())
+            {
+                if (string.Equals(arg, "--restarted", StringComparison.OrdinalIgnoreCase)) restarted = true;
+                else if (string.Equals(arg, "--startup", StringComparison.OrdinalIgnoreCase)) StartupLaunch = true;   // STARTUP-SETTING
+            }
 
             Mutex mutex;
             try
@@ -78,26 +107,22 @@ namespace TelegArm
             }
             catch (UnauthorizedAccessException)
             {
-                // Exists but we can't open it → another instance owns it.
-                ReportAlreadyRunning();
+                // Exists but we can't open it → another instance owns it. Surface it (normal launch), then exit.
+                if (!restarted) ActivateExistingInstance();
                 return;
             }
 
             using (mutex)
             {
-                // A DPI-rescue self-restart (login screen) relaunches with "--restarted"; give the OUTGOING
-                // instance a moment to exit and release the mutex instead of the usual zero-wait bounce.
-                bool restarted = false;
-                foreach (var arg in Environment.GetCommandLineArgs())
-                    if (string.Equals(arg, "--restarted", StringComparison.OrdinalIgnoreCase)) { restarted = true; break; }
-
                 bool acquired;
                 try { acquired = mutex.WaitOne(restarted ? TimeSpan.FromSeconds(6) : TimeSpan.Zero, false); }
                 catch (AbandonedMutexException) { acquired = true; } // prior owner crashed
 
                 if (!acquired)
                 {
-                    ReportAlreadyRunning();
+                    // Another instance holds the session — don't start a second Client (AUTH_KEY_DUPLICATED).
+                    // Bring the existing window to the front instead of the old popup, then exit silently.
+                    if (!restarted) ActivateExistingInstance();
                     return;
                 }
 
@@ -106,10 +131,17 @@ namespace TelegArm
             }
         }
 
-        private static void ReportAlreadyRunning()
+        /// <summary>A second launch found the single-instance mutex held. Ask the running instance to surface its
+        /// window (it restores from tray/minimize via its own flicker-safe path), then exit silently — never a
+        /// popup, never a second Client. Best-effort: any failure just falls through to a silent exit.</summary>
+        private static void ActivateExistingInstance()
         {
-            MessageBox.Show("TelegArm is already running.", "TelegArm",
-                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            try
+            {
+                AllowSetForegroundWindow(ASFW_ANY);   // let the running instance steal foreground from us
+                if (WM_ShowExisting != 0) PostMessage(HWND_BROADCAST, WM_ShowExisting, IntPtr.Zero, IntPtr.Zero);
+            }
+            catch { /* silent — the single-instance guarantee holds regardless */ }
         }
 
         private static void Run()
@@ -219,7 +251,7 @@ namespace TelegArm
             var service = new TelegramService();
 
             if (TelegramService.SessionExists)
-                Application.Run(new MainForm(service));
+                Application.Run(new MainForm(service, StartupLaunch));   // STARTUP: silent tray start when launched with --startup
             else
                 Application.Run(new LoginForm(service));
         }

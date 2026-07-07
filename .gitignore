@@ -32,3 +32,7 @@ telegarm-debug.log
 
 # ── Local Claude Code settings ────────────────────────────────────────────
 .claude/settings.local.json
+trayicon.ico
+trayicon-unread.ico
+TelegArm.png
+icon.ico

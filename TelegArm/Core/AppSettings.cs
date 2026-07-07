@@ -63,6 +63,12 @@ namespace TelegArm.Core
         /// the very top of startup, BEFORE any UI — restart to apply. Default FALSE = today's system-aware.</summary>
         public bool DpiUnaware { get; set; } = false;
 
+        /// <summary>ACCOUNT-SWITCH STEP 1: keep every NON-active account connected in the background (a headless warm
+        /// WTC client per account, ~1 MB each) so switching REUSES the live connection (skips the MTProto handshake).
+        /// Warm clients are silent (no notifications yet — STEP 2). Adoption falls back to a normal connect on any
+        /// failure. Default TRUE; set this flag FALSE (persisted setting) to disable if it ever misbehaves on RT.</summary>
+        public bool WarmConnections { get; set; } = true;
+
         // ── Appearance ───────────────────────────────────────────────────────
         /// <summary>Theme mode: "System" (default), "Light", or "Dark". Stored as text
         /// so the file stays human-readable; parsed into ThemeHelper.ThemeMode at startup.</summary>

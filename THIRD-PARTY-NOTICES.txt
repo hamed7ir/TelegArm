@@ -52,6 +52,8 @@ COMPONENTS
     License: Ms-PL (Microsoft Public License)
     Source:  https://github.com/naudio/NAudio
     (Note: NAudio 2.0+ is MIT; version 1.10.0 used here is Ms-PL.)
+    Ms-PL is not GPL-compatible on its own; TelegArm links NAudio under the
+    GNU GPL v3 section 7 "Additional permission" granted in the LICENSE file.
 
 7.  Concentus  1.1.7  and  Concentus.OggFile  1.0.4
     A pure-C# port of the Opus audio codec / Ogg container.
@@ -154,7 +156,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 --------------------------------------------------------------------------------
 Microsoft Public License (Ms-PL)
-  Applies to: NAudio 1.10.0.
+  Applies to: NAudio 1.10.0.  TelegArm (GPL-3.0-only) links this library under
+  the GNU GPL v3 section 7 additional permission stated in the LICENSE file.
 --------------------------------------------------------------------------------
 
 This license governs use of the accompanying software. If you use the software,

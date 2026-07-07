@@ -38,6 +38,9 @@ namespace TelegArm.UI.Controls
         /// null falls back to the colored letter circle.</summary>
         public Image Avatar { get; set; }
 
+        // REPLIES-INBOX: the reserved "Replies" pseudo-peer id gets a drawn identity icon instead of a letter circle.
+        private const long RepliesPeerId = 1271266957L;
+
         private bool _selected;
         public bool Selected
         {
@@ -99,6 +102,14 @@ namespace TelegArm.UI.Controls
                     g.Clip = old;
                 }
             }
+            else if (Entry.PeerId == RepliesPeerId)
+            {
+                // REPLIES-INBOX: the special "Replies" identity — a drawn reply arrow (no glyph/emoji dependency,
+                // matching the app's owner-draw convention for the eye / hamburger icons).
+                using (var b = new SolidBrush(Color.FromArgb(80, 120, 190)))
+                    g.FillEllipse(b, avatarRect);
+                DrawRepliesGlyph(g, avatarRect);
+            }
             else
             {
                 using (var b = new SolidBrush(DrawHelper.AvatarColor(Entry.PeerId)))
@@ -139,29 +150,57 @@ namespace TelegArm.UI.Controls
             TextRenderer.DrawText(g, DrawHelper.ShortStamp(Entry.Date), _timeFont, timeRect, subColor,
                 TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
 
-            // PREVIEW (bottom row): reserve the bottom-right slot (badge OR pin). Taller rect + vertical center.
-            int trailing = hasBadge ? 40 : (PinnedInView ? 22 : 0);
+            // PREVIEW (bottom row) + the trailing indicator CLUSTER (right→left: unread badge, "@" mention, reaction
+            // heart). MENTION-REACTION: reserve the cluster's total width so the preview text never runs under it.
+            bool hasMention = Entry.UnreadMentions > 0;
+            bool hasReaction = Entry.UnreadReactions > 0;
+            string cnt = hasBadge ? (Entry.UnreadCount > 99 ? "99+" : Entry.UnreadCount.ToString()) : null;
+            int unreadW = hasBadge ? Math.Max(20, TextRenderer.MeasureText(cnt, _badgeFont).Width + 10) : 0;
+            const int glyphW = 22, gap = 4, bh = 20;
+            int clusterW = unreadW
+                + (hasMention ? (unreadW > 0 ? gap : 0) + glyphW : 0)
+                + (hasReaction ? ((unreadW > 0 || hasMention) ? gap : 0) + glyphW : 0);
+            int trailing = clusterW > 0 ? clusterW + 6 : (PinnedInView ? 22 : 0);
             int prevRight = Width - rightPad - trailing;
             var prevRect = new Rectangle(textLeft, 34, Math.Max(0, prevRight - textLeft), 24);
             using (var pf = FontHelper.For(Entry.Preview ?? "", 9f))
                 DrawRowText(g, Entry.Preview ?? "", pf, prevRect, subColor);
 
-            // Trailing-slot precedence: unread badge > pin glyph > nothing.
-            if (hasBadge)
+            // Draw the cluster right→left. Unread = accent (GREY if muted); the "@" and heart stay ACCENT even when
+            // muted (a mention breaks through; the heart is a distinct passive indicator). Cluster > pin glyph.
+            if (clusterW > 0)
             {
-                string cnt = Entry.UnreadCount > 99 ? "99+" : Entry.UnreadCount.ToString();
-                int bw = Math.Max(20, TextRenderer.MeasureText(cnt, _badgeFont).Width + 10);
-                const int bh = 20;
-                var badge = new Rectangle(Width - bw - rightPad, 36, bw, bh);
-                // Muted chats get a GREY badge; unmuted get the ACCENT badge.
-                Color badgeColor = Entry.Muted
-                    ? (IsDark ? Color.FromArgb(120, 120, 124) : Color.FromArgb(178, 178, 184))
-                    : AccentColor;
-                using (var b = new SolidBrush(badgeColor))
-                using (var path = DrawHelper.RoundedRect(badge, bh / 2))
-                    g.FillPath(b, path);
-                TextRenderer.DrawText(g, cnt, _badgeFont, badge, Color.White,
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                int rx = Width - rightPad;   // right edge, walked leftward per indicator
+                Color mutedGrey = IsDark ? Color.FromArgb(120, 120, 124) : Color.FromArgb(178, 178, 184);
+                if (hasBadge)
+                {
+                    var badge = new Rectangle(rx - unreadW, 36, unreadW, bh);
+                    using (var b = new SolidBrush(Entry.Muted ? mutedGrey : AccentColor))
+                    using (var path = DrawHelper.RoundedRect(badge, bh / 2))
+                        g.FillPath(b, path);
+                    TextRenderer.DrawText(g, cnt, _badgeFont, badge, Color.White,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                    rx -= unreadW + gap;
+                }
+                if (hasMention)
+                {
+                    var badge = new Rectangle(rx - glyphW, 36, glyphW, bh);
+                    using (var b = new SolidBrush(AccentColor))
+                    using (var path = DrawHelper.RoundedRect(badge, bh / 2))
+                        g.FillPath(b, path);
+                    TextRenderer.DrawText(g, "@", _badgeFont, badge, Color.White,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                    rx -= glyphW + gap;
+                }
+                if (hasReaction)
+                {
+                    var badge = new Rectangle(rx - glyphW, 36, glyphW, bh);
+                    using (var b = new SolidBrush(AccentColor))
+                    using (var path = DrawHelper.RoundedRect(badge, bh / 2))
+                        g.FillPath(b, path);
+                    DrawHeart(g, new Rectangle(badge.X + 5, badge.Y + 5, 12, 11), Color.White);
+                    rx -= glyphW + gap;
+                }
             }
             else if (PinnedInView)
                 DrawPinIcon(g, new Rectangle(Width - rightPad - 16, 38, 14, 14), subColor);
@@ -318,6 +357,23 @@ namespace TelegArm.UI.Controls
             }
         }
 
+        /// <summary>MENTION-REACTION: a small filled heart (owner-drawn two-bezier, no font glyph — RT-safe) for the
+        /// passive reaction glyph inside its badge.</summary>
+        private static void DrawHeart(Graphics g, Rectangle r, Color color)
+        {
+            float w = r.Width, h = r.Height, x = r.X, y = r.Y;
+            using (var path = new GraphicsPath())
+            using (var b = new SolidBrush(color))
+            {
+                var tip = new PointF(x + w * 0.5f, y + h);                 // bottom point
+                var dimple = new PointF(x + w * 0.5f, y + h * 0.28f);      // top-center dip
+                path.AddBezier(tip, new PointF(x - w * 0.12f, y + h * 0.35f), new PointF(x + w * 0.28f, y - h * 0.12f), dimple);
+                path.AddBezier(dimple, new PointF(x + w * 0.72f, y - h * 0.12f), new PointF(x + w * 1.12f, y + h * 0.35f), tip);
+                path.CloseFigure();
+                g.FillPath(b, path);
+            }
+        }
+
         private static void DrawMutedIcon(Graphics g, Rectangle r, Color color)
         {
             float cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
@@ -331,6 +387,31 @@ namespace TelegArm.UI.Controls
                     new PointF(cx + 1, cy + 6), new PointF(cx - 2, cy + 4)
                 });
                 g.DrawLine(pen, cx - 6, cy - 6, cx + 6, cy + 6);          // mute slash
+            }
+        }
+
+        /// <summary>REPLIES-INBOX: a white reply-arrow drawn inside the Replies avatar circle (owner-drawn, no font
+        /// glyph — RT-safe). A hook from the bottom-right up and left to an arrowhead.</summary>
+        private static void DrawRepliesGlyph(Graphics g, Rectangle r)
+        {
+            float cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
+            float tipX = cx - 8, tipY = cy - 3;
+            using (var pen = new Pen(Color.White, 2.6f)
+            { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+            {
+                g.DrawLines(pen, new[]
+                {
+                    new PointF(cx + 9, cy + 6),   // tail (bottom-right)
+                    new PointF(cx + 2, cy + 6),
+                    new PointF(cx + 2, tipY),
+                    new PointF(tipX, tipY)        // left to the arrow tip
+                });
+                g.DrawLines(pen, new[]
+                {
+                    new PointF(tipX + 5, tipY - 5),
+                    new PointF(tipX, tipY),
+                    new PointF(tipX + 5, tipY + 5)   // arrowhead
+                });
             }
         }
 

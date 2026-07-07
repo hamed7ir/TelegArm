@@ -81,6 +81,22 @@ namespace TelegArm.UI
             feat.Controls.Add(Link("♥  Support Wizou — GitHub Sponsors", 16, 160, CW - 32, SponsorUrl, FontHelper.Ui(9.5f, FontStyle.Bold), featBg));
             y += 196 + 14;
 
+            // ── Open-RT community tribute (mirrors the WTC card's style; adds the openrt.png logo) ──
+            const int orH = 160, orTx = 16 + 72 + 14, orTw = CW - (16 + 72 + 14) - 16;   // logo box + text column
+            var orCard = Card(M, y, CW, orH, _card, _border);
+            scroll.Controls.Add(orCard);
+            var orPic = new PictureBox
+            {
+                Size = new Size(72, 72), Location = new Point(16, 24),
+                SizeMode = PictureBoxSizeMode.Zoom, BackColor = _card
+            };
+            orPic.Image = LoadImageFile("openrt.png", 144);   // shipped next to the exe (Content, PreserveNewest)
+            orCard.Controls.Add(orPic);
+            orCard.Controls.Add(Text2("Open-RT Community", orTx, 18, orTw, accent, FontHelper.Ui(12f, FontStyle.Bold), 24, _card, ContentAlignment.MiddleLeft));
+            orCard.Controls.Add(Text2("Thanks to the Open-RT community for bringing TelegArm to Windows RT:", orTx, 46, orTw, _sub, FontHelper.Ui(9f), 34, _card, ContentAlignment.TopLeft));
+            orCard.Controls.Add(Text2("samyryu · RHLM fan · Artus100 · Keith · jeybee · die Oberfläche knacken", orTx, 84, orTw, _title, FontHelper.Ui(9.5f, FontStyle.Bold), 64, _card, ContentAlignment.TopLeft));
+            y += orH + 14;
+
             // ── Source + license ──
             var meta = Card(M, y, CW, 92, _card, _border);
             scroll.Controls.Add(meta);
@@ -214,6 +230,31 @@ namespace TelegArm.UI
             }
             catch { }
             try { using (var ic = Icon.ExtractAssociatedIcon(Application.ExecutablePath)) return ic?.ToBitmap(); }
+            catch { return null; }
+        }
+
+        /// <summary>Loads a PNG shipped next to the exe (Content/PreserveNewest) scaled to <paramref name="size"/>px
+        /// (32bpp). Same mechanism as <see cref="LoadAppImage"/> but returns null (not the app icon) when absent —
+        /// the caller simply shows no image. RT-safe: any failure → null.</summary>
+        private static Image LoadImageFile(string fileName, int size)
+        {
+            try
+            {
+                string p = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, fileName);
+                if (!File.Exists(p)) return null;
+                using (var fs = File.OpenRead(p))
+                using (var src = Image.FromStream(fs))
+                {
+                    var bmp = new Bitmap(size, size, PixelFormat.Format32bppArgb);
+                    using (var g = Graphics.FromImage(bmp))
+                    {
+                        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                        g.DrawImage(src, new Rectangle(0, 0, size, size));
+                    }
+                    return bmp;
+                }
+            }
             catch { return null; }
         }
 

@@ -1,4 +1,39 @@
-GNU GENERAL PUBLIC LICENSE
+TelegArm
+Copyright (C) 2026 Hamed
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License, version 3, as published
+by the Free Software Foundation (GPL-3.0-only).
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with
+this program.  If not, see <https://www.gnu.org/licenses/>.
+
+-------------------------------------------------------------------------------
+Additional permission under GNU GPL version 3 section 7
+-------------------------------------------------------------------------------
+
+As a special exception, the copyright holder of TelegArm gives you permission
+to link this program with the NAudio library (which is licensed under the
+Microsoft Public License, Ms-PL), and to convey the resulting work.  The
+Corresponding Source for a non-source form of such a combination shall include
+the source code for the parts of NAudio used as well as that of the covered
+work.
+
+If you modify this program, or any covered work, by linking or combining it
+with NAudio, you may extend this exception to your version of the program, but
+you are not obliged to do so.  If you do not wish to do so, delete this
+exception statement from your version.
+
+
+===============================================================================
+The full text of the GNU General Public License, Version 3, follows.
+===============================================================================
+
+                    GNU GENERAL PUBLIC LICENSE
                        Version 3, 29 June 2007
 
  Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
@@ -672,3 +707,4 @@ may consider it more useful to permit linking proprietary applications with
 the library.  If this is what you want to do, use the GNU Lesser General
 Public License instead of this License.  But first, please read
 <https://www.gnu.org/licenses/why-not-lgpl.html>.
+

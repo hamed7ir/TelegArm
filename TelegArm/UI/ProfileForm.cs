@@ -41,6 +41,7 @@ namespace TelegArm.UI
         private TextBox _idBox;
         private Controls.RichInfoLabel _details;
         private ActionTile _muteTile;
+        private Panel _actionsPanel;   // PROFILE-CHANNEL: the personal-channel card slots right after this in the flow
         private bool _muted;
         private bool _blocked;
 
@@ -56,6 +57,9 @@ namespace TelegArm.UI
         public string PendingMentionUser { get; private set; }
         public long PendingMentionId { get; private set; }
         public string PendingHashtag { get; private set; }
+
+        /// <summary>PROFILE-CHANNEL: set when the user taps their attached personal-channel card — open that channel.</summary>
+        public Channel PendingOpenChannel { get; private set; }
 
         /// <summary>Raised when a gallery item asks to be forwarded: (source peer, message id).</summary>
         public event Action<InputPeer, int> ForwardRequested;
@@ -257,6 +261,7 @@ namespace TelegArm.UI
             // CHANNEL gets only Mute / More (Message & Call are user-only — you can't DM or call a group/channel).
             // Whatever set applies is laid out centred.
             var actions = new Panel { Width = ContentW, Height = 66, BackColor = BackColor };
+            _actionsPanel = actions;   // PROFILE-CHANNEL: personal-channel card inserts directly after this
             bool isUser = OtherUser != null;
             var tiles = new List<ActionTile>();
             if (isUser)
@@ -311,6 +316,98 @@ namespace TelegArm.UI
         {
             c.Margin = new Padding(16, topGap, 16, 0);
             _flow.Controls.Add(c);
+        }
+
+        // ── PROFILE-CHANNEL: the user's attached personal channel, as a tappable card right below the action row ──
+        private async void LoadPersonalChannelAsync(User u)
+        {
+            try
+            {
+                var res = await _service.GetPersonalChannelAsync(u);
+                if (res == null || IsDisposed || _flow == null || _actionsPanel == null) return;
+                var val = res.Value;
+                var ch = val.channel;
+                string sub = "Channel" + (val.subs > 0 ? " • " + val.subs.ToString("N0") + " subscriber" + (val.subs == 1 ? "" : "s") : "");
+                var card = new ProfileChannelCard(ch.title, sub, ChannelMsgPreview(val.latest), _dark, _accentColor)
+                { Width = ContentW, Margin = new Padding(16, 8, 16, 0) };
+                card.Clicked += () => { PendingOpenChannel = ch; DialogResult = DialogResult.OK; Close(); };
+                _flow.Controls.Add(card);
+                int ai = _flow.Controls.GetChildIndex(_actionsPanel);   // slot the card directly after the action row
+                if (ai >= 0) _flow.Controls.SetChildIndex(card, ai + 1);
+                if (Avatars != null)
+                {
+                    var cached = Avatars.GetCached(ch.id);
+                    if (cached != null) card.SetAvatar(cached);
+                    else { try { var img = await Avatars.GetAsync(ch.id, ch); if (img != null && !card.IsDisposed) card.SetAvatar(img); } catch { } }
+                }
+            }
+            catch { /* no card on any failure — profile renders exactly as before */ }
+        }
+
+        private static string ChannelMsgPreview(TL.Message m)
+        {
+            if (m == null) return "";
+            if (!string.IsNullOrEmpty(m.message)) return m.message.Replace("\r", " ").Replace("\n", " ");
+            if (m.media is MessageMediaPhoto) return "Photo";
+            if (m.media is MessageMediaDocument) return "File";
+            return m.media != null ? "Media" : "";
+        }
+
+        /// <summary>A tappable channel row (avatar + title + "Channel • N subscribers" + latest-message preview),
+        /// RTL-aware. Owner-drawn like a chat-list row; avatar fills in async via SetAvatar.</summary>
+        private sealed class ProfileChannelCard : Control
+        {
+            private readonly bool _dark;
+            private readonly Color _accent;
+            private readonly string _title, _sub, _preview;
+            private Image _avatar;
+            public event Action Clicked;
+            public ProfileChannelCard(string title, string sub, string preview, bool dark, Color accent)
+            {
+                _title = title ?? ""; _sub = sub ?? ""; _preview = preview ?? ""; _dark = dark; _accent = accent;
+                Height = 76; Cursor = Cursors.Hand;
+                SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+                Click += (s, e) => { var h = Clicked; if (h != null) h(); };
+            }
+            public void SetAvatar(Image a) { _avatar = a; if (!IsDisposed) Invalidate(); }
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                var g = e.Graphics;
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.Clear(Parent != null ? Parent.BackColor : (_dark ? Color.FromArgb(30, 30, 30) : Color.White));
+                var card = new Rectangle(0, 1, Width - 1, Height - 4);
+                using (var cb = new SolidBrush(_dark ? Color.FromArgb(46, 46, 50) : Color.FromArgb(238, 238, 241)))
+                using (var p = DrawHelper.RoundedRect(card, 10))
+                    g.FillPath(cb, p);
+                const int d = 48; int ax = 12, ay = (Height - d) / 2;
+                var ar = new Rectangle(ax, ay, d, d);
+                if (_avatar != null)
+                {
+                    using (var clip = new GraphicsPath()) { clip.AddEllipse(ar); var old = g.Clip; g.SetClip(clip); g.DrawImage(_avatar, ar); g.Clip = old; }
+                }
+                else
+                {
+                    using (var b = new SolidBrush(_accent)) g.FillEllipse(b, ar);
+                    string letter = string.IsNullOrEmpty(_title) ? "#" : _title.Substring(0, 1).ToUpper();
+                    using (var af = FontHelper.For(_title, 15f, FontStyle.Bold))
+                        TextRenderer.DrawText(g, letter, af, ar, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                }
+                int tx = ax + d + 12, tw = Width - tx - 14;
+                Color titleC = _dark ? Color.White : Color.FromArgb(20, 20, 24);
+                Color subC = _dark ? Color.FromArgb(150, 150, 156) : Color.FromArgb(120, 120, 126);
+                DrawLine(g, _title, tx, 10, tw, titleC, 10.5f, FontStyle.Bold);
+                DrawLine(g, _sub, tx, 31, tw, subC, 8.5f, FontStyle.Regular);
+                DrawLine(g, _preview, tx, 50, tw, subC, 9f, FontStyle.Regular);
+            }
+            private static void DrawLine(Graphics g, string text, int x, int y, int w, Color c, float size, FontStyle st)
+            {
+                if (string.IsNullOrEmpty(text) || w < 20) return;
+                bool fa = FontHelper.IsPersian(text);
+                var flags = TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis | TextFormatFlags.VerticalCenter
+                            | (fa ? TextFormatFlags.Right | TextFormatFlags.RightToLeft : TextFormatFlags.Left);
+                using (var f = FontHelper.For(text, size, st))
+                    TextRenderer.DrawText(g, text, f, new Rectangle(x, y, w, 18), c, flags);
+            }
         }
 
         private ActionTile NewTile(string glyph, string label, int x)
@@ -558,6 +655,7 @@ namespace TelegArm.UI
             if (IsDisposed) return;
 
             var u = OtherUser;
+            if (u != null) LoadPersonalChannelAsync(u);   // PROFILE-CHANNEL: attached personal-channel card (async, no-op if none)
             // PEER-PRESENTATION wording: broadcasts have subscribers, groups have members.
             if (members > 0 && _statusLbl != null)
                 _statusLbl.Text = members.ToString("N0")
@@ -1171,6 +1269,7 @@ namespace TelegArm.UI
                 Text = title;
                 FormBorderStyle = FormBorderStyle.FixedDialog;
                 MaximizeBox = false; MinimizeBox = false;
+                TelegArm.Helpers.ThemedChrome.SetAppIcon(this);   // app icon in the taskbar / Alt-Tab / title bar
                 StartPosition = FormStartPosition.CenterParent;
                 ClientSize = new Size(listMode ? 420 : 380, 560);
                 BackColor = dark ? Color.FromArgb(34, 34, 37) : Color.FromArgb(248, 248, 250);

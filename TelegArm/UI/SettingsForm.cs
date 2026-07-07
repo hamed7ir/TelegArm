@@ -280,7 +280,48 @@ namespace TelegArm.UI
             folderSeg.SelectionChanged += idx => { s.FolderSidebar = idx == 1; s.Save(); };
             PlaceRight(layoutCard, 0, folderSeg);
 
+            // STARTUP-SETTING: launch TelegArm at Windows login (HKCU Run key) — starts silently in the tray. The
+            // toggle state is read from the REGISTRY (the true source), so it stays accurate even if changed elsewhere.
+            y = SectionLabel(p, "STARTUP", y);
+            var startCard = Card(p, y, 1); y += startCard.Height + SecGap;
+            RowTitle(startCard, 0, "Start when Windows starts", "Launch TelegArm at login, minimized to the tray");
+            var startSw = RowSwitch(startCard, 0, StartupIsEnabled());
+            startSw.CheckedChanged += (snd, ev) =>
+            {
+                if (!StartupSetEnabled(startSw.Checked))
+                {
+                    ThemedDialog.Show(this, "Startup", "Couldn't update the Windows startup setting — your account may not allow it.", "OK");
+                    startSw.Checked = StartupIsEnabled();   // revert to the TRUE state (the setter doesn't re-raise CheckedChanged)
+                }
+            };
+            RowClickable(startCard, 0, () => startSw.Flip());
+
             Spacer(p, y);
+        }
+
+        // ── STARTUP-SETTING: HKCU Run-key launch-at-login (pure managed, HKCU = no admin). The REGISTRY is the
+        // source of truth for the toggle (not AppSettings) so it reflects reality even if changed externally. ──
+        private const string StartupRunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+        private const string StartupValueName = "TelegArm";
+        private static bool StartupIsEnabled()
+        {
+            try { using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(StartupRunKey)) return k != null && k.GetValue(StartupValueName) != null; }
+            catch { return false; }
+        }
+        private static bool StartupSetEnabled(bool on)
+        {
+            try
+            {
+                using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(StartupRunKey, true) ?? Microsoft.Win32.Registry.CurrentUser.CreateSubKey(StartupRunKey))
+                {
+                    if (k == null) return false;
+                    if (on) k.SetValue(StartupValueName, "\"" + Application.ExecutablePath + "\" --startup");   // overwrite = self-heal a stale path
+                    else if (k.GetValue(StartupValueName) != null) k.DeleteValue(StartupValueName, false);      // idempotent
+                }
+                System.Diagnostics.Debug.WriteLine("[STARTUP] set " + (on ? "on" : "off") + " ok");
+                return true;
+            }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[STARTUP] set " + (on ? "on" : "off") + " FAIL: " + ex.Message); return false; }
         }
 
         // ── Advanced (stickers · camera / round video) ───────────────────────
@@ -1069,6 +1110,7 @@ namespace TelegArm.UI
                 Text = title;
                 FormBorderStyle = FormBorderStyle.FixedDialog;
                 MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
+                TelegArm.Helpers.ThemedChrome.SetAppIcon(this);   // app icon in Alt-Tab / title bar (dialog is off-taskbar)
                 StartPosition = FormStartPosition.CenterParent;
                 Font = new Font("Segoe UI", 9.5f);
 

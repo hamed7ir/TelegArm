@@ -130,6 +130,9 @@
     <Compile Include="UI\MediaViewerForm.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="UI\StoryViewerForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="UI\SendMediaDialog.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -216,6 +219,9 @@
     <Compile Include="UI\Controls\ComposerFooterBar.cs">
       <SubType>Component</SubType>
     </Compile>
+    <Compile Include="UI\Controls\ThreadJoinBar.cs">
+      <SubType>Component</SubType>
+    </Compile>
     <Compile Include="UI\Controls\SessionRowControl.cs">
       <SubType>Component</SubType>
     </Compile>
@@ -278,6 +284,10 @@
     </Content>
     <Content Include="..\TelegArm.png">
       <Link>TelegArm.png</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\openrt.png">
+      <Link>openrt.png</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <!-- Bundled libVLC runtimes (per-arch). Shipped as zips; VlcBootstrap extracts the matching-arch one

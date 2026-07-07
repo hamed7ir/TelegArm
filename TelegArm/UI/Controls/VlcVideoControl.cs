@@ -32,6 +32,8 @@ namespace TelegArm.UI.Controls
         public long Time { get { return _player != null ? _player.Time : 0; } }
         public long Length { get { return _player != null ? _player.Length : 0; } }
         public VLCState State { get { return _player != null ? _player.State : VLCState.NothingSpecial; } }
+        /// <summary>STORIES-BUILD-3: true once playback reached the end (so a host can advance without importing VLC types).</summary>
+        public bool HasEnded { get { return _player != null && _player.State == VLCState.Ended; } }
 
         public float Position
         {

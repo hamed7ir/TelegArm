@@ -63,20 +63,27 @@ namespace TelegArm.UI
                 int msgLeft = 22, msgTop = BarH + 18, msgW = W - 44;
 
                 // Title is owner-painted onto the accent bar (OnPaint); message sits below it.
-                var lblMsg = new MaterialLabel
-                {
-                    Text = message,
-                    Location = new Point(msgLeft, msgTop),
-                    AutoSize = false
-                };
-                // MEASURE the wrapped text at the message width and SIZE the dialog to fit it — a fixed height
-                // clipped long bodies (e.g. the logout confirmation lost "…Switching accounts keeps it.)").
-                var msgFont = lblMsg.Font ?? new Font("Segoe UI", 10f);
+                // COPYABLE message: a read-only, borderless TextBox styled like the old MaterialLabel — so the text
+                // can be SELECTED + copied (drag-select, right-click Copy, or Ctrl+C for the whole thing). Measured +
+                // sized exactly as before (long bodies still size to fit — the logout/probe-result case).
+                Font msgFont;
+                using (var fp = new MaterialLabel()) msgFont = fp.Font ?? new Font("Segoe UI", 10f);
                 Size measured = TextRenderer.MeasureText(message ?? "", msgFont,
                     new Size(msgW, int.MaxValue), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
                 int msgH = Math.Max(44, measured.Height + 8);
-                lblMsg.Size = new Size(msgW, msgH);
-                Controls.Add(lblMsg);
+                var txtMsg = new TextBox
+                {
+                    Text = message ?? "",
+                    Location = new Point(msgLeft, msgTop),
+                    Size = new Size(msgW, msgH),
+                    Multiline = true, ReadOnly = true, WordWrap = true,
+                    BorderStyle = BorderStyle.None, TabStop = false,
+                    Font = msgFont,
+                    BackColor = skin.BackgroundColor,
+                    ForeColor = ThemeHelper.IsDark ? Color.FromArgb(230, 230, 234) : Color.FromArgb(40, 40, 44),
+                    Cursor = Cursors.IBeam
+                };
+                Controls.Add(txtMsg);
 
                 int btnTop = msgTop + msgH + 20;
                 ClientSize = new Size(W, btnTop + 36 + 18);
@@ -103,7 +110,12 @@ namespace TelegArm.UI
                     x -= 8;
                 }
 
-                KeyDown += (s, e) => { if (e.KeyCode == Keys.Escape) { Result = -1; Close(); } };
+                KeyDown += (s, e) =>
+                {
+                    if (e.KeyCode == Keys.Escape) { Result = -1; Close(); }
+                    else if (e.Control && e.KeyCode == Keys.C)   // Ctrl+C copies the WHOLE message (not just a selection)
+                    { try { Clipboard.SetText(message ?? ""); } catch { } e.Handled = e.SuppressKeyPress = true; }
+                };
                 Shown += (s, e) => Invalidate();   // ensure the accent bar paints
             }
 

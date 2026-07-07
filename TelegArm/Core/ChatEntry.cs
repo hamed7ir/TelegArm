@@ -13,6 +13,14 @@ namespace TelegArm.Core
         public DateTime Date { get; set; }
         public int UnreadCount { get; set; }
 
+        /// <summary>MENTION-REACTION: unread @mentions/replies-to-you (Dialog.unread_mentions_count). &gt;0 lights the
+        /// "@" badge on the row AND makes a new mention BREAK THROUGH a mute to notify (client-side rule).</summary>
+        public int UnreadMentions { get; set; }
+
+        /// <summary>MENTION-REACTION: unread reactions to YOUR messages (Dialog.unread_reactions_count). &gt;0 lights a
+        /// passive heart glyph on the row — indicator ONLY, never a notification.</summary>
+        public int UnreadReactions { get; set; }
+
         /// <summary>True for groups/channels (used to show sender names on incoming messages).</summary>
         public bool IsGroup { get; set; }
 

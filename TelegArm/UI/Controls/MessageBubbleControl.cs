@@ -65,8 +65,39 @@ namespace TelegArm.UI.Controls
 
         /// <summary>When true, the timestamp is prefixed with "edited" (Message.edit_date set).</summary>
         public bool Edited { get; set; }
+        /// <summary>The message's UTC timestamp (for the floating date flyout / day grouping).</summary>
+        public DateTime Date => _date;
+        /// <summary>BUBBLE-DATETIME (A): the bubble meta shows TIME ONLY (never a date) — the day lives in the day
+        /// separators + the floating flyout. Empty for an unset date.</summary>
+        private string TimeStamp() => _date == default(DateTime) ? "" : _date.ToLocalTime().ToString("HH:mm");
         /// <summary>The timestamp text, prefixed with "edited" when the message was edited.</summary>
-        private string StampText() { return (Edited ? "edited " : "") + DrawHelper.ShortStamp(_date); }
+        private string StampText() { return (Edited ? "edited " : "") + TimeStamp(); }
+        private const int StatusGlyphW = 14, MetaGap = 6;   // ticks footprint + gap reserved for the outgoing meta strip
+        /// <summary>BUBBLE-DATETIME (B): the full width the meta strip needs = stamp text + (outgoing: ticks + gap).
+        /// Folded into the bubble content width so "edited HH:MM" + ticks never left-clips; measured with the paint font.</summary>
+        // CHANNEL-META-EXTRAS: channel-post view count (eye + compact number) sits LEFT of the stamp on the meta row;
+        // the "sign messages" post_author sits far-LEFT. StampText stays time-only; these reserve their own width so
+        // nothing clips (the FIT/DATETIME discipline). Admin role (groups) is a separate label by the sender name.
+        private const int EyeW = 13, EyeGap = 3;
+        private int _views = -1;           // >= 0 → render the channel-post view count
+        private string _postAuthor;        // channel byline when the channel signs posts (Message.post_author)
+        private string _adminRole;         // group owner/admin/custom-rank label (top row, by the sender name)
+        public void SetViews(int v) { _views = v; }
+        public void SetPostAuthor(string a) { _postAuthor = string.IsNullOrEmpty(a) ? null : a; }
+        public void SetAdminRole(string r) { _adminRole = string.IsNullOrEmpty(r) ? null : r; }
+        /// <summary>Compact count formatting matching Telegram: 1234→"1.2K", 1200000→"1.2M".</summary>
+        internal static string FormatViews(int n)
+        {
+            if (n < 0) return "";
+            if (n < 1000) return n.ToString();
+            if (n < 1000000) { double k = n / 1000.0; return (k < 10 ? k.ToString("0.0") : k.ToString("0")) + "K"; }
+            double m = n / 1000000.0; return (m < 10 ? m.ToString("0.0") : m.ToString("0")) + "M";
+        }
+        private float ViewsBlockW(Graphics g) => _views < 0 ? 0f : EyeW + EyeGap + g.MeasureString(FormatViews(_views), _timeFont).Width + MetaGap;
+        private float AuthorBlockW(Graphics g) => string.IsNullOrEmpty(_postAuthor) ? 0f : g.MeasureString(_postAuthor, _timeFont).Width + MetaGap;
+        private int MetaWidth(Graphics g) => (int)Math.Ceiling(
+            g.MeasureString(StampText(), _timeFont).Width + ViewsBlockW(g) + AuthorBlockW(g))
+            + (_outgoing ? StatusGlyphW + MetaGap : 0);
 
         /// <summary>Group sender's avatar photo (incoming only; referenced — the cache owns it).</summary>
         public Image SenderAvatar { get; set; }
@@ -166,6 +197,37 @@ namespace TelegArm.UI.Controls
             Measure();
             Invalidate();
         }
+
+        // ── Channel-post comments footer (COMMENTS-INDICATOR: display + tap-target only) ──────────────────
+        private bool _hasComments;
+        private int _commentCount;
+        private long _linkedChatId;              // linked discussion supergroup (stored for the later thread-open)
+        private Rectangle _commentsRect;         // painted footer band → hit-test → CommentsClicked
+        private const int CommentH = 30;         // comments footer strip height (separator + one line)
+        private bool HasComments => _hasComments;
+
+        /// <summary>Raised when the comments footer is tapped: (post msg_id, linked discussion chat_id).</summary>
+        public event Action<int, long> CommentsClicked;
+
+        /// <summary>COMMENTS-INDICATOR: show the discussion-comments footer under a broadcast post. count 0 →
+        /// "Leave a comment"; >0 → "N comments". linkedChatId = linked discussion group (for the later thread-open).</summary>
+        public void SetComments(int count, long linkedChatId)
+        {
+            _hasComments = true;
+            _commentCount = count;
+            _linkedChatId = linkedChatId;
+            Measure();
+            Invalidate();
+        }
+
+        // ── REPLIES-INBOX "View in chat" footer (display + tap-target only) ────────────────────────────────
+        private Rectangle _viewInChatRect;       // painted bottom row → hit-test → ViewInChatClicked
+        private const int ViewInChatH = 30;      // "View in chat" row height (separator + one line + chevron)
+        /// <summary>REPLIES-INBOX: show a bottom "View in chat ›" row on a Replies-inbox entry (tap → open the source thread).</summary>
+        public bool ShowViewInChat { get; set; }
+        private bool HasViewInChat => ShowViewInChat;
+        /// <summary>Raised when the "View in chat" row is tapped: carries the entry's own message id.</summary>
+        public event Action<int> ViewInChatClicked;
 
         // Document file-card mode (PDF/DOC/ZIP/etc.).
         public bool IsFile { get; set; }
@@ -436,6 +498,7 @@ namespace TelegArm.UI.Controls
             using (var tcb = new SolidBrush(timeColor))
                 g.DrawString(StampText(), _timeFont, tcb, new RectangleF(bx + Pad, by + bubbleH - TimeH, bubbleW - 2 * Pad, TimeH), timeSf);
             DrawStatusGlyph(g, bx + Pad + 6, by + bubbleH - TimeH / 2f, timeColor);
+            DrawMetaExtras(g, new RectangleF(bx + Pad, by + bubbleH - TimeH, bubbleW - 2 * Pad, TimeH), timeColor);
 
             DrawFooter(g, bx, by + bubbleH + 2, bubbleW);
         }
@@ -807,6 +870,16 @@ namespace TelegArm.UI.Controls
                 foreach (var kvp in _reactionRects)
                     if (kvp.Value.Contains(e.Location)) { ReactionToggled?.Invoke(this, kvp.Key); return; }
             }
+            if (!_commentsRect.IsEmpty && _commentsRect.Contains(e.Location))   // COMMENTS-INDICATOR: footer tap (distinct bottom rect)
+            {
+                CommentsClicked?.Invoke(MessageId, _linkedChatId);
+                return;
+            }
+            if (!_viewInChatRect.IsEmpty && _viewInChatRect.Contains(e.Location))   // REPLIES-INBOX: "View in chat" row tap
+            {
+                ViewInChatClicked?.Invoke(MessageId);
+                return;
+            }
             // Inline keyboard (any bubble) + poll options/vote/retract — bounded sub-rects, tap-vs-scroll via OnMouseClick.
             if (HandleInteractiveClick(e.Location)) return;
             if (IsAlbum)
@@ -1029,12 +1102,13 @@ namespace TelegArm.UI.Controls
             {
                 var sm = g.MeasureString(_sender, _senderFont, new SizeF(maxInner, float.MaxValue), sf);
                 senderW = (int)Math.Ceiling(sm.Width);
+                if (!string.IsNullOrEmpty(_adminRole))   // CHANNEL-META-EXTRAS (3): name + role share the top row
+                    senderW += (int)Math.Ceiling(g.MeasureString(_adminRole, _timeFont).Width) + 10;
             }
 
             // The timestamp is painted inside the bubble, so the bubble must be wide
             // enough to hold it — otherwise short messages clip it.
-            int timeW = (int)Math.Ceiling(
-                g.MeasureString(StampText(), _timeFont).Width);
+            int timeW = MetaWidth(g);   // BUBBLE-DATETIME (B): stamp + ticks (outgoing) reserved so the meta never clips
 
             int replyW = 0;
             if (HasReply)
@@ -1052,7 +1126,12 @@ namespace TelegArm.UI.Controls
                 : 0;
 
             int minInner = MinBubbleWidth - 2 * Pad;       // floor from min bubble width
-            int needed = Math.Max(Math.Max(Math.Max(Math.Max(longest, senderW), timeW), replyW), fwdW);
+            // COMMENTS-FIT-v2: reserve width for the comments footer. It paints at bubbleW (= contentW + 2*Pad), so
+            // contentW must be >= CommentsFooterWidth - 2*Pad → fold it into the content-width max() (the failing case:
+            // a short "Hi" post whose body/time width is far under "Leave a comment").
+            int commentsW = HasComments ? Math.Max(0, CommentsFooterWidth(g) - 2 * Pad) : 0;
+            int vicW = HasViewInChat ? Math.Max(0, ViewInChatWidth(g) - 2 * Pad) : 0;   // REPLIES-INBOX: "View in chat" row width
+            int needed = Math.Max(Math.Max(Math.Max(Math.Max(Math.Max(Math.Max(longest, senderW), timeW), replyW), fwdW), commentsW), vicW);
             if (_hasCard) needed = Math.Max(needed, maxInner);   // link cards take the full content width
             contentW = Math.Min(maxInner, Math.Max(needed, minInner));
 
@@ -1225,6 +1304,7 @@ namespace TelegArm.UI.Controls
             using (var tcb = new SolidBrush(timeColor))
                 g.DrawString(StampText(), _timeFont, tcb, new RectangleF(bx + Pad, by + bodyH - TimeH, bubbleW - 2 * Pad, TimeH), timeSf);
             DrawStatusGlyph(g, bx + Pad + 6, by + bodyH - TimeH / 2f, timeColor);
+            DrawMetaExtras(g, new RectangleF(bx + Pad, by + bodyH - TimeH, bubbleW - 2 * Pad, TimeH), timeColor);
 
             DrawFooter(g, bx, by + bodyH + 2, bubbleW);
         }
@@ -1298,6 +1378,121 @@ namespace TelegArm.UI.Controls
             DrawReactions(g, bx, yBelowBubble, Width - SideGap - bx);
             int ky = yBelowBubble + (HasReactions ? ReactionH : 0) + KbTopGap;
             DrawInlineKeyboard(g, bx, ky, bubbleW);
+            int cy = yBelowBubble + (HasReactions ? ReactionH : 0) + KeyboardHeight();   // bottom-most strip
+            DrawCommentsFooter(g, bx, cy, bubbleW);
+            DrawViewInChatRow(g, bx, cy + (HasComments ? CommentH : 0), bubbleW);   // REPLIES-INBOX: below any comments strip
+        }
+
+        /// <summary>REPLIES-INBOX: the bubble width the "View in chat" row needs so its label + chevron don't clip
+        /// (same font + paddings the row paints with). Guarantee: bubbleW >= this.</summary>
+        private int ViewInChatWidth(Graphics g)
+        {
+            if (!HasViewInChat) return 0;
+            int textW = TextRenderer.MeasureText(g, "View in chat", _senderFont).Width;
+            return CmtPadL + textW + CmtGap + 12 + CmtPadR + 2;   // pad + text + gap + chevron + pad + slack
+        }
+
+        /// <summary>REPLIES-INBOX: a full-width bottom row "View in chat ›" (accent, subtle top separator, chevron on
+        /// the trailing side). RTL-aware (chevron on the left, text right-aligned). Records _viewInChatRect for the tap.</summary>
+        private void DrawViewInChatRow(Graphics g, int bx, int y, int bubbleW)
+        {
+            _viewInChatRect = Rectangle.Empty;
+            if (!HasViewInChat) return;
+            int bandW = Math.Max(bubbleW, Math.Min(ViewInChatWidth(g), Width - SideGap - bx));
+            var band = new Rectangle(bx, y, bandW, ViewInChatH);
+            _viewInChatRect = band;
+            Color sep = IsDark ? Color.FromArgb(46, 255, 255, 255) : Color.FromArgb(30, 0, 0, 0);
+            using (var sp = new Pen(sep)) g.DrawLine(sp, band.Left + 2, band.Top, band.Right - 2, band.Top);
+            const string label = "View in chat";
+            const int chevW = 12;
+            var flags = TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis;
+            if (_rtl)
+            {
+                var chevRect = new Rectangle(band.Left + CmtPadL, band.Top, chevW, ViewInChatH);
+                DrawChevron(g, chevRect, AccentColor, true);
+                var textRect = new Rectangle(chevRect.Right + CmtGap, band.Top,
+                    band.Right - CmtPadR - (chevRect.Right + CmtGap), ViewInChatH);
+                TextRenderer.DrawText(g, label, _senderFont, textRect, AccentColor, flags | TextFormatFlags.Right);
+            }
+            else
+            {
+                var chevRect = new Rectangle(band.Right - CmtPadR - chevW, band.Top, chevW, ViewInChatH);
+                DrawChevron(g, chevRect, AccentColor, false);
+                var textRect = new Rectangle(band.Left + CmtPadL, band.Top,
+                    chevRect.Left - CmtGap - (band.Left + CmtPadL), ViewInChatH);
+                TextRenderer.DrawText(g, label, _senderFont, textRect, AccentColor, flags | TextFormatFlags.Left);
+            }
+        }
+
+        /// <summary>A small chevron (› LTR / ‹ RTL) drawn as two strokes — no font glyph (RT-safe).</summary>
+        private static void DrawChevron(Graphics g, Rectangle r, Color c, bool pointLeft)
+        {
+            int cy = r.Y + r.Height / 2;
+            int cx = pointLeft ? r.Right - 3 : r.Left + 3;
+            int dx = pointLeft ? -6 : 6;
+            using (var pen = new Pen(c, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+                g.DrawLines(pen, new[] { new Point(cx, cy - 5), new Point(cx + dx, cy), new Point(cx, cy + 5) });
+        }
+
+        // COMMENTS-INDICATOR: "N comments / Leave a comment" strip under a broadcast post — GDI+ speech-bubble glyph
+        // (never an emoji-font codepoint — the cross-OS rule), accent-colored, subtle top separator, RTL-aware.
+        // Records _commentsRect for the tap target; resets it to empty when the footer is absent.
+        // COMMENTS-FIT-v2: ONE shared source for the footer's paint metrics + label, so the width RESERVED in
+        // ComputeLayout and the width PAINTED here can never diverge (the #1 cause of "reserved but still clips").
+        private const int CmtGlyphW = 16, CmtPadL = 6, CmtGap = 6, CmtPadR = 6;
+        private string CommentLabel() => _commentCount > 0 ? (_commentCount == 1 ? "1 comment" : _commentCount + " comments") : "Leave a comment";
+
+        /// <summary>The bubble width the comments footer needs to paint its label without clipping — measured with the
+        /// SAME font (_senderFont), glyph width and paddings DrawCommentsFooter paints with. Guarantee: bubbleW >= this.</summary>
+        private int CommentsFooterWidth(Graphics g)
+        {
+            if (!HasComments) return 0;
+            int textW = TextRenderer.MeasureText(g, CommentLabel(), _senderFont).Width;   // default padding ≈ DrawText's
+            return CmtPadL + CmtGlyphW + CmtGap + textW + CmtPadR + 2;   // +2 slack vs measure/paint padding
+        }
+
+        private void DrawCommentsFooter(Graphics g, int bx, int y, int bubbleW)
+        {
+            _commentsRect = Rectangle.Empty;
+            if (!HasComments) return;
+            // The bubble was widened to fit the footer in ComputeLayout, so for text bubbles bandW == bubbleW; for
+            // media bubbles (fixed media width) this grows the band to fit the label — clip safety-net, panel-clamped.
+            int bandW = Math.Max(bubbleW, Math.Min(CommentsFooterWidth(g), Width - SideGap - bx));
+            var band = new Rectangle(bx, y, bandW, CommentH);
+            _commentsRect = band;
+            Color sep = IsDark ? Color.FromArgb(46, 255, 255, 255) : Color.FromArgb(30, 0, 0, 0);
+            using (var sp = new Pen(sep)) g.DrawLine(sp, band.Left + 2, band.Top, band.Right - 2, band.Top);
+            string label = CommentLabel();
+            var gRect = new Rectangle(0, band.Top + (CommentH - 13) / 2, CmtGlyphW, 13);
+            var flags = TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix;
+            Rectangle textRect;
+            if (_rtl)
+            {
+                gRect.X = band.Right - CmtPadR - gRect.Width;
+                textRect = new Rectangle(band.Left + CmtPadL, band.Top, gRect.Left - CmtGap - (band.Left + CmtPadL), CommentH);
+                flags |= TextFormatFlags.Right;
+            }
+            else
+            {
+                gRect.X = band.Left + CmtPadL;
+                textRect = new Rectangle(gRect.Right + CmtGap, band.Top, band.Right - CmtPadR - (gRect.Right + CmtGap), CommentH);
+                flags |= TextFormatFlags.Left;
+            }
+            DrawCommentGlyph(g, gRect, AccentColor);
+            TextRenderer.DrawText(g, label, _senderFont, textRect, AccentColor, flags);
+        }
+
+        // A small speech-bubble glyph, GDI+-drawn (cross-OS: never an emoji-font codepoint).
+        private void DrawCommentGlyph(Graphics g, Rectangle r, Color c)
+        {
+            var body = new Rectangle(r.X, r.Y, r.Width, r.Height - 3);
+            using (var p = new Pen(c, 1.4f))
+            using (var path = DrawHelper.RoundedRect(body, 3))
+            {
+                g.DrawPath(p, path);
+                g.DrawLine(p, r.X + 4, body.Bottom - 1, r.X + 4, r.Bottom);   // little tail
+                g.DrawLine(p, r.X + 4, r.Bottom, r.X + 8, body.Bottom - 1);
+            }
         }
 
         private void DrawInlineKeyboard(Graphics g, int bx, int yTop, int bubbleW)
@@ -1371,13 +1566,15 @@ namespace TelegArm.UI.Controls
         {
             int reactH = HasReactions ? ReactionH : 0;
             int kbH = KeyboardHeight();
+            int commentsH = HasComments ? CommentH : 0;   // COMMENTS-INDICATOR: bottom-most footer strip
+            int viewInChatH = HasViewInChat ? ViewInChatH : 0;   // REPLIES-INBOX: "View in chat" row (below comments)
 
             if (IsPoll)
             {
                 int contentW = MaxInnerWidth;
                 int senderH = _sender != null ? SenderH : 0;
                 int h = 2 * Pad + senderH + FwdBlockH + ReplyBlockH + PollContentHeight(contentW) + TimeH;
-                Height = Math.Max(MinBubbleHeight, h) + reactH + kbH + 2 * VMargin;
+                Height = Math.Max(MinBubbleHeight, h) + reactH + kbH + commentsH + viewInChatH + 2 * VMargin;
                 return;
             }
 
@@ -1387,12 +1584,12 @@ namespace TelegArm.UI.Controls
                 int senderH = _sender != null ? SenderH : 0;
                 int h = 2 * Pad + senderH + FwdBlockH + ReplyBlockH + AlbumContentHeight(contentW)
                         + AlbumCaptionHeight(contentW) + TimeH;
-                Height = Math.Max(MinBubbleHeight, h) + reactH + kbH + 2 * VMargin;
+                Height = Math.Max(MinBubbleHeight, h) + reactH + kbH + commentsH + viewInChatH + 2 * VMargin;
                 return;
             }
             if (IsFile)
             {
-                Height = FileCardH + FwdBlockH + ReplyBlockH + reactH + kbH + 2 * VMargin;
+                Height = FileCardH + FwdBlockH + ReplyBlockH + reactH + kbH + commentsH + viewInChatH + 2 * VMargin;
                 return;
             }
             if (HasPhoto)
@@ -1401,7 +1598,7 @@ namespace TelegArm.UI.Controls
                 int captionH = MeasureCaption();
                 int senderH = _sender != null ? SenderH : 0;
                 int h = 2 * Pad + senderH + FwdBlockH + ReplyBlockH + dispH + captionH + TimeH;
-                Height = Math.Max(MinBubbleHeight, h) + reactH + kbH + 2 * VMargin;
+                Height = Math.Max(MinBubbleHeight, h) + reactH + kbH + commentsH + viewInChatH + 2 * VMargin;
                 return;
             }
 
@@ -1409,7 +1606,7 @@ namespace TelegArm.UI.Controls
             using (var sf = MakeFormat())
             {
                 ComputeLayout(g, sf, out _, out _, out _, out int bubbleH);
-                Height = bubbleH + reactH + kbH + 2 * VMargin;
+                Height = bubbleH + reactH + kbH + commentsH + viewInChatH + 2 * VMargin;
             }
         }
 
@@ -1511,6 +1708,7 @@ namespace TelegArm.UI.Controls
                     g.DrawString(StampText(), _timeFont, tcb,
                         new RectangleF(bx + Pad, by + bubbleH - TimeH, bubbleW - 2 * Pad, TimeH), timeSf);
                 DrawStatusGlyph(g, bx + Pad + 6, by + bubbleH - TimeH / 2f, timeColor);
+                DrawMetaExtras(g, new RectangleF(bx + Pad, by + bubbleH - TimeH, bubbleW - 2 * Pad, TimeH), timeColor);
 
                 DrawFooter(g, bx, by + bubbleH + 2, bubbleW);
             }
@@ -1742,9 +1940,10 @@ namespace TelegArm.UI.Controls
                 : (IsDark ? Color.FromArgb(160, 160, 160) : Color.FromArgb(120, 120, 120));
             using (var timeSf = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Far })
             using (var tcb = new SolidBrush(timeColor))
-                g.DrawString(DrawHelper.ShortStamp(_date), _timeFont, tcb,
+                g.DrawString(StampText(), _timeFont, tcb,
                     new RectangleF(bx + Pad, by + bubbleH - TimeH, bubbleW - 2 * Pad, TimeH), timeSf);
             DrawStatusGlyph(g, bx + Pad + 6, by + bubbleH - TimeH / 2f, timeColor);
+            DrawMetaExtras(g, new RectangleF(bx + Pad, by + bubbleH - TimeH, bubbleW - 2 * Pad, TimeH), timeColor);
 
             DrawFooter(g, bx, by + bubbleH + 2, bubbleW);
         }
@@ -1764,6 +1963,56 @@ namespace TelegArm.UI.Controls
             using (var f = FontHelper.For(_sender, persianName ? 10.5f : 9f, FontStyle.Bold))
                 TextRenderer.DrawText(g, _sender, f, new Rectangle(x, y, w, SenderH), c, flags);
             _senderRect = new Rectangle(x, y, w, SenderH);
+            // CHANNEL-META-EXTRAS (3): group admin/owner/custom-rank label, right-aligned on the sender row.
+            if (!string.IsNullOrEmpty(_adminRole))
+            {
+                Color rc = _outgoing ? Color.FromArgb(200, 255, 255, 255)
+                                     : (IsDark ? Color.FromArgb(140, 140, 146) : Color.FromArgb(140, 140, 146));
+                bool prole = FontHelper.IsPersian(_adminRole);
+                using (var rf = FontHelper.For(_adminRole, prole ? 9f : 8f, FontStyle.Regular))
+                    TextRenderer.DrawText(g, _adminRole, rf, new Rectangle(x, y, w, SenderH), rc,
+                        TextFormatFlags.VerticalCenter | TextFormatFlags.Right | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+            }
+        }
+
+        /// <summary>CHANNEL-META-EXTRAS (1+2): view count (eye + compact number) just LEFT of the right-aligned stamp,
+        /// and the post_author byline far-left, on the same meta row. Widths are reserved by MetaWidth so nothing clips.</summary>
+        private void DrawMetaExtras(Graphics g, RectangleF metaRect, Color color)
+        {
+            if (_views < 0 && string.IsNullOrEmpty(_postAuthor)) return;
+            float stampW = g.MeasureString(StampText(), _timeFont).Width;
+            float x = metaRect.Right - stampW;   // left edge of the right-aligned stamp
+            using (var sf = new StringFormat { Alignment = StringAlignment.Near, LineAlignment = StringAlignment.Far })
+            using (var b = new SolidBrush(color))
+            {
+                if (_views >= 0)
+                {
+                    string vc = FormatViews(_views);
+                    float vcW = g.MeasureString(vc, _timeFont).Width;
+                    x -= MetaGap + vcW;
+                    g.DrawString(vc, _timeFont, b, new RectangleF(x, metaRect.Y, vcW + 4, metaRect.Height), sf);
+                    DrawEye(g, x - EyeGap - EyeW, metaRect.Bottom - TimeH / 2f, color);
+                    x -= EyeGap + EyeW;
+                }
+                if (!string.IsNullOrEmpty(_postAuthor))
+                {
+                    float availW = Math.Max(0f, x - metaRect.Left - MetaGap);
+                    if (availW > 8f)
+                        g.DrawString(_postAuthor, _timeFont, b,
+                            new RectangleF(metaRect.Left, metaRect.Y, availW, metaRect.Height), sf);
+                }
+            }
+        }
+
+        /// <summary>A small owner-drawn eye (outline almond + pupil) — deterministic, no emoji-font dependency.</summary>
+        private static void DrawEye(Graphics g, float x, float cy, Color color)
+        {
+            var sm = g.SmoothingMode; g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            using (var pen = new Pen(color, 1.1f))
+                g.DrawEllipse(pen, x, cy - 3.5f, EyeW, 7f);
+            using (var pb = new SolidBrush(color))
+                g.FillEllipse(pb, x + EyeW / 2f - 1.5f, cy - 1.5f, 3f, 3f);
+            g.SmoothingMode = sm;
         }
 
         /// <summary>Draws the reaction chips beneath the bubble (single row, clipped to availW).</summary>

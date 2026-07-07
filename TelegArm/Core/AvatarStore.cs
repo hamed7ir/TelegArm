@@ -54,10 +54,13 @@ namespace TelegArm.Core
         /// instance) — ambient access for secondary forms (member lists) without per-site plumbing.</summary>
         public static AvatarStore Current { get; private set; }
 
+        /// <summary>MULTI-ACCOUNT: point the ambient .Current at the ACTIVE account's store (called on activate/switch).
+        /// NOT auto-set in the ctor any more, so per-account (warm) stores can't clobber which one secondary forms read.</summary>
+        public static void SetActive(AvatarStore store) { Current = store; }
+
         public AvatarStore(Func<IPeerInfo, Task<byte[]>> download)
         {
             _download = download;
-            Current = this;
             for (int i = 0; i < 2; i++)                                              // bounded concurrency (2)
             {
                 var ignore = Task.Run(WorkerLoop);

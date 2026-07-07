@@ -12,6 +12,7 @@ namespace TelegArm.Core
         public long Id;
         public string Name;
         public string AvatarPath;   // Cache/{id}/thumbs/avatar_{id}.jpg if it exists, else null
+        public long LastActiveTicks; // WARMUP-FIX 1.2: last time this account was ACTIVATED → warm most-recent first
     }
 
     /// <summary>
@@ -21,7 +22,7 @@ namespace TelegArm.Core
     /// </summary>
     public static class AccountStore
     {
-        private sealed class Meta { public long Id; public string Name; }
+        private sealed class Meta { public long Id; public string Name; public long LastActiveTicks; }
 
         // Accounts whose files a background logout cleanup is mid-deleting. A switch / corrupt-session recovery
         // must NOT pick one of these as a target (its session is being removed → "being used by another process").
@@ -69,7 +70,7 @@ namespace TelegArm.Core
             {
                 var m = ReadMeta(id);
                 string av = AvatarPathFor(id);
-                list.Add(new AccountInfo { Id = id, Name = (m != null && !string.IsNullOrEmpty(m.Name)) ? m.Name : ("Account " + id), AvatarPath = av });
+                list.Add(new AccountInfo { Id = id, Name = (m != null && !string.IsNullOrEmpty(m.Name)) ? m.Name : ("Account " + id), AvatarPath = av, LastActiveTicks = m != null ? m.LastActiveTicks : 0L });
             }
             return list;
         }
@@ -107,7 +108,23 @@ namespace TelegArm.Core
             try
             {
                 Directory.CreateDirectory(AccountContext.AccountDir(id));
-                File.WriteAllText(AccountContext.MetaPath(id), JsonConvert.SerializeObject(new Meta { Id = id, Name = name ?? ("Account " + id) }));
+                var prev = ReadMeta(id);   // preserve the last-active stamp across a name refresh
+                File.WriteAllText(AccountContext.MetaPath(id), JsonConvert.SerializeObject(
+                    new Meta { Id = id, Name = name ?? ("Account " + id), LastActiveTicks = prev != null ? prev.LastActiveTicks : 0L }));
+            }
+            catch { }
+        }
+
+        /// <summary>WARMUP-FIX 1.2: record that this account was just ACTIVATED, so startup warm-up prioritizes the
+        /// most-recently-used accounts (the likeliest switch targets). Merges into the meta, preserving the name.</summary>
+        public static void StampActive(long id)
+        {
+            try
+            {
+                var m = ReadMeta(id) ?? new Meta { Id = id };
+                m.LastActiveTicks = DateTime.UtcNow.Ticks;
+                Directory.CreateDirectory(AccountContext.AccountDir(id));
+                File.WriteAllText(AccountContext.MetaPath(id), JsonConvert.SerializeObject(m));
             }
             catch { }
         }
