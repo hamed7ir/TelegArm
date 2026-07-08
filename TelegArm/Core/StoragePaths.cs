@@ -18,6 +18,12 @@ namespace TelegArm.Core
         private static string _cacheRoot;   // resolved once per process
         private static string _appDir;      // resolved once per process (user-readable files: the log)
         private static string _dataRoot;    // resolved once per process (session/account files, settings.json)
+        private static string _cacheVia;    // WHICH candidate won: LocalAppData/Documents/beside-exe/temp (for [SESSPATH] diag)
+
+        /// <summary>Which candidate location the resolved cache/data root came from — "LocalAppData", "Documents",
+        /// "beside-exe", or "temp". For the [SESSPATH] session-path diagnostic (ACCOUNT-SESSION-PATH-DIAG): if the
+        /// INSTALLED build resolves a different base than the dev box, this is where it shows. Null until resolved.</summary>
+        public static string CacheVia { get { return _cacheVia; } }
 
         /// <summary>The resolved, WRITABLE cache root for the CURRENT user. Prefers %LOCALAPPDATA% (the
         /// conventional cache/temp location); RT 8.1's AppData reliability is unknown, so every candidate is
@@ -53,6 +59,7 @@ namespace TelegArm.Core
         private static string Chose(string root, string via)
         {
             _cacheRoot = root;
+            _cacheVia = via;
             System.Diagnostics.Debug.WriteLine("[CACHE] cache root = " + root + " (via " + via + ")");
             return root;
         }

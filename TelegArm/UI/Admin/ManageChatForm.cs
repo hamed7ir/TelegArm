@@ -46,13 +46,11 @@ namespace TelegArm.UI.Admin
 
         private void Row(Control host, ref int y, string text, Action act)
         {
-            var b = new Button
+            var b = new RoundedButton
             {
-                Text = text, Left = 10, Top = y, Width = 326, Height = 48,
-                FlatStyle = FlatStyle.Flat, BackColor = _field, ForeColor = _fg,
+                Text = text, Left = 10, Top = y, Width = 326, Height = 48, Kind = RoundedButtonKind.Neutral,
                 TextAlign = ContentAlignment.MiddleLeft, Font = FontHelper.Ui(11f), Padding = new Padding(10, 0, 0, 0)
             };
-            b.FlatAppearance.BorderSize = 0;
             b.Click += (s, e) => act();
             host.Controls.Add(b);
             y += 54;

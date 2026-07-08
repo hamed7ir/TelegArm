@@ -77,6 +77,15 @@ namespace TelegArm.Core
             }
         }
 
+        /// <summary>Evicts one entry (NOT disposed — a live control may hold it; GC frees it). Used to drop a
+        /// stale avatar after YOUR profile photo changes so the next fetch reloads the new one.</summary>
+        public bool Remove(long key)
+        {
+            LinkedListNode<KeyValuePair<long, Image>> node;
+            if (_map.TryGetValue(key, out node)) { _order.Remove(node); _map.Remove(key); return true; }
+            return false;
+        }
+
         public void Clear() { _map.Clear(); _order.Clear(); }
     }
 }

@@ -45,11 +45,9 @@ namespace TelegArm.UI
             Controls.Add(_list);
             TelegArm.UI.Controls.TouchScroller.Enable(_list, horizontal: false);   // finger-pan the voters list (RT touch)
 
-            _moreBtn = new Button { Text = "Load more", Left = 8, Top = 380, Width = 140, Height = 30, FlatStyle = FlatStyle.Flat, BackColor = _bg, ForeColor = _accent, Visible = false };
-            _moreBtn.FlatAppearance.BorderColor = _sub;
+            _moreBtn = new TelegArm.UI.Controls.RoundedButton { Text = "Load more", Left = 8, Top = 380, Width = 140, Height = 30, Kind = TelegArm.UI.Controls.RoundedButtonKind.Secondary, Visible = false };
             _moreBtn.Click += (s, e) => LoadPage();
-            var close = new Button { Text = "Close", Left = ClientSize.Width - 108, Top = 380, Width = 100, Height = 30, FlatStyle = FlatStyle.Flat, BackColor = _bg, ForeColor = _fg, DialogResult = DialogResult.Cancel };
-            close.FlatAppearance.BorderColor = _sub;
+            var close = new TelegArm.UI.Controls.RoundedButton { Text = "Close", Left = ClientSize.Width - 108, Top = 380, Width = 100, Height = 30, Kind = TelegArm.UI.Controls.RoundedButtonKind.Secondary, DialogResult = DialogResult.Cancel };
             Controls.Add(_moreBtn); Controls.Add(close);
             CancelButton = close;
 

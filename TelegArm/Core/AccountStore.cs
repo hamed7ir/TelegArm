@@ -35,6 +35,7 @@ namespace TelegArm.Core
         public static void Init()
         {
             try { Directory.CreateDirectory(AccountContext.AccountsRoot); } catch { }
+            AccountContext.LogEnvOnce();   // [SESSPATH] 0.1/0.5: base + which-location + a real write-test of accounts/
 
             var ids = AccountIds();
             if (ids.Count > 0)
@@ -45,12 +46,22 @@ namespace TelegArm.Core
                 AccountContext.LegacyMode = false;
                 WriteActive(active);
                 System.Diagnostics.Debug.WriteLine("[ACCT] active account loaded id=" + active + " (of " + ids.Count + ")");
+                // [SESSPATH] 0.4: the accounts present on disk + the chosen active. Two ids here that later collide on
+                // ONE session path (see the client-open probe) is the corruption fingerprint.
+                if (TelegArm.Helpers.Logger.Enabled)
+                    TelegArm.Helpers.Logger.Diag("[SESSPATH] init ids=[" + string.Join(",", ids) + "] active=" + active + " count=" + ids.Count);
             }
             else if (File.Exists(AccountContext.LegacySession))
             {
                 AccountContext.ActiveId = 0;
                 AccountContext.LegacyMode = true;   // resume the flat session, migrate after the id is known
                 System.Diagnostics.Debug.WriteLine("[ACCT] legacy single-account session detected → will migrate");
+                if (TelegArm.Helpers.Logger.Enabled)
+                    TelegArm.Helpers.Logger.Diag("[SESSPATH] init legacyMode session=\"" + AccountContext.LegacySession + "\"");
+            }
+            else if (TelegArm.Helpers.Logger.Enabled)
+            {
+                TelegArm.Helpers.Logger.Diag("[SESSPATH] init NO accounts, NO legacy session");
             }
         }
 
@@ -94,13 +105,23 @@ namespace TelegArm.Core
 
         public static long ReadActive()
         {
-            try { long id; return (File.Exists(AccountContext.ActivePointerPath) && long.TryParse(File.ReadAllText(AccountContext.ActivePointerPath).Trim(), out id)) ? id : 0; }
-            catch { return 0; }
+            long value = 0;
+            try { long id; value = (File.Exists(AccountContext.ActivePointerPath) && long.TryParse(File.ReadAllText(AccountContext.ActivePointerPath).Trim(), out id)) ? id : 0; }
+            catch { value = 0; }
+            if (TelegArm.Helpers.Logger.Enabled)   // [SESSPATH] 0.4: what the active pointer currently reads back as
+                TelegArm.Helpers.Logger.Diag("[SESSPATH] readActive value=" + value + " path=\"" + AccountContext.ActivePointerPath + "\"");
+            return value;
         }
 
         public static void WriteActive(long id)
         {
-            try { Directory.CreateDirectory(AccountContext.AccountsRoot); File.WriteAllText(AccountContext.ActivePointerPath, id.ToString()); } catch { }
+            // [SESSPATH] 0.4 / hypothesis 2C: this write SWALLOWS its exception (catch {}). If it fails silently in
+            // the installed build, the active pointer keeps the STALE id — a candidate for "the switch reverts". The
+            // ok flag surfaces that in the log without changing the (behavior-neutral) swallow.
+            bool ok = false;
+            try { Directory.CreateDirectory(AccountContext.AccountsRoot); File.WriteAllText(AccountContext.ActivePointerPath, id.ToString()); ok = true; } catch { }
+            if (TelegArm.Helpers.Logger.Enabled)
+                TelegArm.Helpers.Logger.Diag("[SESSPATH] writeActive id=" + id + " ok=" + ok + " path=\"" + AccountContext.ActivePointerPath + "\"");
         }
 
         public static void WriteMeta(long id, string name)
@@ -305,6 +326,72 @@ namespace TelegArm.Core
             foreach (var p in new[] { AccountContext.LegacySession, AccountContext.LegacyPhone, AccountContext.LegacyUpdates })
                 try { if (File.Exists(p)) File.Delete(p); } catch { }
             System.Diagnostics.Debug.WriteLine("[SESSION] deleted corrupt legacy session");
+        }
+
+        // ─────────────────────────────────────────────────────────────────────────────────────────────────
+        //  ACCOUNT-RECOVERY-SAFETY — a corrupt session is NEVER auto-deleted. It is MOVED ASIDE (renamed) so the
+        //  login stays recoverable; and a clean-retry first waits for the file to actually unlock (the two-clients
+        //  race often leaves it briefly contended, not truly corrupt).
+        // ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+        /// <summary>Waits (bounded) until accounts/{id}/session can be opened EXCLUSIVELY — i.e. no other handle holds it —
+        /// so a clean-retry / cold reconnect never opens a session a just-disposed warm client is still releasing (the
+        /// two-clients race). READ-ONLY probe: it opens+closes the file to test the lock, never writing. Never loops.</summary>
+        public static async System.Threading.Tasks.Task WaitSessionUnlockedAsync(long id, int timeoutMs = 4000)
+        {
+            string s = Path.Combine(AccountContext.AccountDir(id), "session");
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            while (sw.ElapsedMilliseconds < timeoutMs)
+            {
+                try
+                {
+                    if (!File.Exists(s)) return;                                                  // nothing to wait on
+                    using (new FileStream(s, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) { }   // exclusive open OK → unlocked
+                    return;
+                }
+                catch (IOException) { await System.Threading.Tasks.Task.Delay(100).ConfigureAwait(false); }   // still locked → wait + retry
+                catch { return; }                                                                 // perms/other → don't block recovery
+            }
+            System.Diagnostics.Debug.WriteLine("[SESSION] WaitSessionUnlocked timed out id=" + id + " (proceeding)");
+        }
+
+        /// <summary>ACCOUNT-RECOVERY-SAFETY (Bug 2): a genuinely-unreadable session is MOVED ASIDE, NEVER deleted — renames
+        /// accounts/{id}/ → accounts/{id}.corrupt-&lt;timestamp&gt;/ so the login is PRESERVED (recoverable / inspectable) and a
+        /// fresh re-login of {id} starts clean (the moved dir no longer parses as an id, so it drops out of the switcher).
+        /// Returns the new path; null if the move failed — in which case the dir is LEFT IN PLACE (still never deleted).
+        /// The caller MUST have released the session handle first (TeardownForSwitchAsync).</summary>
+        public static string MoveAccountDirAside(long id)
+        {
+            try
+            {
+                string src = AccountContext.AccountDir(id);
+                if (!Directory.Exists(src)) return null;
+                string stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                string dst = src + ".corrupt-" + stamp;
+                for (int i = 1; Directory.Exists(dst); i++) dst = src + ".corrupt-" + stamp + "_" + i;   // never overwrite an earlier backup
+                for (int attempt = 0; attempt < 8; attempt++)                                            // a just-released handle may linger briefly
+                {
+                    try { Directory.Move(src, dst); System.Diagnostics.Debug.WriteLine("[SESSION] corrupt account dir MOVED ASIDE (not deleted): " + dst); return dst; }
+                    catch { System.Threading.Thread.Sleep(60); }
+                }
+                System.Diagnostics.Debug.WriteLine("[SESSION] WARNING: could not move corrupt account dir aside id=" + id + " → LEFT IN PLACE (still NOT deleted)");
+                return null;
+            }
+            catch { return null; }
+        }
+
+        /// <summary>Moves the flat legacy session files aside (…&lt;name&gt;.corrupt-&lt;ts&gt;) instead of deleting — a corrupt
+        /// pre-multi-account install stays recoverable. Returns a moved path (best-effort), or null.</summary>
+        public static string MoveLegacySessionAside()
+        {
+            string stamp = ".corrupt-" + DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            string moved = null;
+            foreach (var p in new[] { AccountContext.LegacySession, AccountContext.LegacyPhone, AccountContext.LegacyUpdates })
+            {
+                try { if (File.Exists(p)) { string d = p + stamp; if (!File.Exists(d)) { File.Move(p, d); moved = d; } } } catch { }
+            }
+            if (moved != null) System.Diagnostics.Debug.WriteLine("[SESSION] legacy session MOVED ASIDE (not deleted): " + moved);
+            return moved;
         }
     }
 }

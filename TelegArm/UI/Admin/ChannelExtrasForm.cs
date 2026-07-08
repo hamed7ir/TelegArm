@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
+using System.Linq;
 using System.Windows.Forms;
 using TL;
 using TelegArm.Core;
@@ -26,6 +28,12 @@ namespace TelegArm.UI.Admin
         private CheckBox _sign;
         private bool _suppress;
 
+        // CHANNEL-LINK-UNLINK: the discussion-group control (broadcast + admin only)
+        private Label _discussionState;
+        private Button _discussionBtn;
+        private long _linkedChatId;
+        private string _linkedName;
+
         public ChannelExtrasForm(TelegramService service, Channel channel, bool dark, Color accent)
         {
             _service = service; _channel = channel;
@@ -39,7 +47,7 @@ namespace TelegArm.UI.Admin
             Text = _isBroadcast ? "Channel settings" : "Public link";
             StartPosition = FormStartPosition.CenterParent;
             MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
-            ClientSize = new Size(400, 320 + ThemedChrome.BarH);
+            ClientSize = new Size(400, (_isBroadcast ? 460 : 300) + ThemedChrome.BarH);
             var content = ThemedChrome.Apply(this, Text, accent, dark);
             var scroll = ScrollHost.Wrap(content, dark, accent);
 
@@ -47,15 +55,15 @@ namespace TelegArm.UI.Admin
             scroll.Controls.Add(new Label { Text = "Public link (t.me/username)", Left = 16, Top = y, Width = 320, ForeColor = sub, Font = FontHelper.Ui(9f) }); y += 22;
             _username = new TextBox { Left = 16, Top = y, Width = 270, Height = 28, Text = channel.username ?? "", BackColor = field, ForeColor = fg, BorderStyle = BorderStyle.FixedSingle, Font = FontHelper.Ui(11f) };
             scroll.Controls.Add(_username);
-            var check = new Button { Text = "Check", Left = 292, Top = y - 1, Width = 76, Height = 30, FlatStyle = FlatStyle.Flat, BackColor = field, ForeColor = fg, Font = FontHelper.Ui(9f) };
-            check.FlatAppearance.BorderSize = 1; check.Click += CheckClick;
+            var check = new RoundedButton { Text = "Check", Left = 292, Top = y - 1, Width = 76, Height = 30, Kind = RoundedButtonKind.Secondary, Font = FontHelper.Ui(9f) };
+            check.Click += CheckClick;
             scroll.Controls.Add(check);
             y += 32;
             _avail = new Label { Left = 16, Top = y, Width = 360, Height = 22, ForeColor = sub, Font = FontHelper.Ui(8.75f), Text = "Leave empty to make it private." };
             scroll.Controls.Add(_avail); y += 30;
 
-            _save = new Button { Text = "Save link", Left = 16, Top = y, Width = 130, Height = 40, FlatStyle = FlatStyle.Flat, BackColor = accent, ForeColor = Color.White, Font = FontHelper.Ui(10f, FontStyle.Bold) };
-            _save.FlatAppearance.BorderSize = 0; _save.Click += SaveClick;
+            _save = new RoundedButton { Text = "Save link", Left = 16, Top = y, Width = 130, Height = 40, Kind = RoundedButtonKind.Primary, Font = FontHelper.Ui(10f, FontStyle.Bold) };
+            _save.Click += SaveClick;
             scroll.Controls.Add(_save); y += 56;
 
             if (_isBroadcast)
@@ -71,6 +79,118 @@ namespace TelegArm.UI.Admin
                 scroll.Controls.Add(_sign);
                 y += 42;
             }
+
+            // CHANNEL-LINK-UNLINK: for a broadcast channel the user administers — link/unlink the discussion group
+            // (the admin side of comments). This form is already reached only via the admin-gated "Manage" action;
+            // the creator/admin_rights re-check guarantees a non-admin never sees the control.
+            if (_isBroadcast && IsChannelAdmin())
+            {
+                scroll.Controls.Add(new Label { Text = "Discussion group (comments)", Left = 16, Top = y, Width = 360, ForeColor = sub, Font = FontHelper.Ui(9f) }); y += 22;
+                _discussionState = new Label { Left = 16, Top = y, Width = 360, Height = 22, ForeColor = fg, Font = FontHelper.Ui(9.5f), Text = "Loading…" };
+                scroll.Controls.Add(_discussionState); y += 26;
+                _discussionBtn = new RoundedButton { Text = "…", Left = 16, Top = y, Width = 240, Height = 38, Kind = RoundedButtonKind.Secondary, Font = FontHelper.Ui(10f), Enabled = false };
+                _discussionBtn.Click += DiscussionClick;
+                scroll.Controls.Add(_discussionBtn); y += 46;
+                var _ld = LoadDiscussionStateAsync();   // fire-and-forget: read the current linked_chat_id → set the UI
+            }
+        }
+
+        private bool IsChannelAdmin()
+        {
+            return (_channel.flags & Channel.Flags.creator) != 0 || _channel.admin_rights != null;
+        }
+
+        /// <summary>Reads the current linked discussion group (ChannelFull.linked_chat_id) and updates the control.</summary>
+        private async System.Threading.Tasks.Task LoadDiscussionStateAsync()
+        {
+            try
+            {
+                var mcf = await _service.GetChannelFullAsync(_channel);
+                var cf = mcf?.full_chat as ChannelFull;
+                _linkedChatId = cf?.linked_chat_id ?? 0;
+                _linkedName = null;
+                if (_linkedChatId != 0 && mcf != null && mcf.chats != null && mcf.chats.TryGetValue(_linkedChatId, out var lc))
+                    _linkedName = lc.Title;
+                UpdateDiscussionUi();
+            }
+            catch { if (_discussionState != null) _discussionState.Text = "Couldn't load the discussion state."; }
+        }
+
+        private void UpdateDiscussionUi()
+        {
+            if (_discussionBtn == null) return;
+            if (_linkedChatId != 0)
+            {
+                _discussionState.Text = "Comments ON — linked to \"" + (_linkedName ?? "group") + "\".";
+                _discussionBtn.Text = "Remove discussion group";
+            }
+            else
+            {
+                _discussionState.Text = "No discussion group — comments are off.";
+                _discussionBtn.Text = "Link a discussion group";
+            }
+            _discussionBtn.Enabled = true;
+        }
+
+        private void DiscussionClick(object sender, EventArgs e)
+        {
+            if (_linkedChatId != 0) UnlinkFlow(); else LinkFlow();
+        }
+
+        /// <summary>Link: fetch the eligible groups → a themed picker → SetDiscussionGroup(channel, picked).</summary>
+        private async void LinkFlow()
+        {
+            _discussionBtn.Enabled = false;
+            Messages_Chats groups = null;
+            try { groups = await _service.GetGroupsForDiscussionAsync(); }
+            catch (Exception ex) { ThemedDialog.Show(this, "Discussion group", "Couldn't load groups: " + ex.Message, "OK"); }
+            _discussionBtn.Enabled = true;
+            var eligible = groups != null && groups.chats != null
+                ? groups.chats.Values.OfType<Channel>().ToList()
+                : new List<Channel>();
+            if (eligible.Count == 0)
+            {
+                ThemedDialog.Show(this, "Discussion group",
+                    "You have no eligible groups to link. Create a group you own (or make yourself its admin) first.", "OK");
+                return;
+            }
+            var menu = new ThemedContextMenuStrip();
+            foreach (var g in eligible)
+            {
+                var grp = g;   // capture per-iteration
+                var it = menu.Items.Add(string.IsNullOrEmpty(g.Title) ? "Group" : g.Title);
+                it.Click += async (s, e) => await DoLink(grp);
+            }
+            menu.Show(_discussionBtn, new Point(0, _discussionBtn.Height));
+        }
+
+        private async System.Threading.Tasks.Task DoLink(Channel group)
+        {
+            _discussionBtn.Enabled = false;
+            try
+            {
+                bool ok = await _service.SetDiscussionGroupAsync(_channel, group);
+                System.Diagnostics.Debug.WriteLine("[ADMIN] link channel=" + _channel.id + " group=" + group.id + " " + (ok ? "ok" : "fail"));
+                if (!ok) { ThemedDialog.Show(this, "Discussion group", "Couldn't link — check your VPN and that the group is eligible.", "OK"); _discussionBtn.Enabled = true; return; }
+                await LoadDiscussionStateAsync();   // refresh → now shows "linked" + Remove
+            }
+            catch (Exception ex) { ThemedDialog.Show(this, "Discussion group", "Couldn't link: " + ex.Message, "OK"); _discussionBtn.Enabled = true; }
+        }
+
+        /// <summary>Unlink: confirm (destructive to comments), then SetDiscussionGroup(channel, null) = disable comments.</summary>
+        private async void UnlinkFlow()
+        {
+            if (ThemedDialog.Show(this, "Remove discussion group", "Remove the discussion group? Comments will be disabled.", "Remove", "Cancel") != 0)
+                return;
+            _discussionBtn.Enabled = false;
+            try
+            {
+                bool ok = await _service.SetDiscussionGroupAsync(_channel, null);   // null → inputChannelEmpty (unlink)
+                System.Diagnostics.Debug.WriteLine("[ADMIN] unlink channel=" + _channel.id + " " + (ok ? "ok" : "fail"));
+                if (!ok) { ThemedDialog.Show(this, "Discussion group", "Couldn't remove — check your VPN and permissions.", "OK"); _discussionBtn.Enabled = true; return; }
+                await LoadDiscussionStateAsync();   // refresh → now shows "Link a discussion group"
+            }
+            catch (Exception ex) { ThemedDialog.Show(this, "Discussion group", "Couldn't remove: " + ex.Message, "OK"); _discussionBtn.Enabled = true; }
         }
 
         private async void CheckClick(object sender, EventArgs e)

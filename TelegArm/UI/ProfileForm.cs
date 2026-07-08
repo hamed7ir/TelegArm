@@ -34,9 +34,15 @@ namespace TelegArm.UI
         private MaterialLabel _titleLbl;
         private MaterialTextBox2 _first, _last, _aboutBox;
         private TextBox _contactBox;
+        // PROFILE-EDIT-SELF: username editor + availability gate.
+        private MaterialTextBox2 _username;
+        private Label _usernameStatus;
+        private System.Windows.Forms.Timer _usernameCheckTimer;
+        private bool _usernameOk = true;   // empty/current username = ok; a CHANGED one must pass the availability check
 
         // View-mode controls.
         private FlowLayoutPanel _flow;
+        private Panel _viewAvatarPanel;   // CHANNEL-PHOTO-REFRESH: the big avatar panel (repaint after a photo change)
         private MaterialLabel _nameLbl, _statusLbl;
         private TextBox _idBox;
         private Controls.RichInfoLabel _details;
@@ -165,43 +171,53 @@ namespace TelegArm.UI
         // ── Edit mode (self) — unchanged behaviour ───────────────────────────
         private void BuildEditMode()
         {
-            ClientSize = new Size(420, 510);
+            ClientSize = new Size(420, 588);
 
-            _pic = new Panel { Size = new Size(96, 96), Location = new Point((420 - 96) / 2, 24), BackColor = Color.Transparent, Cursor = Cursors.Hand };
+            _pic = new Panel { Size = new Size(96, 96), Location = new Point((420 - 96) / 2, 20), BackColor = Color.Transparent, Cursor = Cursors.Hand };
             _pic.Paint += (s, e) => PaintAvatar(e.Graphics, new Rectangle(0, 0, 96, 96), 34f);
-            _pic.Click += (s, e) => ViewPhoto();
+            _pic.Click += (s, e) => ShowEditAvatarMenu();   // PROFILE-EDIT-SELF: tap avatar → View / Set new / Remove
             Controls.Add(_pic);
 
             _titleLbl = new MaterialLabel
             {
                 Text = FullName(SelfUser),
-                Location = new Point(20, 130),
+                Location = new Point(20, 120),
                 AutoSize = false,
-                Size = new Size(380, 28),
+                Size = new Size(380, 24),
                 FontType = MaterialSkinManager.fontType.H6,
                 TextAlign = ContentAlignment.MiddleCenter
             };
             Controls.Add(_titleLbl);
+            Controls.Add(new Label { Text = "Tap your photo to change it", Location = new Point(20, 146), AutoSize = false, Size = new Size(380, 16), Font = new Font("Segoe UI", 8f), ForeColor = _dark ? Color.FromArgb(150, 150, 155) : Color.FromArgb(140, 140, 145), TextAlign = ContentAlignment.MiddleCenter, BackColor = Color.Transparent });
 
             _contactBox = ReadOnlyBox(24, 166, 372, 22, false);
             Controls.Add(_contactBox);
 
-            Controls.Add(SmallLabel("First name", 24, 196));
-            _first = new MaterialTextBox2 { Text = SelfUser?.first_name ?? "", Location = new Point(24, 218), Width = 372 };
+            Controls.Add(SmallLabel("First name", 24, 194));
+            _first = new MaterialTextBox2 { Text = SelfUser?.first_name ?? "", Location = new Point(24, 216), Width = 372 };
             Controls.Add(_first);
 
-            Controls.Add(SmallLabel("Last name", 24, 272));
-            _last = new MaterialTextBox2 { Text = SelfUser?.last_name ?? "", Location = new Point(24, 294), Width = 372 };
+            Controls.Add(SmallLabel("Last name", 24, 266));
+            _last = new MaterialTextBox2 { Text = SelfUser?.last_name ?? "", Location = new Point(24, 288), Width = 372 };
             Controls.Add(_last);
 
-            Controls.Add(SmallLabel("Bio", 24, 348));
-            _aboutBox = new MaterialTextBox2 { Hint = "A few words about you", Location = new Point(24, 370), Width = 372 };
+            Controls.Add(SmallLabel("Bio", 24, 338));
+            _aboutBox = new MaterialTextBox2 { Hint = "A few words about you", Location = new Point(24, 360), Width = 372 };
             Controls.Add(_aboutBox);
 
-            var save = new MaterialButton { Text = "Save", Location = new Point(214, 452), Width = 90, Type = MaterialButton.MaterialButtonType.Contained };
+            _usernameCheckTimer = new System.Windows.Forms.Timer { Interval = 500 };   // debounce the availability check
+            _usernameCheckTimer.Tick += (s, e) => CheckUsernameNow();
+            Controls.Add(SmallLabel("Username", 24, 410));
+            _username = new MaterialTextBox2 { Hint = "username", Text = SelfUser?.MainUsername ?? "", Location = new Point(24, 432), Width = 372 };
+            _username.TextChanged += OnUsernameChanged;
+            Controls.Add(_username);
+            _usernameStatus = new Label { Location = new Point(26, 484), AutoSize = false, Size = new Size(368, 18), Font = new Font("Segoe UI", 8.5f), BackColor = Color.Transparent, Text = "" };
+            Controls.Add(_usernameStatus);
+
+            var save = new MaterialButton { Text = "Save", Location = new Point(214, 530), Width = 90, Type = MaterialButton.MaterialButtonType.Contained };
             save.Click += OnSave;
             Controls.Add(save);
-            var cancel = new MaterialButton { Text = "Cancel", Location = new Point(310, 452), Width = 90, Type = MaterialButton.MaterialButtonType.Outlined };
+            var cancel = new MaterialButton { Text = "Cancel", Location = new Point(310, 530), Width = 90, Type = MaterialButton.MaterialButtonType.Outlined };
             cancel.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
             Controls.Add(cancel);
         }
@@ -235,6 +251,7 @@ namespace TelegArm.UI
             var avi = new Panel { Width = ContentW, Height = 112, BackColor = BackColor, Cursor = Cursors.Hand };
             avi.Paint += (s, e) => PaintAvatar(e.Graphics, new Rectangle((ContentW - 100) / 2, 8, 100, 100), 36f);
             avi.Click += (s, e) => ViewPhoto();
+            _viewAvatarPanel = avi;
             AddFlow(avi, 8);
 
             _nameLbl = new MaterialLabel
@@ -353,6 +370,102 @@ namespace TelegArm.UI
             return m.media != null ? "Media" : "";
         }
 
+        // ── PROFILE-STORIES: a peer's POSTED stories as a tappable thumbnail grid (like TG Desktop) ──────────
+        private const int StoryPreviewMax = 4;   // profile shows one row; more → a "Show all" gallery (StoriesGridForm)
+        private List<StoryItem> _postedStories;   // the full posted/pinned list == what the viewer navigates (indices align)
+
+        /// <summary>Fetches THIS peer's active posted stories (SAME filter + order as the story viewer, so a tapped
+        /// tile's index matches the viewer's story index) and, if any exist, inserts a "POSTED STORIES" thumbnail
+        /// grid right after the INFO block. No active stories → nothing added (no empty section). Fire-and-forget.</summary>
+        private async void LoadPostedStoriesAsync()
+        {
+            if (_entry?.Peer == null) return;
+            List<StoryItem> items = null;
+            try
+            {
+                // "POSTED STORIES" = the peer's PINNED profile stories (stories.getPinnedStories — these persist past the
+                // 24h active window and are what official TG shows on a profile), MERGED with any currently-active ring
+                // story (getPeerStories) not already pinned. De-duped by id, newest first. NO expire filter — pinned
+                // stories are shown even after they'd have expired. (getPeerStories alone = the transient ring, which is
+                // why a user with posted-but-not-currently-active stories showed nothing before.)
+                var byId = new Dictionary<int, StoryItem>();
+                var pin = await _service.GetPinnedStoriesAsync(_entry.Peer);
+                if (pin?.stories != null)
+                    foreach (var s in pin.stories.OfType<StoryItem>()) byId[s.id] = s;
+                var act = await _service.GetPeerStoriesAsync(_entry.Peer);
+                var actArr = act?.stories?.stories;
+                if (actArr != null)
+                    foreach (var s in actArr.OfType<StoryItem>()) if (!byId.ContainsKey(s.id)) byId[s.id] = s;
+                items = byId.Values.OrderByDescending(s => s.id).ToList();
+            }
+            catch { return; }
+            if (IsDisposed || _flow == null || _idBox == null || items == null || items.Count == 0) return;
+            _postedStories = items;
+
+            var label = SectionLabel(items.Count > 1 ? items.Count + " POSTED STORIES" : "POSTED STORIES");
+            label.Margin = new Padding(16, 14, 16, 0);
+            var grid = new FlowLayoutPanel
+            {
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = true,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                MinimumSize = new Size(ContentW, 0),   // pin the width → the row WRAPS instead of growing horizontally
+                MaximumSize = new Size(ContentW, 0),
+                Margin = new Padding(16, 2, 16, 0),
+                BackColor = BackColor
+            };
+            int shown = Math.Min(items.Count, StoryPreviewMax);   // one preview row; the rest live behind "Show all"
+            for (int i = 0; i < shown; i++)
+            {
+                int idx = i;   // capture → the viewer deep-links to this story
+                var thumb = new Controls.StoryThumb(_service, items[i], _dark) { Margin = new Padding(0, 0, 6, 6) };
+                thumb.Clicked += () => OpenProfileStoryViewer(idx);
+                grid.Controls.Add(thumb);
+            }
+
+            ProfileRow showAll = null;
+            if (items.Count > StoryPreviewMax)
+            {
+                showAll = new ProfileRow(_dark, _accentColor) { Glyph = "🗂", Label = "Show all " + items.Count + " stories", Width = ContentW };
+                showAll.Clicked += OpenStoriesGallery;
+                AddFlow(showAll, 2);
+            }
+
+            // Slot the section (label, grid, optional "Show all") directly after the INFO id line, regardless of the
+            // order the async sections finished in — same technique as the personal-channel card.
+            _flow.Controls.Add(label);
+            _flow.Controls.Add(grid);
+            int anchor = _flow.Controls.GetChildIndex(_idBox);
+            if (anchor >= 0)
+            {
+                _flow.Controls.SetChildIndex(label, anchor + 1);
+                _flow.Controls.SetChildIndex(grid, anchor + 2);
+                if (showAll != null) _flow.Controls.SetChildIndex(showAll, anchor + 3);
+            }
+        }
+
+        /// <summary>Opens the EXISTING full-screen viewer for THIS peer (single-peer list), deep-linked to the tapped
+        /// story. The viewer does photo/video, progress, tap-nav, mark-seen + view-register as built.</summary>
+        private void OpenProfileStoryViewer(int storyIdx)
+        {
+            if (_entry?.Peer == null || _postedStories == null) return;
+            var refs = new List<StoryPeerRef> { new StoryPeerRef { PeerId = _entry.PeerId, Name = _entry.Title ?? "", Input = _entry.Peer } };
+            // Hand the viewer the SAME posted list (preloaded) so it shows/navigates exactly the grid's stories at the tapped index.
+            using (var viewer = new StoryViewerForm(_service, refs, 0, cid => Avatars?.GetCached(cid), _accentColor, storyIdx, _postedStories))
+                viewer.ShowDialog(this);
+        }
+
+        /// <summary>"Show all N stories" → the full scrollable gallery (StoriesGridForm) of every posted story;
+        /// tapping a tile there opens the same viewer (with the same preloaded list).</summary>
+        private void OpenStoriesGallery()
+        {
+            if (_entry?.Peer == null || _postedStories == null) return;
+            var peerRef = new StoryPeerRef { PeerId = _entry.PeerId, Name = _entry.Title ?? "", Input = _entry.Peer };
+            using (var f = new StoriesGridForm(_service, peerRef, _postedStories, _dark, _accentColor, cid => Avatars?.GetCached(cid)))
+                f.ShowDialog(this);
+        }
+
         /// <summary>A tappable channel row (avatar + title + "Channel • N subscribers" + latest-message preview),
         /// RTL-aware. Owner-drawn like a chat-list row; avatar fills in async via SetAvatar.</summary>
         private sealed class ProfileChannelCard : Control
@@ -469,11 +582,10 @@ namespace TelegArm.UI
         private void ShowMoreMenu(Control anchor)
         {
             var menu = new ThemedContextMenuStrip();
-            if (OtherUser != null)               // USER → contact actions
+            if (OtherUser != null)               // USER → contact actions (Share hidden for release — RELEASE-FIXES-V11)
             {
-                MenuItem(menu, "Share contact", ShareContact);
                 MenuItem(menu, "Edit contact", EditContact);
-                MenuItem(menu, "Delete contact", DeleteContact);
+                MenuItem(menu, "Delete contact", DeleteContact, danger: true);   // red destructive
                 menu.Items.Add(new ToolStripSeparator());
                 MenuItem(menu, _blocked ? "Unblock user" : "Block user", BlockUser);
             }
@@ -492,9 +604,9 @@ namespace TelegArm.UI
             menu.Show(anchor, new Point(0, anchor.Height));
         }
 
-        private void MenuItem(ContextMenuStrip menu, string text, Action action)
+        private void MenuItem(ContextMenuStrip menu, string text, Action action, bool danger = false)
         {
-            var item = new ToolStripMenuItem(text) { ForeColor = _dark ? Color.White : Color.FromArgb(30, 30, 30) };
+            var item = new ToolStripMenuItem(text) { ForeColor = danger ? Color.FromArgb(222, 74, 74) : (_dark ? Color.White : Color.FromArgb(30, 30, 30)) };
             item.Click += (s, e) => BeginInvoke(action);
             menu.Items.Add(item);
         }
@@ -517,19 +629,106 @@ namespace TelegArm.UI
             if (ch == null || _entry?.Peer == null) return;
             using (var f = new Admin.ManageChatForm(_service, ch, _entry.Peer, _entry.Title ?? "", "", _dark, _accentColor))
                 f.ShowDialog(this);
+            // RELEASE-FIXES-V11: reflect edits made inside Manage in this OPEN profile — title (updated on the shared
+            // _entry by MainForm.PeerTitleChanged during the edit), avatar (CHANNEL-PHOTO-REFRESH), and description (M1).
+            if (_nameLbl != null && !_nameLbl.IsDisposed && _entry != null) _nameLbl.Text = _entry.Title ?? "";
+            RefreshChannelProfileAvatar();
+            RefreshProfileDescriptionAsync();
         }
 
-        private void ShareContact()
-            => ThemedDialog.Show(this, "Share contact", "Sharing a contact card isn't implemented yet.", "OK");
+        /// <summary>CHANNEL-PHOTO-REFRESH: re-reads this peer's avatar after a Manage action (the channel photo may have
+        /// changed, which invalidated + re-requested the cached avatar) and repaints the big profile avatar. Shares the
+        /// AvatarStore image (view-mode profiles don't own _avatar), so nothing to dispose.</summary>
+        private async void RefreshChannelProfileAvatar()
+        {
+            if (_editable || _entry?.PeerInfo == null || Avatars == null) return;
+            try
+            {
+                var img = await Avatars.GetAsync(_entry.PeerId, _entry.PeerInfo);   // cache hit, or joins the in-flight re-fetch
+                if (IsDisposed || _viewAvatarPanel == null || _viewAvatarPanel.IsDisposed) return;
+                if (img != null && !ReferenceEquals(img, _avatar)) { _avatar = img; _viewAvatarPanel.Invalidate(); }
+            }
+            catch { }
+        }
 
-        private void EditContact()
-            => ThemedDialog.Show(this, "Edit contact", "Editing the saved contact name isn't implemented yet.", "OK");
+        /// <summary>Rebuilds the profile's identifier + description block (@username / phone / about) — shared by the
+        /// initial load and the post-Manage refresh (M1: an edited channel/group description updates without a reload).</summary>
+        private void ApplyDetailsText(string about)
+        {
+            if (_details == null) return;
+            var u = OtherUser;
+            var sb = new System.Text.StringBuilder();
+            string un = ActiveUsername(_entry?.PeerInfo);
+            if (u != null)
+            {
+                var parts = new List<string>();
+                if (!string.IsNullOrEmpty(un)) parts.Add("@" + un);
+                if (!string.IsNullOrEmpty(u.phone)) parts.Add("+" + u.phone);
+                if (parts.Count > 0) sb.AppendLine(string.Join("    ", parts));
+            }
+            else if (!string.IsNullOrEmpty(un))   // public channel / group
+            {
+                sb.AppendLine("@" + un);
+                sb.AppendLine("t.me/" + un);
+            }
+            if (!string.IsNullOrEmpty(about)) { if (sb.Length > 0) sb.AppendLine(); sb.AppendLine(about); }
+            string detailsText = sb.ToString().TrimEnd();
+            if (detailsText.Length == 0) _details.Visible = false;
+            else { _details.Visible = true; _details.SetText(detailsText, Helpers.TextEntities.Detect(detailsText), null); }
+        }
+
+        /// <summary>M1: re-fetch the peer's about and refresh the shown description after a Manage edit (bounded; no-op on self/failure).</summary>
+        private async void RefreshProfileDescriptionAsync()
+        {
+            if (_editable || _entry?.Peer == null || _details == null) return;
+            try
+            {
+                var (about, _, _, _) = await _service.GetPeerDetailsAsync(_entry.Peer, _entry?.PeerInfo);
+                if (IsDisposed) return;
+                ApplyDetailsText(about);
+            }
+            catch { }
+        }
+
+        private async void EditContact()
+        {
+            var u = OtherUser;
+            if (u == null) { ThemedDialog.Show(this, "Edit contact", "Only a saved user can be renamed.", "OK"); return; }
+
+            string newFirst, newLast;
+            using (var f = new EditContactForm(u.first_name ?? "", u.last_name ?? "", _dark, _accentColor))
+            {
+                if (f.ShowDialog(this) != DialogResult.OK) return;
+                newFirst = f.FirstNameValue; newLast = f.LastNameValue;
+            }
+            if (newFirst == (u.first_name ?? "") && newLast == (u.last_name ?? "")) return;   // nothing changed
+
+            bool ok;
+            try { ok = await _service.EditContactAsync(u, newFirst, newLast); }
+            catch (Exception ex) { ThemedDialog.Show(this, "Edit contact", "Couldn't rename the contact: " + ex.Message, "OK"); return; }
+            if (!ok) { ThemedDialog.Show(this, "Edit contact", "Couldn't rename — make sure your VPN is on and try again.", "OK"); return; }
+
+            // Reflect the rename optimistically: the User (== _entry.PeerInfo, shared ref), this ChatEntry's title,
+            // and the on-screen header label. The server's updateUserName reconciles the rest on next sync.
+            u.first_name = newFirst; u.last_name = newLast;
+            string display = (newFirst + " " + newLast).Trim();
+            if (_entry != null) _entry.Title = display;
+            if (_nameLbl != null && !_nameLbl.IsDisposed) _nameLbl.Text = display;   // view-mode name label (was _titleLbl = edit-mode, null here)
+            MainForm.RaisePeerTitleChanged(u.id, display);   // RELEASE-FIXES-V11: refresh the chat-list row + header live
+            System.Diagnostics.Debug.WriteLine("[CONTACT] renamed id=" + u.id);
+        }
 
         private async void DeleteContact()
         {
-            // Destructive + not part of an existing path → confirm and stub.
-            await System.Threading.Tasks.Task.Yield();
-            ThemedDialog.Show(this, "Delete contact", "Deleting a contact isn't implemented yet.", "OK");
+            var u = OtherUser;
+            if (u == null) { ThemedDialog.Show(this, "Delete contact", "Only a saved user can be deleted.", "OK"); return; }
+            if (ThemedDialog.Show(this, "Delete contact", "Delete this contact? Your chat history stays — they're just removed from your contacts.", "Delete", "Cancel") != 0) return;   // 0 = destructive primary
+            bool ok;
+            try { ok = await _service.DeleteContactAsync(u); }
+            catch (Exception ex) { ThemedDialog.Show(this, "Delete contact", "Couldn't delete: " + ex.Message, "OK"); return; }
+            if (!ok) { ThemedDialog.Show(this, "Delete contact", "Couldn't delete — make sure your VPN is on and try again.", "OK"); return; }
+            System.Diagnostics.Debug.WriteLine("[CONTACT] deleted id=" + u.id);
+            ThemedDialog.Show(this, "Delete contact", "Contact deleted.", "OK");
         }
 
         private async void BlockUser()
@@ -593,9 +792,8 @@ namespace TelegArm.UI
         private void AddBottomActions()
         {
             AddFlow(SectionLabel("ACTIONS"), 16);
-            if (OtherUser != null)   // user contact → Share/Edit/Delete + Block
+            if (OtherUser != null)   // user contact → Edit/Delete + Block (Share hidden for release — RELEASE-FIXES-V11)
             {
-                AddActionRow("📤", "Share contact", false, ShareContact);
                 AddActionRow("✏", "Edit contact", false, EditContact);
                 AddActionRow("🗑", "Delete contact", true, DeleteContact);
                 AddActionRow("🚫", _blocked ? "Unblock user" : "Block user", true, BlockUser);
@@ -656,33 +854,14 @@ namespace TelegArm.UI
 
             var u = OtherUser;
             if (u != null) LoadPersonalChannelAsync(u);   // PROFILE-CHANNEL: attached personal-channel card (async, no-op if none)
+            LoadPostedStoriesAsync();                      // PROFILE-STORIES: posted-stories thumbnail grid (async, hidden if none)
             // PEER-PRESENTATION wording: broadcasts have subscribers, groups have members.
             if (members > 0 && _statusLbl != null)
                 _statusLbl.Text = members.ToString("N0")
                     + (_entry?.PeerInfo is Channel sc && (sc.flags & Channel.Flags.broadcast) != 0 ? " subscribers" : " members");
 
             // Identifier section per peer type (all fields already live on the resolved peer — no round-trip).
-            var sb = new System.Text.StringBuilder();
-            string un = ActiveUsername(_entry?.PeerInfo);
-            if (u != null)
-            {
-                var parts = new List<string>();
-                if (!string.IsNullOrEmpty(un)) parts.Add("@" + un);
-                if (!string.IsNullOrEmpty(u.phone)) parts.Add("+" + u.phone);
-                if (parts.Count > 0) sb.AppendLine(string.Join("    ", parts));
-            }
-            else if (!string.IsNullOrEmpty(un))   // public channel / group
-            {
-                sb.AppendLine("@" + un);
-                sb.AppendLine("t.me/" + un);
-            }
-            if (!string.IsNullOrEmpty(about2)) { if (sb.Length > 0) sb.AppendLine(); sb.AppendLine(about2); }
-            string detailsText = sb.ToString().TrimEnd();
-            if (_details != null)
-            {
-                if (detailsText.Length == 0) _details.Visible = false;
-                else { _details.Visible = true; _details.SetText(detailsText, Helpers.TextEntities.Detect(detailsText), null); }
-            }
+            ApplyDetailsText(about2);
 
             if (_idBox != null) _idBox.Text = "ID: " + RawPeerId();
 
@@ -1024,9 +1203,34 @@ namespace TelegArm.UI
 
         private async void OnSave(object sender, EventArgs e)
         {
+            string first = _first.Text.Trim();
+            if (first.Length == 0) { ThemedDialog.Show(this, "Profile", "A first name is required.", "OK"); return; }   // name required
+            string last = _last.Text.Trim();
+            string about = _aboutBox.Text.Trim();
+
+            // USERNAME gate (PART 3): a CHANGED username must be confirmed available, else block the whole save.
+            string newUn = (_username?.Text ?? "").Trim();
+            string curUn = SelfUser?.MainUsername ?? "";
+            bool unChanged = newUn.Length > 0 && newUn != curUn;   // empty = leave username unchanged (no removal)
+            if (unChanged && !_usernameOk)
+            {
+                ThemedDialog.Show(this, "Username", "That username isn't available. Pick an available one, or restore your current username.", "OK");
+                return;
+            }
+
             try
             {
-                await _service.UpdateProfileAsync(_first.Text.Trim(), _last.Text.Trim(), _aboutBox.Text.Trim());
+                if (unChanged)
+                {
+                    try { await _service.UpdateSelfUsernameAsync(newUn); }   // only after CheckUsername said available
+                    catch (Exception ux)
+                    {
+                        _usernameOk = false; SetUsernameStatus("✗ Taken — pick another", Color.FromArgb(210, 90, 90));
+                        ThemedDialog.Show(this, "Username", "Couldn't set that username (it may have just been taken): " + ux.Message, "OK");
+                        return;   // race (USERNAME_OCCUPIED) → don't save the rest, don't claim success
+                    }
+                }
+                await _service.UpdateProfileAsync(first, last, about);
                 DialogResult = DialogResult.OK;
                 Close();
             }
@@ -1036,9 +1240,113 @@ namespace TelegArm.UI
             }
         }
 
+        // ── PROFILE-EDIT-SELF: username availability (debounced) ─────────────
+        private void OnUsernameChanged(object sender, EventArgs e)
+        {
+            _usernameOk = false;
+            if (_usernameStatus != null) _usernameStatus.Text = "";
+            _usernameCheckTimer?.Stop();
+            _usernameCheckTimer?.Start();   // debounce → CheckUsernameNow after 500ms idle
+        }
+
+        private async void CheckUsernameNow()
+        {
+            _usernameCheckTimer?.Stop();
+            string u = (_username.Text ?? "").Trim();
+            string cur = SelfUser?.MainUsername ?? "";
+            if (u.Length == 0) { SetUsernameStatus("", null); _usernameOk = true; return; }                 // empty = no change
+            if (u == cur)      { SetUsernameStatus("This is your current username.", null); _usernameOk = true; return; }
+            if (!IsValidUsernameFormat(u)) { SetUsernameStatus("Invalid — 5–32 letters/digits/_ , starting with a letter.", Color.FromArgb(210, 90, 90)); _usernameOk = false; return; }
+            SetUsernameStatus("Checking…", null);
+            bool free;
+            try { free = await _service.CheckSelfUsernameAsync(u); }
+            catch { SetUsernameStatus("Couldn't check — is your VPN on?", null); _usernameOk = false; return; }
+            if (IsDisposed || (_username.Text ?? "").Trim() != u) return;   // stale: the user kept typing
+            _usernameOk = free;
+            SetUsernameStatus(free ? "✓ Available" : "✗ Taken or unavailable", free ? Color.FromArgb(60, 170, 90) : Color.FromArgb(210, 90, 90));
+        }
+
+        private void SetUsernameStatus(string text, Color? color)
+        {
+            if (_usernameStatus == null) return;
+            _usernameStatus.Text = text;
+            _usernameStatus.ForeColor = color ?? (_dark ? Color.FromArgb(150, 150, 155) : Color.FromArgb(130, 130, 135));
+        }
+
+        private static bool IsValidUsernameFormat(string u)
+        {
+            if (u.Length < 5 || u.Length > 32) return false;
+            if (!((u[0] >= 'a' && u[0] <= 'z') || (u[0] >= 'A' && u[0] <= 'Z'))) return false;   // must start with a letter
+            foreach (char c in u)
+                if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_')) return false;
+            return true;
+        }
+
+        // ── PROFILE-EDIT-SELF: profile photo (view / set / remove) ───────────
+        private void ShowEditAvatarMenu()
+        {
+            var menu = new ThemedContextMenuStrip();
+            if (_avatar != null) MenuItem(menu, "View photo", ViewPhoto);
+            MenuItem(menu, "Set new photo…", SetProfilePhotoFlow);
+            if (_avatar != null) MenuItem(menu, "Remove current photo", RemoveProfilePhotoFlow);
+            menu.Closed += (s, e) => BeginInvoke((Action)menu.Dispose);
+            menu.Show(_pic, new Point(0, _pic.Height));
+        }
+
+        private async void SetProfilePhotoFlow()
+        {
+            string path;
+            using (var ofd = new OpenFileDialog { Filter = "Images|*.jpg;*.jpeg;*.png", Title = "Choose a profile photo" })
+            { if (ofd.ShowDialog(this) != DialogResult.OK) return; path = ofd.FileName; }
+
+            string keep = _titleLbl.Text;
+            _titleLbl.Text = "Uploading photo…";
+            bool ok;
+            try { ok = await _service.SetProfilePhotoAsync(path); }
+            catch (Exception ex) { _titleLbl.Text = keep; ThemedDialog.Show(this, "Profile photo", "Couldn't set the photo: " + ex.Message, "OK"); return; }
+            _titleLbl.Text = keep;
+            if (!ok) { ThemedDialog.Show(this, "Profile photo", "Couldn't set the photo — is your VPN on?", "OK"); return; }
+            RefreshSelfAvatar();
+        }
+
+        private async void RemoveProfilePhotoFlow()
+        {
+            if (ThemedDialog.Show(this, "Remove photo", "Remove your current profile photo?", "Remove", "Cancel") != 0) return;
+            try
+            {
+                var photos = await _service.GetSelfPhotosAsync(1);
+                var p = photos?.photos?.OfType<Photo>().FirstOrDefault();
+                if (p == null) { ThemedDialog.Show(this, "Remove photo", "There's no profile photo to remove.", "OK"); return; }
+                if (!await _service.DeleteProfilePhotoAsync(p)) { ThemedDialog.Show(this, "Remove photo", "Couldn't remove — is your VPN on?", "OK"); return; }
+                RefreshSelfAvatar();
+            }
+            catch (Exception ex) { ThemedDialog.Show(this, "Remove photo", "Couldn't remove: " + ex.Message, "OK"); }
+        }
+
+        /// <summary>Re-downloads the (now current) self avatar into the edit form AND invalidates the app-wide
+        /// AvatarStore for self, so rows/header repaint with the new (or removed) photo.</summary>
+        private async void RefreshSelfAvatar()
+        {
+            try
+            {
+                var bytes = await _service.DownloadAvatarAsync(SelfUser);
+                if (IsDisposed) return;
+                var old = _avatar;
+                _avatar = (bytes != null && bytes.Length > 0) ? ToBitmap(bytes) : null;
+                if (_ownsAvatar && old != null && !ReferenceEquals(old, _avatar)) { try { old.Dispose(); } catch { } }
+                _pic?.Invalidate();
+                if (Avatars != null && SelfUser != null) { Avatars.Invalidate(SelfUser.id); Avatars.Request(SelfUser.id, SelfUser); }
+            }
+            catch { }
+        }
+
         protected override void Dispose(bool disposing)
         {
-            if (disposing && _ownsAvatar && _avatar != null) { _avatar.Dispose(); _avatar = null; }
+            if (disposing)
+            {
+                _usernameCheckTimer?.Dispose();   // PROFILE-EDIT-SELF: the debounce timer
+                if (_ownsAvatar && _avatar != null) { _avatar.Dispose(); _avatar = null; }
+            }
             base.Dispose(disposing);
         }
 

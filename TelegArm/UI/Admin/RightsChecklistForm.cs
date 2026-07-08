@@ -41,11 +41,9 @@ namespace TelegArm.UI.Admin
 
             // Bottom action bar (added after the scroll host so it docks first and claims the bottom strip).
             var bottom = new Panel { Dock = DockStyle.Bottom, Height = 56, BackColor = bg };
-            var save = new Button { Text = "Save", Left = content.Width - 102, Top = 10, Width = 90, Height = 38, FlatStyle = FlatStyle.Flat, BackColor = accent, ForeColor = Color.White, Font = FontHelper.Ui(10.5f, FontStyle.Bold) };
-            save.FlatAppearance.BorderSize = 0;
+            var save = new RoundedButton { Text = "Save", Left = content.Width - 102, Top = 10, Width = 90, Height = 38, Kind = RoundedButtonKind.Primary, Font = FontHelper.Ui(10.5f, FontStyle.Bold) };
             save.Click += (s, e) => { Result = _boxes.ConvertAll(b => b.Checked).ToArray(); DialogResult = DialogResult.OK; Close(); };
-            var cancel = new Button { Text = "Cancel", Left = content.Width - 196, Top = 10, Width = 84, Height = 38, FlatStyle = FlatStyle.Flat, BackColor = field, ForeColor = fg };
-            cancel.FlatAppearance.BorderSize = 1;
+            var cancel = new RoundedButton { Text = "Cancel", Left = content.Width - 196, Top = 10, Width = 84, Height = 38, Kind = RoundedButtonKind.Secondary };
             cancel.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
             bottom.Controls.Add(save); bottom.Controls.Add(cancel);
             content.Controls.Add(bottom);

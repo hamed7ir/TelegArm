@@ -191,16 +191,14 @@ namespace TelegArm.UI
             _docPanel = new Panel { Dock = DockStyle.Fill, Visible = false };
             _docPanel.Paint += PaintDoc;
             _docPanel.Resize += (s, e) => _docPanel.Invalidate();
-            _docOpenBtn = new Button
+            _docOpenBtn = new TelegArm.UI.Controls.RoundedButton
             {
                 Text = "Open",
                 Dock = DockStyle.Bottom,
                 Height = 46,
-                FlatStyle = FlatStyle.Flat,
-                ForeColor = Color.White,
+                Kind = TelegArm.UI.Controls.RoundedButtonKind.Primary,
                 Margin = new Padding(0)
             };
-            _docOpenBtn.FlatAppearance.BorderSize = 0;
             _docOpenBtn.Click += (s, e) => OpenDocument();
             _docPanel.Controls.Add(_docOpenBtn);
 

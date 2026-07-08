@@ -42,8 +42,8 @@ namespace TelegArm.UI.Admin
             ClientSize = new Size(390, 520 + ThemedChrome.BarH);
             var content = ThemedChrome.Apply(this, "Invite links", accent, dark);
 
-            var create = new Button { Text = "+  Create invite link", Left = 8, Top = 8, Width = 374, Height = 44, FlatStyle = FlatStyle.Flat, BackColor = accent, ForeColor = Color.White, Font = FontHelper.Ui(10.5f, FontStyle.Bold) };
-            create.FlatAppearance.BorderSize = 0; create.Click += CreateClick;
+            var create = new RoundedButton { Text = "+  Create invite link", Left = 8, Top = 8, Width = 374, Height = 44, Kind = RoundedButtonKind.Primary, Font = FontHelper.Ui(10.5f, FontStyle.Bold) };
+            create.Click += CreateClick;
             content.Controls.Add(create);
 
             _list = new ThemedListBox(dark, accent) { Left = 8, Top = 60, Width = 374, Height = 452, RowHeight = 60, CanvasBackColor = _bg };

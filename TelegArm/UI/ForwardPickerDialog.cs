@@ -61,11 +61,9 @@ namespace TelegArm.UI
             _list.ItemClicked += OnRowClicked;
             content.Controls.Add(_list);
 
-            _confirm = new Button { Text = "Forward (0)", Left = 184, Top = 470, Width = 104, Height = 38, FlatStyle = FlatStyle.Flat, BackColor = accent, ForeColor = Color.White, Font = FontHelper.Ui(10f, FontStyle.Bold), Enabled = false };
-            _confirm.FlatAppearance.BorderSize = 0;
+            _confirm = new RoundedButton { Text = "Forward (0)", Left = 184, Top = 470, Width = 104, Height = 38, Kind = RoundedButtonKind.Primary, Font = FontHelper.Ui(10f, FontStyle.Bold), Enabled = false };
             _confirm.Click += (s, e) => { SelectedChats = _all.Where(c => _checked.Contains(c.PeerId)).ToList(); DialogResult = DialogResult.OK; Close(); };
-            var cancel = new Button { Text = "Cancel", Left = 294, Top = 470, Width = 74, Height = 38, FlatStyle = FlatStyle.Flat, BackColor = field, ForeColor = _fg };
-            cancel.FlatAppearance.BorderSize = 1;
+            var cancel = new RoundedButton { Text = "Cancel", Left = 294, Top = 470, Width = 74, Height = 38, Kind = RoundedButtonKind.Secondary };
             cancel.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
             content.Controls.Add(_confirm); content.Controls.Add(cancel);
 

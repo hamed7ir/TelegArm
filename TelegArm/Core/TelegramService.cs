@@ -79,15 +79,25 @@ namespace TelegArm.Core
         {
             if (what == "api_id") return ApiCredentials.ApiId.ToString(System.Globalization.CultureInfo.InvariantCulture);
             if (what == "api_hash") return ApiCredentials.ApiHash;
-            if (what == "session_pathname") return SessionPath;
+            if (what == "session_pathname")
+            {
+                var __sp = SessionPath;   // the ACTUAL file this (active) client opens — AccountId-resolved
+                // [SESSPATH] 0.2 collision probe: two active/warm clients logging the SAME session= path = the bug.
+                // Note AccountId==0 falls back to the GLOBAL AccountContext.SessionPath (keyed off ActiveId) — the
+                // prime collision suspect; the globalActiveId field makes that visible.
+                if (TelegArm.Helpers.Logger.Enabled)
+                    TelegArm.Helpers.Logger.Diag("[SESSPATH] client-open acct=" + AccountId + " session=\"" + __sp
+                        + "\" globalActiveId=" + AccountContext.ActiveId + " legacy=" + AccountContext.LegacyMode);
+                return __sp;
+            }
             // Device identity reported to Telegram (the session-list strings). Without these, WTelegram's
             // defaults produced the bogus "BlackBerry · Windows 10" — supply honest values instead. The app
             // NAME shown next to app_version comes from the api_id registration ("TelegArm"), so a release
-            // session reads "TelegArm 1.0.0"; device_model is the secondary device line (the user's PC name,
+            // session reads "TelegArm 1.1.0"; device_model is the secondary device line (the user's PC name,
             // as official clients show, falling back to "Desktop").
             if (what == "device_model") return string.IsNullOrWhiteSpace(Environment.MachineName) ? "Desktop" : Environment.MachineName;
             if (what == "system_version") return SystemVersion;
-            if (what == "app_version") return Program.Version;   // AssemblyInfo 1.0.0.0 → "1.0.0"
+            if (what == "app_version") return Program.Version;   // AssemblyInfo 1.1.0.0 → "1.1.0"
             if (what == "lang_code") return "en";
             if (what == "system_lang_code") return "en";
             if (what == "phone_number")
@@ -454,8 +464,23 @@ namespace TelegArm.Core
                 var file = await Client.UploadFileAsync(filePath, null);
                 await Client.Channels_EditPhoto(ch,
                     new InputChatUploadedPhoto { file = file, flags = InputChatUploadedPhoto.Flags.has_file });
+                await RefreshChannelPhotoAsync(ch);   // CHANNEL-PHOTO-REFRESH: update ch.photo to the NEW one so a re-download fetches it (not the stale id)
                 return true;
             }, timeoutMs, "EditPhoto");
+        }
+
+        /// <summary>CHANNEL-PHOTO-REFRESH: re-fetch the channel to update its <c>.photo</c> to the freshly-set one.
+        /// The avatar download builds its file location from the peer's photo_id, so without this a re-fetch after a
+        /// photo change would re-download the OLD photo by its stale id. Mutates the SHARED Channel (== ChatEntry.PeerInfo).</summary>
+        private async Task RefreshChannelPhotoAsync(Channel ch)
+        {
+            try
+            {
+                var res = await Client.Channels_GetChannels(new InputChannelBase[] { (InputChannel)ch }).ConfigureAwait(false);
+                if (res?.chats != null && res.chats.TryGetValue(ch.id, out var cb) && cb is Channel fresh)
+                    ch.photo = fresh.photo;
+            }
+            catch { }
         }
 
         public Task<Channels_ChannelParticipants> GetParticipantsAsync(Channel ch, ChannelParticipantsFilter filter, int offset, int limit, int timeoutMs = 20000)
@@ -529,6 +554,29 @@ namespace TelegArm.Core
         public Task<bool> ToggleSignaturesAsync(Channel ch, bool on, int timeoutMs = 20000)
         {
             return AdminBoundedAsync(async () => { await Client.Channels_ToggleSignatures(ch, on, false); return true; }, timeoutMs, "ToggleSignatures");
+        }
+
+        // ── CHANNEL-LINK-UNLINK: a broadcast channel's discussion group (the admin side of comments) ──────────
+        /// <summary>The channel's FULL info — read <c>(.full_chat as ChannelFull).linked_chat_id</c> for the current
+        /// discussion group (0 = none / comments off); <c>.chats</c> resolves the linked group's name. Bounded.</summary>
+        public Task<Messages_ChatFull> GetChannelFullAsync(Channel ch, int timeoutMs = 15000)
+        {
+            return AdminBoundedAsync(() => Client.Channels_GetFullChannel(ch), timeoutMs, "GetFullChannel");
+        }
+
+        /// <summary>Groups eligible to link as a broadcast channel's discussion group (no Client.* wrapper → Invoke).</summary>
+        public Task<Messages_Chats> GetGroupsForDiscussionAsync(int timeoutMs = 20000)
+        {
+            return AdminBoundedAsync(() => Client.Invoke(new TL.Methods.Channels_GetGroupsForDiscussion()), timeoutMs, "GetGroupsForDiscussion");
+        }
+
+        /// <summary>Links <paramref name="group"/> to <paramref name="broadcast"/> (comments ON), or UNLINKS when
+        /// <paramref name="group"/> is null — WTC serializes a null InputChannel as inputChannelEmpty (comments OFF).</summary>
+        public Task<bool> SetDiscussionGroupAsync(Channel broadcast, Channel group, int timeoutMs = 20000)
+        {
+            InputChannel b = broadcast;                                        // implicit Channel → InputChannel
+            InputChannelBase g = group == null ? null : (InputChannel)group;  // null → inputChannelEmpty (unlink)
+            return AdminBoundedAsync(async () => { await Client.Invoke(new TL.Methods.Channels_SetDiscussionGroup { broadcast = b, group = g }); return true; }, timeoutMs, "SetDiscussionGroup");
         }
 
         /// <summary>Observes a faulted/abandoned Task so its exception can't surface as Unobserved.</summary>
@@ -643,7 +691,13 @@ namespace TelegArm.Core
             {
                 case "api_id": return ApiCredentials.ApiId.ToString(System.Globalization.CultureInfo.InvariantCulture);
                 case "api_hash": return ApiCredentials.ApiHash;
-                case "session_pathname": return System.IO.Path.Combine(AccountContext.AccountDir(id), "session");
+                case "session_pathname":
+                {
+                    var __wp = System.IO.Path.Combine(AccountContext.AccountDir(id), "session");
+                    if (TelegArm.Helpers.Logger.Enabled)
+                        TelegArm.Helpers.Logger.Diag("[SESSPATH] warm-open acct=" + id + " session=\"" + __wp + "\"");
+                    return __wp;
+                }
                 case "device_model": return string.IsNullOrWhiteSpace(Environment.MachineName) ? "Desktop" : Environment.MachineName;
                 case "system_version": return SystemVersion;
                 case "app_version": return Program.Version;
@@ -746,6 +800,34 @@ namespace TelegArm.Core
             Dispose();
         }
 
+        /// <summary>ACCOUNT-RECOVERY-SAFETY (Bug 1): the SWITCH-SAFE warm teardown. The sync <see cref="DisposeWarmService"/>
+        /// calls <see cref="Dispose"/> → Client.Dispose() DIRECTLY — no socket-abort-first, not awaited — so when a switch
+        /// drops a warm client and then COLD-opens the SAME session file, the warm client's connection/handle can still be
+        /// releasing → two clients on one session = AUTH_KEY_DUPLICATED / mid-write corruption (the account-loss race). This
+        /// mirrors <see cref="TeardownForSwitchAsync"/>: abort the socket FIRST, then Dispose, AWAITED to completion, so the
+        /// session file is flushed + its handle RELEASED (and the server-side connection closed) BEFORE the caller reopens it.
+        /// Bounded so a hung dispose can't stall the switch.</summary>
+        public async System.Threading.Tasks.Task DisposeWarmServiceAsync(int timeoutMs = 10000)
+        {
+            TearingDown = true;
+            try { if (Updates != null) Updates.SaveState(UpdateStatePath); } catch { }
+            try { if (Avatars != null) Avatars.Dispose(); } catch { }
+            try { StopConnectionWatchdog(); } catch { }
+            try { CancelAllDownloads("warm-drop"); } catch { }
+            var client = Client;
+            Client = null; Updates = null; Me = null;
+            if (client != null)
+            {
+                var teardown = System.Threading.Tasks.Task.Run(async () =>
+                {
+                    try { await client.ResetAsync(false, false); } catch { }   // abort the socket FIRST → clean, non-hanging dispose
+                    try { client.Dispose(); } catch { }                        // flush session + RELEASE the file handle
+                });
+                var done = await System.Threading.Tasks.Task.WhenAny(teardown, System.Threading.Tasks.Task.Delay(timeoutMs));
+                if (done != teardown) SwallowTaskFault(teardown);
+            }
+        }
+
         /// <summary>
         /// Tears down the zombie socket and reconnects on the SAME session (no re-login): ResetAsync(false,false)
         /// keeps the logged-in user + secondary sessions; ConnectAsync() re-establishes the home-DC connection.
@@ -839,6 +921,11 @@ namespace TelegArm.Core
         private bool _notifyDefaultsLoaded;
         public DateTime MuteDefUsers = DateTime.MinValue, MuteDefChats = DateTime.MinValue, MuteDefBroadcasts = DateTime.MinValue;
 
+        // NOTIFY-BG-MUTE-FIX: per-peer notify_settings captured from LIVE UpdateNotifySettings (any time after warm-up).
+        // The CachedDialogs snapshot is frozen at seed → a mute changed later isn't in it; this map is checked FIRST so
+        // the background mute-gate honors current mutes without a re-warm. Written from the UM thread + UI thread → locked.
+        private readonly Dictionary<long, PeerNotifySettings> _liveNotify = new Dictionary<long, PeerNotifySettings>();
+
         /// <summary>Fetch this account's category mute defaults (users/chats/broadcasts) ONCE — a warm/background account
         /// needs them to compute its own effective-mute (the active account fetches its own separately). Best-effort.</summary>
         public async Task LoadNotifyDefaultsAsync()
@@ -859,6 +946,19 @@ namespace TelegArm.Core
         private static DateTime MuteUntilOf(PeerNotifySettings ns)
             => ns != null && (ns.flags & PeerNotifySettings.Flags.has_mute_until) != 0 ? ns.mute_until : DateTime.MinValue;
 
+        /// <summary>NOTIFY-BG-MUTE-FIX: apply a LIVE <c>UpdateNotifySettings</c> to THIS account's own mute state so its
+        /// background mute-gate stays current after warm-up (the CachedDialogs snapshot is frozen at seed; the category
+        /// defaults load once). Per-peer → the live override map (IsPeerEffectivelyMuted reads it BEFORE the snapshot);
+        /// category → the MuteDef* defaults. Routed for the ACTIVE account too (so its map is fresh when it later
+        /// backgrounds) and for background accounts (a mute changed while backgrounded applies without a re-warm).</summary>
+        public void ApplyNotifyUpdate(NotifyPeerBase peer, PeerNotifySettings ns)
+        {
+            if (peer is NotifyPeer np && np.peer != null) { lock (_liveNotify) _liveNotify[np.peer.ID] = ns; }
+            else if (peer is NotifyUsers) MuteDefUsers = MuteUntilOf(ns);
+            else if (peer is NotifyChats) MuteDefChats = MuteUntilOf(ns);
+            else if (peer is NotifyBroadcasts) MuteDefBroadcasts = MuteUntilOf(ns);
+        }
+
         /// <summary>NOTIFY-BACKGROUND: is <paramref name="peer"/> effectively muted for THIS account? Explicit per-dialog
         /// mute (from the warm dialog snapshot) overrides; else this account's category default by peer-kind. Mirrors the
         /// active account's ComputeEffectiveMuted against THIS account's own state. Never throws (fail-open = not muted).</summary>
@@ -867,10 +967,21 @@ namespace TelegArm.Core
             if (peer == null) return false;
             try
             {
-                var ns = DialogNotifySettings(peer);
-                if (ns != null && (ns.flags & PeerNotifySettings.Flags.has_mute_until) != 0)
-                    return ns.mute_until > DateTime.UtcNow;          // explicit per-dialog setting decides (overrides category)
-                return CategoryDefaultFor(peer) > DateTime.UtcNow;   // else the peer-kind category default
+                // NOTIFY-BG-MUTE-FIX: a LIVE per-peer override (from UpdateNotifySettings after warm-up) beats the frozen
+                // CachedDialogs snapshot — so a mute changed while this account was active OR backgrounded is honored.
+                PeerNotifySettings ns; bool live;
+                lock (_liveNotify) live = _liveNotify.TryGetValue(peer.ID, out ns);
+                if (!live) ns = DialogNotifySettings(peer);
+                bool explicitPerDialog = ns != null && (ns.flags & PeerNotifySettings.Flags.has_mute_until) != 0;
+                DateTime cat = CategoryDefaultFor(peer);
+                bool muted = explicitPerDialog ? ns.mute_until > DateTime.UtcNow   // explicit per-dialog decides (overrides category)
+                                               : cat > DateTime.UtcNow;            // else the peer-kind category default
+                if (TelegArm.Helpers.Logger.Enabled)
+                    System.Diagnostics.Debug.WriteLine("[BGMUTE] acct=" + AccountId + " peer=" + peer.ID
+                        + " src=" + (live ? "live" : ns != null ? "snapshot" : "category")
+                        + " perDialogMute=" + (explicitPerDialog ? (ns.mute_until > DateTime.UtcNow).ToString() : "-")
+                        + " categoryDefault=" + (cat > DateTime.UtcNow) + " effectiveMuted=" + muted);
+                return muted;
             }
             catch { return false; }
         }
@@ -976,6 +1087,17 @@ namespace TelegArm.Core
             catch { return null; }
         }
 
+        /// <summary>A peer's PINNED / profile "Posted Stories" — the ones kept on the profile page, which PERSIST past
+        /// the 24h active window (unlike GetPeerStories = the transient story ring). stories.getPinnedStories →
+        /// Stories_Stories.stories (full StoryItems). This is the source for the profile's "POSTED STORIES" grid. Null on failure.</summary>
+        public async Task<Stories_Stories> GetPinnedStoriesAsync(InputPeer peer, int offsetId = 0, int limit = 100)
+        {
+            var client = Client;
+            if (client == null || peer == null) return null;
+            try { return await client.Invoke(new TL.Methods.Stories_GetPinnedStories { peer = peer, offset_id = offsetId, limit = limit }).ConfigureAwait(false); }
+            catch { return null; }
+        }
+
         /// <summary>Marks a peer's stories seen up to <paramref name="maxId"/> (dims the ring); returns read ids.</summary>
         public async Task<int[]> ReadStoriesAsync(InputPeer peer, int maxId)
         {
@@ -1011,6 +1133,19 @@ namespace TelegArm.Core
         public Task<Messages_MessagesBase> SearchMessagesAsync(string query, int limit = 50)
         {
             return Client.Messages_SearchGlobal(query, limit: limit);
+        }
+
+        /// <summary>INCHAT-SEARCH: full-text search scoped to ONE peer (messages.search) — the matching messages in
+        /// THAT conversation, newest-first. Distinct from SearchMessagesAsync (global SearchGlobal). offset_id=0 for
+        /// the newest page; pass the oldest result id already shown to page OLDER matches. The result's .count is the
+        /// total match count ("N messages found").</summary>
+        public Task<Messages_MessagesBase> SearchInChatAsync(InputPeer peer, string query, int offsetId = 0, int limit = 40)
+        {
+            // The generic Client.Messages_Search<TFilter> needs a CONCRETE filter (there is no "empty" filter type),
+            // so call the raw function via Invoke with filter left null — WTC serializes a null MessagesFilter as
+            // inputMessagesFilterEmpty (all message kinds), the same convenience SearchGlobal relies on.
+            // (top_msg_id is available here for a future forum-TOPIC-scoped search.)
+            return Client.Invoke(new TL.Methods.Messages_Search { peer = peer, q = query, offset_id = offsetId, limit = limit });
         }
 
         /// <summary>SEARCH: public discovery. Contacts_Search finds PUBLIC channels/groups/users by name/username —
@@ -1612,6 +1747,30 @@ namespace TelegArm.Core
         public Task SetBlockedAsync(InputPeer peer, bool blocked)
             => blocked ? (Task)Client.Contacts_Block(peer) : Client.Contacts_Unblock(peer);
 
+        /// <summary>Renames a saved contact. contacts.addContact re-adds the EXISTING user (matched by id) with new
+        /// names → Telegram treats it as an edit. Reuses the contact's known phone; the optional note /
+        /// phone-privacy params are left at their defaults. Bounded + off-thread; false on timeout, throws on error.</summary>
+        public Task<bool> EditContactAsync(User user, string firstName, string lastName, int timeoutMs = 20000)
+        {
+            return AdminBoundedAsync(async () =>
+            {
+                await Client.Contacts_AddContact(new InputUser(user.id, user.access_hash),
+                    firstName ?? "", lastName ?? "", user.phone ?? "");
+                return true;
+            }, timeoutMs, "EditContact");
+        }
+
+        /// <summary>Removes a saved contact (contacts.deleteContacts) — the user + chat history stay; they're just no
+        /// longer in your contacts. Bounded + off-thread; false on timeout, throws on error (the caller reports it).</summary>
+        public Task<bool> DeleteContactAsync(User user, int timeoutMs = 20000)
+        {
+            return AdminBoundedAsync(async () =>
+            {
+                await Client.Contacts_DeleteContacts(new InputUserBase[] { new InputUser(user.id, user.access_hash) });
+                return true;
+            }, timeoutMs, "DeleteContact");
+        }
+
         /// <summary>Joins a channel/supergroup (channels.joinChannel). Returns the updates.</summary>
         public Task<UpdatesBase> JoinChannelAsync(InputPeerChannel peer)
             => Client.Channels_JoinChannel(new InputChannel(peer.channel_id, peer.access_hash));
@@ -1664,7 +1823,7 @@ namespace TelegArm.Core
         // ALL crypto goes through WTelegram's SRP helper Client.InputCheckPassword(Account_Password,string):
         //  • current_algo SET  → returns the current-password challenge proof (srp_id/A/M1).
         //  • current_algo NULL → returns the NEW-password verifier g^x mod p in field .A (used as new_password_hash).
-        // (Confirmed by decompiling WTelegram.Encryption.Check2FA.) NEVER hand-roll SRP.
+        // (Confirmed against WTC's open-source WTelegram.Encryption.Check2FA — github.com/wiz0u/WTelegramClient.) NEVER hand-roll SRP.
 
         /// <summary>Current 2FA config (account.getPassword). Re-fetch before each SRP build (srp_B/srp_id are per-request).</summary>
         public Task<Account_Password> GetPasswordAsync() => Client.Account_GetPassword();
@@ -1798,6 +1957,17 @@ namespace TelegArm.Core
             catch { /* typing is best-effort — never surface */ }
         }
 
+        /// <summary>DRAFTS: save (or, with an EMPTY message, CLEAR) the unsent draft for a peer — messages.saveDraft.
+        /// We store the RAW composer text (markdown re-parses on send), no entities/reply. Best-effort; false on any
+        /// failure so fire-and-forget callers can ignore it. The server echoes UpdateDraftMessage (cross-device sync).</summary>
+        public async Task<bool> SaveDraftAsync(InputPeer peer, string message)
+        {
+            var client = Client;
+            if (client == null || peer == null) return false;
+            try { return await client.Messages_SaveDraft(peer, message ?? "").ConfigureAwait(false); }
+            catch { return false; }
+        }
+
         // ── Polls & inline-keyboard bot buttons ─────────────────────────────
 
         /// <summary>Votes in a poll with the chosen option strings (PollAnswer.option). Empty array = retract.
@@ -1883,11 +2053,11 @@ namespace TelegArm.Core
         /// Sends a plain-text message to a peer; returns the sent message. When
         /// <paramref name="replyToMsgId"/> is &gt; 0 the message is sent as a reply.
         /// </summary>
-        public Task<Message> SendTextAsync(InputPeer peer, string text, int replyToMsgId = 0)
+        public Task<Message> SendTextAsync(InputPeer peer, string text, int replyToMsgId = 0, MessageEntity[] entities = null)
         {
             return replyToMsgId > 0
-                ? Client.SendMessageAsync(peer, text, reply_to_msg_id: replyToMsgId)
-                : Client.SendMessageAsync(peer, text);
+                ? Client.SendMessageAsync(peer, text, reply_to_msg_id: replyToMsgId, entities: entities)
+                : Client.SendMessageAsync(peer, text, entities: entities);
         }
 
         /// <summary>COMMENTS-POST: post a comment into a channel post's discussion thread. The SendMessageAsync helper
@@ -1897,7 +2067,7 @@ namespace TelegArm.Core
         /// only form a non-admin can post through (sending to the broadcast channel is admin-only → CHAT_ADMIN_REQUIRED).
         /// Returns the sent Message parsed from the Updates (null if none), or throws (caller handles
         /// CHAT_WRITE_FORBIDDEN → join, FLOOD_WAIT, etc.).</summary>
-        public async Task<Message> SendThreadCommentAsync(InputPeer groupPeer, int rootMsgId, string text)
+        public async Task<Message> SendThreadCommentAsync(InputPeer groupPeer, int rootMsgId, string text, MessageEntity[] entities = null)
         {
             var reply = new InputReplyToMessage
             {
@@ -1905,7 +2075,7 @@ namespace TelegArm.Core
                 top_msg_id = rootMsgId,
                 reply_to_msg_id = rootMsgId   // a top-level comment replies to the thread root (the group-side forwarded post)
             };
-            var updates = await Client.Messages_SendMessage(groupPeer, text, WTelegram.Helpers.RandomLong(), reply_to: reply);
+            var updates = await Client.Messages_SendMessage(groupPeer, text, WTelegram.Helpers.RandomLong(), reply_to: reply, entities: entities);
             return SentMessageFrom(updates);
         }
 
@@ -1970,15 +2140,19 @@ namespace TelegArm.Core
         }
 
         /// <summary>Edits the text of one of my messages.</summary>
-        public Task<UpdatesBase> EditMessageAsync(InputPeer peer, int id, string text)
+        public Task<UpdatesBase> EditMessageAsync(InputPeer peer, int id, string text, MessageEntity[] entities = null)
         {
-            return Client.Messages_EditMessage(peer, id, message: text);
+            return Client.Messages_EditMessage(peer, id, message: text, entities: entities);
         }
 
         /// <summary>Updates my own profile (first/last name + bio).</summary>
-        public Task<UserBase> UpdateProfileAsync(string firstName, string lastName, string about)
+        /// <summary>PROFILE-EDIT-SELF: save first/last name + bio (Account_UpdateProfile) and refresh <see cref="Me"/>
+        /// from the returned self User so the app's displayed name updates. Empty args leave that field unchanged.</summary>
+        public async Task<bool> UpdateProfileAsync(string firstName, string lastName, string about)
         {
-            return Client.Account_UpdateProfile(firstName, lastName, about);
+            var res = await Client.Account_UpdateProfile(firstName, lastName, about).ConfigureAwait(false);
+            if (res is User u) Me = u;
+            return true;
         }
 
         /// <summary>My own bio/about text (empty on failure).</summary>
@@ -1990,6 +2164,70 @@ namespace TelegArm.Core
                 return full?.full_user?.about ?? "";
             }
             catch { return ""; }
+        }
+
+        // ── PROFILE-EDIT-SELF: username (check-then-set) + profile photo (add / remove) + self refresh ──
+
+        /// <summary>Availability check for MY username (account.checkUsername) — true = free. Check BEFORE saving.</summary>
+        public async Task<bool> CheckSelfUsernameAsync(string username)
+        {
+            var client = Client;
+            if (client == null) return false;
+            return await client.Account_CheckUsername(username ?? "").ConfigureAwait(false);
+        }
+
+        /// <summary>Sets MY @username (account.updateUsername) — call ONLY after CheckSelfUsername said available.
+        /// THROWS on USERNAME_OCCUPIED (a save-time race) so the caller can report it; refreshes <see cref="Me"/> on success.</summary>
+        public async Task<bool> UpdateSelfUsernameAsync(string username)
+        {
+            var res = await Client.Account_UpdateUsername(username ?? "").ConfigureAwait(false);
+            if (res is User u) Me = u;
+            return true;
+        }
+
+        /// <summary>Uploads a local image and sets it as MY profile photo (photos.uploadProfilePhoto), then refreshes
+        /// <see cref="Me"/> so the new photo propagates. Streams from disk (ARM32-safe). False on no client/path.</summary>
+        public async Task<bool> SetProfilePhotoAsync(string filePath)
+        {
+            var client = Client;
+            if (client == null || string.IsNullOrEmpty(filePath)) return false;
+            var uploaded = await client.UploadFileAsync(filePath, null).ConfigureAwait(false);
+            await client.Photos_UploadProfilePhoto(file: uploaded).ConfigureAwait(false);
+            await RefreshMeAsync().ConfigureAwait(false);
+            return true;
+        }
+
+        /// <summary>My profile photos (photos.getUserPhotos on self) — the Photo objects, so a caller can build the
+        /// InputPhoto to delete. Null on failure.</summary>
+        public async Task<Photos_Photos> GetSelfPhotosAsync(int limit = 12)
+        {
+            var client = Client;
+            if (client == null || Me == null) return null;
+            try { return await client.Photos_GetUserPhotos(new InputUser(Me.id, Me.access_hash), 0, 0, limit).ConfigureAwait(false); }
+            catch { return null; }
+        }
+
+        /// <summary>Removes ONE profile photo (photos.deletePhotos with its InputPhoto) then refreshes <see cref="Me"/>
+        /// so the now-current photo (or none → letter avatar) propagates. False on no client/photo.</summary>
+        public async Task<bool> DeleteProfilePhotoAsync(Photo p)
+        {
+            var client = Client;
+            if (client == null || p == null) return false;
+            await client.Photos_DeletePhotos(new InputPhoto[] { new InputPhoto { id = p.id, access_hash = p.access_hash, file_reference = p.file_reference } }).ConfigureAwait(false);
+            await RefreshMeAsync().ConfigureAwait(false);
+            return true;
+        }
+
+        /// <summary>Re-fetches the self User (users.getFullUser on self) and updates <see cref="Me"/> — so name/photo
+        /// edits reflect in Me for the app's avatar/name reads. Best-effort.</summary>
+        public async Task RefreshMeAsync()
+        {
+            try
+            {
+                var full = await Client.Users_GetFullUser(InputUser.Self).ConfigureAwait(false);
+                if (full?.users != null && Me != null && full.users.TryGetValue(Me.id, out var ub) && ub is User u) Me = u;
+            }
+            catch { }
         }
 
         /// <summary>Fetches a peer's bio/about (the FULL description) + member count + online count — off the

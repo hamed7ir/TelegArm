@@ -81,6 +81,7 @@ namespace TelegArm.UI
 
         private SplitContainer _split;
         private Button _hamburger;
+        private Button _chatSearchBtn;   // INCHAT-SEARCH: magnifier in the chat header → search within the open chat
         private MaterialTextBox2 _searchBox;
         private FlowLayoutPanel _chatListPanel;
         private MaterialLabel _chatTitle;
@@ -243,6 +244,15 @@ namespace TelegArm.UI
         private bool _switchInProgress, _switchAborted;
         private bool _connectCorrupt;   // last connect failed because the session file is unreadable (permanent, not network)
         private readonly HashSet<long> _recoveryTried = new HashSet<long>();   // accounts already tried in the current corrupt-recovery chain (bounds it)
+        private readonly HashSet<long> _recoveryRetried = new HashSet<long>(); // accounts given a CLEAN-RETRY this run (retry once, then move-aside — never delete)
+
+        /// <summary>[RECOVERY] one-line diagnostic that SURVIVES Release (Trace, like [SESSPATH]) so the account-recovery
+        /// decisions — clean-retry / kept / moved-aside — are visible in the installed build's log when logging is on.
+        /// This path must NEVER auto-delete an account, and the log is how we PROVE that on-device.</summary>
+        private static void LogRecovery(string line)
+        {
+            if (TelegArm.Helpers.Logger.Enabled) TelegArm.Helpers.Logger.Diag("[RECOVERY] " + line);
+        }
         private System.Windows.Forms.Timer _connectingDots;
         private int _dotPhase;
         private System.Threading.CancellationTokenSource _retryNowCts;
@@ -344,6 +354,7 @@ namespace TelegArm.UI
             _activeService = service;
             AvatarStore.SetActive(_service.Avatars);   // MULTI-ACCOUNT: the active account's store is the ambient .Current
             _avatars.AvatarLoaded += OnAvatarLoaded;    // (_avatars ⇒ _service.Avatars — the active service's store)
+            PeerTitleChanged += OnPeerTitleChanged;     // RELEASE-FIXES-V11 (H1): live row/header refresh on a rename
 
             _skin = MaterialSkinManager.Instance;
             _skin.AddFormToManage(this);
@@ -415,6 +426,7 @@ namespace TelegArm.UI
                 AudioPlayer.Shutdown();
                 try { _recorder?.Dispose(); } catch { }
                 _avatars.AvatarLoaded -= OnAvatarLoaded;
+                PeerTitleChanged -= OnPeerTitleChanged;   // RELEASE-FIXES-V11: event-leak discipline (static event)
                 _avatars.Dispose();   // stops the backfill workers + disposes the cached bitmaps
                 foreach (var img in _photoCache.Values) img.Dispose();
                 foreach (var img in _photoThumbCache.Values) img.Dispose();
@@ -720,6 +732,19 @@ namespace TelegArm.UI
             _dlIndicator = new DownloadIndicator(_service) { Dock = DockStyle.Right };
             _dlIndicator.Click += (s, e) => OpenDownloadsPanel();
             topBar.Controls.Add(_dlIndicator);
+            // INCHAT-SEARCH: a magnifier in the chat header → enter in-chat search (the left panel becomes scoped
+            // results for the open chat). Drawn (GDI), not a font glyph, for crisp/consistent rendering on RT.
+            _chatSearchBtn = new Button
+            {
+                Dock = DockStyle.Right, Width = 44, FlatStyle = FlatStyle.Flat, Text = "",
+                BackColor = Color.Transparent, Cursor = Cursors.Hand, TabStop = false,
+                Visible = false   // shown only while a chat is open (toggled in OpenChat / on leaving a chat)
+            };
+            _chatSearchBtn.FlatAppearance.BorderSize = 0;
+            _chatSearchBtn.FlatAppearance.MouseOverBackColor = Color.FromArgb(40, _accent);
+            _chatSearchBtn.Paint += (s, e) => DrawMagnifier(e.Graphics, _chatSearchBtn.ClientRectangle, _accent);
+            _chatSearchBtn.Click += (s, e) => EnterInChatSearch();
+            topBar.Controls.Add(_chatSearchBtn);
             // Peer avatar before the name. Added LAST so its Dock.Left resolves outermost-left; titleStack (Fill,
             // added first) then occupies the space between the avatar and the right-docked transfers indicator.
             _headerAvatar = new Panel { Dock = DockStyle.Left, Width = 54, Margin = new Padding(0), Cursor = Cursors.Hand };
@@ -818,6 +843,11 @@ namespace TelegArm.UI
                     e.SuppressKeyPress = true;
                     SendCurrentMessage();
                 }
+                // SEND-ENTITIES: desktop formatting shortcuts — wrap the selection in the markdown marker that
+                // becomes a MessageEntity on send (Ctrl+B bold, Ctrl+I italic, Ctrl+K link).
+                else if (e.Control && e.KeyCode == Keys.B) { e.SuppressKeyPress = true; WrapComposerSelection("**", "**"); }
+                else if (e.Control && e.KeyCode == Keys.I) { e.SuppressKeyPress = true; WrapComposerSelection("__", "__"); }
+                else if (e.Control && e.KeyCode == Keys.K) { e.SuppressKeyPress = true; InsertComposerLink(); }
             };
             _messageInput.TextChanged += OnComposerTextChanged;   // QUICKWINS-1 PART 1: send our typing (throttled; inert when not typing)
             // COMPOSER-full-revert: the composer is now the PLAIN, known-good MaterialTextBox2 — its inner native
@@ -827,6 +857,19 @@ namespace TelegArm.UI
             // the [KBD] diagnostics (below) remain wired to it.
             HookKbdDiag(_messageInput, "composer");   // [KBD] focus/keystroke diagnostics (KEEP)
             HookKbdDiag(_searchBox, "search");
+
+            // SEND-ENTITIES (formatting toolbar): a themed context menu on the composer — select text → tap a format
+            // to wrap it in the markdown marker that's parsed to a MessageEntity on send. Setting ContextMenuStrip is a
+            // safe property assignment (no inner-TextBox reflection/overpaint, per the COMPOSER-full-revert note above).
+            var fmtMenu = new ThemedContextMenuStrip();
+            fmtMenu.Items.Add("Bold").Click += (s, e) => WrapComposerSelection("**", "**");
+            fmtMenu.Items.Add("Italic").Click += (s, e) => WrapComposerSelection("__", "__");
+            fmtMenu.Items.Add("Strikethrough").Click += (s, e) => WrapComposerSelection("~~", "~~");
+            fmtMenu.Items.Add("Monospace").Click += (s, e) => WrapComposerSelection("`", "`");
+            fmtMenu.Items.Add("Link…").Click += (s, e) => InsertComposerLink();
+            fmtMenu.Items.Add(new ToolStripSeparator());
+            fmtMenu.Items.Add("Paste").Click += (s, e) => PasteIntoComposer();
+            _messageInput.ContextMenuStrip = fmtMenu;
 
             _sendButton = new MaterialButton
             {
@@ -2127,10 +2170,29 @@ namespace TelegArm.UI
                 }
         }
 
+        /// <summary>INCHAT-SEARCH: draws a magnifier (lens circle + diagonal handle) as a FIXED GDI shape — same
+        /// rationale as DrawHamburger (a font/emoji glyph renders inconsistently on RT).</summary>
+        private static void DrawMagnifier(Graphics g, Rectangle area, Color color)
+        {
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            int s = Math.Min(area.Width, area.Height);
+            int d = Math.Max(9, (int)(s * 0.42f));                    // lens diameter
+            int cx = area.X + area.Width / 2 - d / 6, cy = area.Y + area.Height / 2 - d / 6;
+            var lens = new Rectangle(cx - d / 2, cy - d / 2, d, d);
+            using (var pen = new Pen(color, Math.Max(2f, s * 0.09f)))
+            {
+                pen.StartCap = System.Drawing.Drawing2D.LineCap.Round;
+                pen.EndCap = System.Drawing.Drawing2D.LineCap.Round;
+                g.DrawEllipse(pen, lens);
+                g.DrawLine(pen, lens.Right - d / 8, lens.Bottom - d / 8, lens.Right + d / 3, lens.Bottom + d / 3);
+            }
+        }
+
         /// <summary>Pushes the current accent/dark state into the custom-painted controls.</summary>
         private void RefreshThemedControls()
         {
             if (_hamburger != null) { _hamburger.ForeColor = _accent; _hamburger.Invalidate(); }   // repaint the drawn icon with the current accent
+            if (_chatSearchBtn != null) _chatSearchBtn.Invalidate();   // INCHAT-SEARCH: repaint the drawn magnifier with the current accent
             if (_attachButton != null) _attachButton.Invalidate(); // self-themes from ThemeHelper
             if (_footerBar != null) { _footerBar.AccentColor = _accent; _footerBar.IsDark = _dark; _footerBar.Invalidate(); }
             if (_threadJoinBar != null) { _threadJoinBar.AccentColor = _accent; _threadJoinBar.IsDark = _dark; _threadJoinBar.Invalidate(); }
@@ -2220,7 +2282,7 @@ namespace TelegArm.UI
             rows.Add(Row("👥", "New Group", NewGroup));
             rows.Add(Row("📢", "New Channel", NewChannel));
             rows.Add(Row("📇", "Contacts", OpenContacts));
-            rows.Add(Row("📞", "Calls", () => ComingSoon("Calls")));
+            // RELEASE-FIXES-V11 (H2): "Calls" hidden for release (parked for a later version — don't ship a "coming soon" dead item).
             rows.Add(Row("🔖", "Saved Messages", () => OpenSavedMessages()));
             rows.Add(Sep());
             rows.Add(Row("⚙", "Settings", OpenSettings));
@@ -2354,9 +2416,6 @@ namespace TelegArm.UI
 
         // Defer to the next message-loop tick so the drawer isn't removed/disposed mid mouse-event.
         private Action Wrap(Action action) => () => BeginInvoke((Action)(() => { CloseDrawer(); action?.Invoke(); }));
-
-        private void ComingSoon(string what)
-            => ThemedDialog.Show(this, what, what + " isn't implemented yet — coming soon.", "OK");
 
         // ── Contacts / New Group / New Channel (shared people picker; all network ops bounded in the service) ──
 
@@ -3574,6 +3633,11 @@ namespace TelegArm.UI
             ResetPerAccountState();
             AuthManager.Reset();                  // no previous phone/identity leaks into the add login
             AccountContext.ActiveId = 0;          // → Config("session_pathname") = accounts/_pending/session
+            _service.AccountId = 0;               // CRITICAL (ACCOUNT-SESSION-PATH-FIX): TelegramService.SessionPath checks
+                                                  // this.AccountId FIRST — without this reset the reused _service still holds the
+                                                  // PREVIOUS account's id, so the add-login opens accounts/{prevId}/session (that
+                                                  // account's REAL file) and Telegram rebinds it → the previous account is LOGGED
+                                                  // OUT. Pair with ActiveId=0 so the pending login resolves to _pending.
             AccountContext.LegacyMode = false;
             AccountStore.ClearPending();          // a leftover _pending session would be RESUMED → wrong identity
             if (AccountStore.PendingSessionExists()) System.Diagnostics.Debug.WriteLine("[ACCT] WARNING: stale _pending session still present before add");
@@ -3600,8 +3664,10 @@ namespace TelegArm.UI
                 long restore = prev;
                 if (restore == 0) { var accs = AccountStore.ListAccounts(); if (accs.Count > 0) restore = accs[0].Id; }
                 System.Diagnostics.Debug.WriteLine("[ACCT] add cancelled → deleted _pending only, restoring active=" + restore);
-                if (restore != 0) { AccountContext.ActiveId = 0; await SwitchAccountAsync(restore, prevName); }
-                else ShowLoginForm();   // genuinely no accounts (e.g. add was the very first) → first-launch login
+                // Pair AccountId with ActiveId=0 (the pending invariant) so nothing resolves a stale session between here
+                // and the switch; SwitchAccountAsync then re-binds _service.AccountId to `restore`.
+                if (restore != 0) { AccountContext.ActiveId = 0; _service.AccountId = 0; await SwitchAccountAsync(restore, prevName); }
+                else ShowLoginForm();   // genuinely no accounts (e.g. add was the very first) → first-launch login (resets AccountId)
                 return;
             }
 
@@ -3613,6 +3679,7 @@ namespace TelegArm.UI
                 await _service.TeardownForSwitchAsync();
                 AccountStore.ClearPending();
                 AccountContext.ActiveId = 0;          // ≠ newId → switch guard passes (even if re-adding the active account)
+                _service.AccountId = 0;               // pair with ActiveId=0 (pending invariant); SwitchAccountAsync re-binds it to newId
                 await SwitchAccountAsync(newId, newName);
                 return;
             }
@@ -3748,6 +3815,7 @@ namespace TelegArm.UI
         private async System.Threading.Tasks.Task AfterConnectAsync(bool rebind = false)
         {
             _recoveryTried.Clear();   // a clean connect → reset the corrupt-recovery chain for any future corruption
+            _recoveryRetried.Clear(); // …and the clean-retry gate, so a LATER corruption episode gets its own retry (ACCOUNT-RECOVERY-SAFETY)
             _service.AccountId = AccountContext.ActiveId;   // MULTI-ACCOUNT (3b): bind the active service to its id → the
                                                             // UM router forwards its updates to the UI; paths stay identical
                                                             // (AccountDir(ActiveId) == the static active path).
@@ -3952,9 +4020,15 @@ namespace TelegArm.UI
         private async System.Threading.Tasks.Task SwitchAccountAsync(long targetId, string targetName)
         {
             if (targetId == 0 || targetId == AccountContext.ActiveId) return;
+            PersistDraftForCurrentChat();   // DRAFTS: save the open chat's draft to the OUTGOING account before _service swaps
             long prevId = AccountContext.ActiveId;
             string prevName = _service.Me != null ? DisplayName(_service.Me) : null;
             System.Diagnostics.Debug.WriteLine("[ACCT] switch start → " + targetId);
+            // [SESSPATH] 0.3: the switch intent + the target's resolved session file + the CURRENT service/global ids.
+            if (TelegArm.Helpers.Logger.Enabled)
+                TelegArm.Helpers.Logger.Diag("[SESSPATH] switch-start from=" + prevId + " to=" + targetId
+                    + " targetSession=\"" + System.IO.Path.Combine(AccountContext.AccountDir(targetId), "session") + "\""
+                    + " serviceAcctId=" + _service.AccountId + " globalActiveId=" + AccountContext.ActiveId);
 
             int myGen = ++_switchGen;   // WARMUP-FIX B: a newer switch supersedes this one's warm-up wait / commit
             _switchInProgress = true; _switchAborted = false;
@@ -3972,7 +4046,10 @@ namespace TelegArm.UI
                 System.Diagnostics.Debug.WriteLine("[ACCT] switch done (rebind) → " + targetId);
                 return;
             }
-            if (ws != null) { try { ws.DisposeWarmService(); } catch { } }   // warm but not alive → drop it
+            // ACCOUNT-RECOVERY-SAFETY (Bug 1): warm but not adoptable → AWAIT its full teardown (socket reset + dispose +
+            // handle release) BEFORE the cold path reopens the SAME session file, or two clients race one session →
+            // AUTH_KEY_DUPLICATED / corruption (what auto-deleted account A). Sync DisposeWarmService did NOT await release.
+            if (ws != null) { try { await ws.DisposeWarmServiceAsync(); } catch { } }
 
             // TIER 2 — WARMUP-FIX B: target is MID-warm-up → WAIT briefly for THAT warm-up to finish, then REBIND. No cold
             // teardown, no connecting card — just the calm switch overlay while it lands. Only a not-warming target or a
@@ -3995,7 +4072,7 @@ namespace TelegArm.UI
                     System.Diagnostics.Debug.WriteLine("[ACCT] switch done (rebind-after-wait) → " + targetId);
                     return;
                 }
-                if (ws2 != null) { try { ws2.DisposeWarmService(); } catch { } }
+                if (ws2 != null) { try { await ws2.DisposeWarmServiceAsync(); } catch { } }   // AWAIT release before cold reopen (Bug 1)
                 System.Diagnostics.Debug.WriteLine("[WARMCONN] warm-up wait didn't land for " + targetId + " → cold");
                 // overlay stays up; the cold path below reuses it (idempotent) + adds the connecting card
             }
@@ -4016,10 +4093,13 @@ namespace TelegArm.UI
             // two clients on one session = AUTH_KEY_DUPLICATED. (After ActiveId=targetId, WarmOneAsync self-drops any
             // later completion via its `id != ActiveId` check, so this closes the only window.)
             var staleWarm = TakeWarm(targetId);
-            if (staleWarm != null) { try { staleWarm.DisposeWarmService(); } catch { } }
+            if (staleWarm != null) { try { await staleWarm.DisposeWarmServiceAsync(); } catch { } }   // AWAIT release before cold reopen (Bug 1)
             AccountContext.LegacyMode = false;
             AccountStore.WriteActive(targetId);
 
+            // ACCOUNT-RECOVERY-SAFETY (Bug 1): final gate — do NOT cold-open the target session until its file is actually
+            // UNLOCKED (any just-dropped warm client's handle fully released), so two clients never touch one session file.
+            await AccountStore.WaitSessionUnlockedAsync(targetId);
             bool connected = await ConnectResilientlyAsync("Switching to " + (targetName ?? "account") + "…");
             _switchInProgress = false;
 
@@ -4059,6 +4139,12 @@ namespace TelegArm.UI
             try { AudioPlayer.Stop(); } catch { }
             System.Diagnostics.Debug.WriteLine("[LOGOUT-TRACE] Reset: after AudioPlayer.Stop; before ClearMessagePanel");
             _selectedChat = null; _selectedItem = null;
+            // ACCOUNT-RECOVERY-SAFETY (Bug 3): drop the header-avatar reference NOW. It points at a bitmap OWNED by the
+            // outgoing account's avatar store, which ResetPerAccountState is about to DISPOSE — leaving a pending header
+            // repaint drawing a disposed Image ("Parameter is not valid", fatal in a Paint handler). Null it → the next
+            // paint shows the initials circle; SetHeaderAvatar reloads a fresh one when a chat opens.
+            _headerAvatarImg = null; _headerAvatarPeerId = 0; _headerAvatarTitle = null;
+            if (_chatSearchBtn != null) _chatSearchBtn.Visible = false;   // INCHAT-SEARCH: no open chat → no header magnifier
             ClearMessagePanel();                         // disposes message bubbles + per-chat photo caches
             System.Diagnostics.Debug.WriteLine("[LOGOUT-TRACE] Reset: after ClearMessagePanel");
             _currentChatMessages.Clear();
@@ -4073,6 +4159,7 @@ namespace TelegArm.UI
             _pinnedMessages = null; _pinnedChatId = 0;
             if (_pinnedBar != null) _pinnedBar.Visible = false;
             _jumpUnread = 0;
+            _inChatSearchEntry = null;   // INCHAT-SEARCH: any scoped search belongs to the outgoing account
             // STORIES: the tray is per-account — drop the old account's cache token + chips (the incoming account
             // refetches on its AfterConnectAsync, so the tray never shows the previous account's stories).
             _storiesState = null;
@@ -4378,20 +4465,54 @@ namespace TelegArm.UI
             else FallBackToLogin();
         }
 
-        /// <summary>The active account's session is unreadable: dispose the dead client (release its handle),
-        /// DELETE that session (accounts/{id}/ — keep its cache for a same-account re-login), then move on —
-        /// switch to another account if one exists, else show the LoginForm. NEVER loops on the bad file.</summary>
+        /// <summary>ACCOUNT-RECOVERY-SAFETY: the active account's session came back "unreadable". This NEVER auto-deletes the
+        /// account (that turned a transient switch-race corruption into permanent loss). Instead: (1) a CLEAN RETRY — release
+        /// every handle on the session file and reconnect ONCE (a warm/cold-race contention usually clears here → the account
+        /// is KEPT); (2) only if it's STILL corrupt, MOVE THE SESSION ASIDE (rename to accounts/{id}.corrupt-&lt;ts&gt;, preserved
+        /// + recoverable) and fall back to another account / the LoginForm. A non-corrupt (network) retry failure leaves the
+        /// account untouched. Bounded (one retry + one move-aside per account) → never loops.</summary>
         private async System.Threading.Tasks.Task RecoverCorruptSessionAsync()
         {
             long badId = AccountContext.ActiveId;
             bool legacy = AccountContext.LegacyMode || badId == 0;
+            bool stillCorrupt = true;   // we were invoked because a corrupt signal fired; the retry may clear it
+
+            // (1) CLEAN RETRY (once per account, real accounts only). A "corrupt" connect is USUALLY transient contention —
+            // a just-dropped warm client's handle still releasing, or a mid-write from the switch race — not permanent rot.
+            // Release EVERY handle on the session file, confirm it's unlocked, then reconnect once. If it connects, the
+            // account is KEPT and NOTHING is deleted or moved.
+            if (!legacy && badId != 0 && _recoveryRetried.Add(badId))
+            {
+                LogRecovery("session corrupt id=" + badId + " → clean-retry (release all handles + reconnect once, NO delete)");
+                await _service.DiscardFaultedClientAsync();                 // dispose the faulted client + wait for its file lock to release
+                var warmOnBad = TakeWarm(badId);                            // drop any warm client STILL on this session (the race source)
+                if (warmOnBad != null) { try { await warmOnBad.DisposeWarmServiceAsync(); } catch { } }
+                await AccountStore.WaitSessionUnlockedAsync(badId);         // confirm the file is truly free before reopening
+                _connectCorrupt = false;
+                if (await ConnectResilientlyAsync("Reconnecting…"))
+                {
+                    LogRecovery("clean-retry SUCCEEDED id=" + badId + " → account KEPT (corruption was transient; NOT deleted)");
+                    HideConnecting();
+                    await AfterConnectAsync();
+                    return;
+                }
+                stillCorrupt = _connectCorrupt;   // true → genuinely unreadable (move aside); false → network/other (leave in place)
+                LogRecovery("clean-retry did not connect id=" + badId + " stillCorrupt=" + stillCorrupt);
+            }
+
+            // (2) FALL BACK — never delete. Move the session ASIDE only if it's still genuinely corrupt (preserved, recoverable);
+            // a non-corrupt (network) failure leaves the account's files untouched so it recovers when the connection returns.
             _recoveryTried.Add(badId);
-            System.Diagnostics.Debug.WriteLine("[SESSION] corrupt session → recovering. activeId=" + badId + " legacy=" + legacy + " (tried=" + _recoveryTried.Count + ")");
-
-            await _service.TeardownForSwitchAsync();   // dispose the broken client → release the corrupt session-file lock
-
-            if (legacy) AccountStore.DeleteLegacySession();
-            else await AccountStore.DeleteAccountDirAsync(badId);
+            HideConnecting();
+            await _service.TeardownForSwitchAsync();   // release the file lock BEFORE any rename
+            if (stillCorrupt)
+            {
+                string moved = legacy ? AccountStore.MoveLegacySessionAside()
+                                      : (badId != 0 ? AccountStore.MoveAccountDirAside(badId) : null);
+                LogRecovery("session still unreadable id=" + badId + " → MOVED ASIDE to \"" + (moved ?? "(left in place)") + "\" (PRESERVED, NOT deleted)");
+            }
+            else LogRecovery("retry failed but NOT corrupt id=" + badId + " → account left in place (no move-aside), falling back");
+            _connectCorrupt = false;
             AccountContext.LegacyMode = false;
             AuthManager.Reset();
 
@@ -4401,15 +4522,16 @@ namespace TelegArm.UI
                 .FindAll(a => a.Id != badId && !_recoveryTried.Contains(a.Id) && !AccountStore.IsDeleting(a.Id));
             if (others.Count > 0)
             {
-                System.Diagnostics.Debug.WriteLine("[SESSION] deleted corrupt session → switching to " + others[0].Id);
+                LogRecovery("falling back → switching to " + others[0].Id);
                 AccountContext.ActiveId = 0;
                 AccountStore.WriteActive(others[0].Id);
                 await SwitchAccountAsync(others[0].Id, others[0].Name);   // if it's ALSO corrupt → recurses, but each id is tried once → terminates
             }
             else
             {
-                System.Diagnostics.Debug.WriteLine("[SESSION] no untried valid account left → LoginForm");
+                LogRecovery("no untried valid account left → LoginForm");
                 _recoveryTried.Clear();
+                _recoveryRetried.Clear();
                 AccountContext.ActiveId = 0;
                 AccountStore.WriteActive(0);
                 ShowLoginForm();
@@ -4437,6 +4559,9 @@ namespace TelegArm.UI
         private System.Threading.Tasks.Task RouteUpdate(TelegramService svc, Update u)
         {
             if (svc != null && svc.AccountId == AccountContext.ActiveId) return OnManagerUpdate(u);
+            // NOTIFY-BG-MUTE-FIX: keep the BACKGROUND account's OWN mute state current (its warm CachedDialogs snapshot is
+            // frozen at seed) so its mute-gate honors a mute changed while backgrounded — else a muted chat leaks a toast.
+            if (svc != null && u is UpdateNotifySettings bns) { try { svc.ApplyNotifyUpdate(bns.peer, bns.notify_settings); } catch { } }
             try { RaiseBackgroundNotify(svc, u); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[NOTIFY-BG] route EX: " + ex.Message); }
             return System.Threading.Tasks.Task.CompletedTask;
         }
@@ -4593,6 +4718,9 @@ namespace TelegArm.UI
             { if (_selectedChat != null && upcm.channel_id == _selectedChat.PeerId) LoadPinnedAsync(_selectedChat); }
             else if (update is UpdateNotifySettings uns)
             {
+                // NOTIFY-BG-MUTE-FIX: also fold the change into THIS (active) service's own map/defaults, so when this
+                // account is later switched to the background its mute-gate is already current (no re-warm needed).
+                _service.ApplyNotifyUpdate(uns.peer, uns.notify_settings);
                 // Per-peer OR category-level (muting "All groups" etc. in the official client) — both live.
                 if (uns.peer is NotifyPeer np && np.peer != null)
                     HandleNotifySettings(np.peer.ID, uns.notify_settings);
@@ -4600,6 +4728,8 @@ namespace TelegArm.UI
                 else if (uns.peer is NotifyChats) { _muteDefChats = MuteUntilOf(uns.notify_settings) ?? DateTime.MinValue; ReapplyEffectiveMutes(); }
                 else if (uns.peer is NotifyBroadcasts) { _muteDefBroadcasts = MuteUntilOf(uns.notify_settings) ?? DateTime.MinValue; ReapplyEffectiveMutes(); }
             }
+            else if (update is UpdateDraftMessage udraft)   // DRAFTS: cross-device sync — a draft changed here or on another device
+                HandleDraftUpdate(udraft.peer, udraft.draft);
             else if (update is UpdateUserStatus ust)
             {
                 // PRESENCE 2.2: cache on the entry (the row painter reads ONLY OnlineUntil — hot-path law),
@@ -5218,7 +5348,9 @@ namespace TelegArm.UI
                     MuteUntil = MuteUntilOf(dlg?.notify_settings),
                     MainPinOrder = (!isArchived && pinned) ? mainPinSeq++ : -1,
                     ArchivePinOrder = (isArchived && pinned) ? archivePinSeq++ : -1,
-                    Archived = isArchived
+                    Archived = isArchived,
+                    DraftText = (dlg?.draft as DraftMessage)?.message,             // DRAFTS: seed from the dialog (null / DraftMessageEmpty = none)
+                    DraftDate = (dlg?.draft as DraftMessage)?.date ?? DateTime.MinValue
                 });
                 }
                 catch { }   // a per-row build throw is swallowed so it can't drop this + all later dialogs
@@ -5332,7 +5464,10 @@ namespace TelegArm.UI
         /// TouchScroller.Scrolled, mirroring the message panel's three trigger paths.</summary>
         private void CheckChatListPaging()
         {
-            if (IsDisposed || _dlgExhausted || _dlgLoadingMore || _chatListPanel == null) return;
+            if (IsDisposed || _chatListPanel == null) return;
+            // INCHAT-SEARCH: the scoped results list pages OLDER matches via its own near-bottom loader.
+            if (_inChatSearchEntry != null) { CheckInChatPaging(); return; }
+            if (_dlgExhausted || _dlgLoadingMore) return;
             // SEARCH-FIX-2 (BUG 1): in SEARCH MODE the panel holds search RESULTS, not the paged dialog list. Dialog
             // load-more would RenderChatList → Controls.Clear() → WIPE the appended search sections (Chats/Messages/
             // Channels/Groups/Sponsored/Go-to). There's nothing to scroll-load in search (public "Show more" is an
@@ -5460,8 +5595,8 @@ namespace TelegArm.UI
             int ra = PinRankInView(a), rb = PinRankInView(b);
             bool pa = ra >= 0, pb = rb >= 0;
             if (pa != pb) return pa ? -1 : 1;        // pinned first
-            if (pa) return ra.CompareTo(rb);         // both pinned: this view's pin order
-            return b.Date.CompareTo(a.Date);         // both non-pinned: newest first
+            if (pa) return ra.CompareTo(rb);         // both pinned: this view's pin order (drafts never move a pinned chat)
+            return b.SortDate.CompareTo(a.SortDate); // both non-pinned: newest first by max(last-msg, draft) → a draft floats up
         }
 
         /// <summary>Count of rows at the top that are pinned-in-THIS-view = the non-pinned section boundary.</summary>
@@ -5478,6 +5613,9 @@ namespace TelegArm.UI
 
         private void RenderChatList(string filter)
         {
+            // INCHAT-SEARCH: the left panel holds the scoped in-chat results — don't let an incoming message / folder
+            // refresh / OpenChat wipe them. ExitInChatSearch clears the flag and re-renders the normal list.
+            if (_inChatSearchEntry != null) return;
             TouchScroller.StopMomentum();   // 3.4: the chat list is being rebuilt — a coast must not scroll the new content
             long __t = PerfLog.T();
             // DPI-REVERT addendum: rebuilds fire on EVERY incoming message (busy channels = every few
@@ -5642,6 +5780,7 @@ namespace TelegArm.UI
             {
                 if (_thread != null) ClearThreadMode();   // we were reading this group's comments — leave thread mode
                 _selectedChat = null; ClearMessagePanel(); _chatTitle.Text = "Select a chat"; SetHeaderAvatar(null);
+                if (_chatSearchBtn != null) _chatSearchBtn.Visible = false;   // INCHAT-SEARCH: chat closed → hide the magnifier
             }
             RebuildFolders();
             UpdateTrayTooltip();
@@ -5745,6 +5884,8 @@ namespace TelegArm.UI
                     if (img == null) return;
                     ApplyAvatarToRow(peerId, img);
                     RefreshStoryAvatar(peerId);   // STORIES: repaint the tray chip when its avatar lands
+                    // CHANNEL-PHOTO-REFRESH: if the OPEN chat's avatar just (re)landed — e.g. its photo changed — repaint the header.
+                    if (_selectedChat != null && _selectedChat.PeerId == peerId) { _headerAvatarImg = img; _headerAvatar?.Invalidate(); }
                     if (_messagePanel != null && !_messagePanel.IsDisposed)
                         foreach (Control c in _messagePanel.Controls)
                             if (c is MessageBubbleControl b && !b.IsDisposed && b.SenderPeerId == peerId && b.SenderAvatar == null)
@@ -5778,6 +5919,14 @@ namespace TelegArm.UI
         private void OnSearchTextChanged()
         {
             _searchDebounce.Stop();
+            // INCHAT-SEARCH: while scoped to an open chat, typing searches THAT chat (not the global list). The
+            // results re-render in DoInChatSearch after the debounce; here we just keep the scope chip shown.
+            if (_inChatSearchEntry != null)
+            {
+                RenderInChatSearchChrome();
+                if (!string.IsNullOrWhiteSpace(_searchBox.Text)) _searchDebounce.Start();
+                return;
+            }
             string q = _searchBox.Text;
             _publicLimit = PublicSearchLimit;   // SEARCH-BUILD-1: a fresh query starts with the collapsed public list
             // Instant local chat matches (folder-aware); message + public results stream in after a debounce.
@@ -5788,6 +5937,8 @@ namespace TelegArm.UI
         private async void DoMessageSearch()
         {
             _searchDebounce.Stop();
+            // INCHAT-SEARCH: scoped-to-open-chat search runs its own path (Messages_Search on the peer).
+            if (_inChatSearchEntry != null) { await DoInChatSearch(); return; }
             var query = _searchBox.Text.Trim();
             if (query.Length == 0) return;
 
@@ -6707,6 +6858,143 @@ namespace TelegArm.UI
             await OpenChat(entry, focusId);
         }
 
+        // ── INCHAT-SEARCH: search within the currently-open chat (the LEFT panel becomes scoped results) ──────
+        private ChatEntry _inChatSearchEntry;   // non-null ⇔ IN-CHAT search mode (scoped to this open chat)
+        private string _inChatQuery;
+        private int _inChatOffsetId;             // oldest result id shown → offset for the next (older) page
+        private int _inChatTotal;                // total match count ("N messages found")
+        private bool _inChatPaging;
+
+        /// <summary>Enters in-chat search for the open chat: the left panel becomes the scoped results view.</summary>
+        private void EnterInChatSearch()
+        {
+            if (_selectedChat == null) return;
+            _inChatSearchEntry = _selectedChat;
+            _inChatQuery = null; _inChatOffsetId = 0; _inChatTotal = 0;
+            _searchBox.Text = "";                 // TextChanged (in-chat mode) shows the chip; explicit call covers no-change
+            RenderInChatSearchChrome();
+            try { _searchBox.Focus(); } catch { }
+        }
+
+        /// <summary>Leaves in-chat search: restores the normal chat list (the chat stays open on the right).</summary>
+        private void ExitInChatSearch()
+        {
+            if (_inChatSearchEntry == null) return;
+            _inChatSearchEntry = null; _inChatQuery = null; _inChatOffsetId = 0; _inChatTotal = 0;
+            _searchBox.Text = "";
+            RenderChatList("");                   // guard is off now → the normal list rebuilds
+        }
+
+        /// <summary>Renders the scope chip only (rows come from DoInChatSearch). Used on enter + while typing.</summary>
+        private void RenderInChatSearchChrome()
+        {
+            if (_inChatSearchEntry == null) return;
+            _chatListPanel.SuspendLayout();
+            _chatListPanel.Controls.Clear();
+            AddInChatScopeChip();
+            _chatListPanel.ResumeLayout();
+        }
+
+        /// <summary>The scope chip: "×  Searching in: NAME" — tap anywhere on it to exit in-chat search.</summary>
+        private void AddInChatScopeChip()
+        {
+            string name = _inChatSearchEntry != null ? (_inChatSearchEntry.Title ?? "this chat") : "this chat";
+            var chip = new Label
+            {
+                Text = "×   Searching in: " + name,
+                AutoSize = false, Height = 40, Width = ContentWidth(_chatListPanel),
+                TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(12, 0, 0, 0), Margin = new Padding(0),
+                Font = FontHelper.Ui(9.5f, FontStyle.Bold), Cursor = Cursors.Hand, ForeColor = _accent,
+                BackColor = _dark ? Color.FromArgb(48, 48, 52) : Color.FromArgb(235, 238, 242)
+            };
+            chip.Click += (s, e) => ExitInChatSearch();
+            _chatListPanel.Controls.Add(chip);
+        }
+
+        /// <summary>Runs the scoped search (Messages_Search on the open peer) → renders results, newest-first.</summary>
+        private async System.Threading.Tasks.Task DoInChatSearch()
+        {
+            if (_inChatSearchEntry == null) return;
+            var q = _searchBox.Text.Trim();
+            if (q.Length == 0) { _inChatQuery = null; RenderInChatSearchChrome(); return; }
+            _inChatQuery = q; _inChatOffsetId = 0;
+            try
+            {
+                var res = await _service.SearchInChatAsync(_inChatSearchEntry.Peer, q, 0, 40);
+                if (_inChatSearchEntry == null || _searchBox.Text.Trim() != q) return;   // exited / query changed
+                RenderInChatResults(res, replace: true);
+            }
+            catch { /* best-effort; leave the chip up */ }
+        }
+
+        /// <summary>Renders (replace) or appends (paging) scoped result rows: sender avatar + name + snippet + date;
+        /// tap → jump to that message in the open chat. Next-page offset_id = the oldest id shown.</summary>
+        private void RenderInChatResults(Messages_MessagesBase res, bool replace)
+        {
+            if (_inChatSearchEntry == null || res == null) return;
+            var msgs = res.Messages != null ? res.Messages.OfType<Message>().ToList() : new List<Message>();
+            _chatListPanel.SuspendLayout();
+            if (replace)
+            {
+                _chatListPanel.Controls.Clear();
+                AddInChatScopeChip();
+                _inChatTotal = (res as Messages_MessagesSlice)?.count ?? (res as Messages_ChannelMessages)?.count ?? msgs.Count;
+                AddSectionHeader(_inChatTotal + (_inChatTotal == 1 ? " MESSAGE FOUND" : " MESSAGES FOUND"));
+            }
+            int w = ContentWidth(_chatListPanel);
+            foreach (var m in msgs)
+            {
+                var sender = m.from_id != null ? res.UserOrChat(m.from_id) : (m.peer_id != null ? res.UserOrChat(m.peer_id) : null);
+                long sid = m.from_id?.ID ?? (m.peer_id?.ID ?? 0);
+                string name = sender is User su ? DisplayName(su) : ((sender as ChatBase)?.Title ?? _inChatSearchEntry.Title);
+                var entry = new ChatEntry
+                {
+                    Peer = _inChatSearchEntry.Peer, PeerId = sid, Title = name,
+                    Preview = GetDisplayText(m), Date = m.date, FocusMessageId = m.ID, PeerInfo = sender
+                };
+                var item = new ChatListItemControl(entry) { AccentColor = _accent, IsDark = _dark, Width = w };
+                item.Click += OnInChatResultClick;
+                _chatListPanel.Controls.Add(item);
+                item.Avatar = _avatars.GetCached(sid);
+                if (item.Avatar == null && sender != null) LoadAvatar(entry);
+            }
+            if (msgs.Count > 0) _inChatOffsetId = msgs.Min(m => m.ID);   // oldest shown → next-page offset
+            _chatListPanel.ResumeLayout();
+        }
+
+        /// <summary>Tap a scoped result → jump to that message in the OPEN chat (load a window around it if it isn't in
+        /// the current view), scroll + flash. The in-chat search stays up so you can step through matches.</summary>
+        private async void OnInChatResultClick(object sender, EventArgs e)
+        {
+            var result = ((ChatListItemControl)sender).Entry;
+            int id = result.FocusMessageId;
+            if (_selectedChat == null || id <= 0) return;
+            if (!ScrollToAndFlash(id))            // not in the loaded window → reload around it, then flash
+            {
+                await LoadHistoryAsync(_selectedChat, id);
+                ScrollToAndFlash(id);
+            }
+        }
+
+        /// <summary>Pages OLDER scoped matches when the results list nears the bottom (Messages_Search offset_id).</summary>
+        private async void CheckInChatPaging()
+        {
+            if (_inChatPaging || _inChatSearchEntry == null || string.IsNullOrEmpty(_inChatQuery) || _inChatOffsetId == 0) return;
+            int pos = -_chatListPanel.AutoScrollPosition.Y, viewport = _chatListPanel.ClientSize.Height, content = _chatListPanel.DisplayRectangle.Height;
+            if (!(content > viewport && pos + viewport >= content - 200)) return;
+            _inChatPaging = true;
+            try
+            {
+                var q = _inChatQuery; int off = _inChatOffsetId;
+                var res = await _service.SearchInChatAsync(_inChatSearchEntry.Peer, q, off, 40);
+                if (_inChatSearchEntry == null || _inChatQuery != q) return;   // exited / query changed mid-fetch
+                if (res != null && res.Messages != null && res.Messages.OfType<Message>().Any())
+                    RenderInChatResults(res, replace: false);
+            }
+            catch { }
+            finally { _inChatPaging = false; }
+        }
+
         private async void OnChatItemClick(object sender, EventArgs e)
         {
             if (LogOn) System.Diagnostics.Debug.WriteLine("[OPEN] row click peer=" + ((ChatListItemControl)sender).Entry.PeerId);
@@ -6729,10 +7017,13 @@ namespace TelegArm.UI
                 return;
             }
             _openLatchPeer = entry.PeerId; _openLatchTick = Environment.TickCount;
+            if (_inChatSearchEntry != null) ExitInChatSearch();   // INCHAT-SEARCH: opening a (different) chat leaves in-chat search
             if (LogOn) System.Diagnostics.Debug.WriteLine("[OPEN] OpenChat peer=" + entry.PeerId + " focus=" + focusMessageId);
+            PersistDraftForCurrentChat();   // DRAFTS: save the chat we're LEAVING (its composer text → server draft) before switching
             ClearThreadMode();        // COMMENTS-NAV-FIX Bug 2: leaving ANY comment thread — clear _thread so the loaders,
                                       // composer, and send target the NEW chat (LoadHistoryAsync below then resets the panel).
             _selectedChat = entry;
+            if (_chatSearchBtn != null) _chatSearchBtn.Visible = true;   // INCHAT-SEARCH: the header magnifier appears with an open chat
             // FORUM-TOPICS: a forum group → show the topic bar + fetch its topics (async); any other chat → hide + clear.
             // Opening still loads the flat all-topics history below (FORUM-GROUPS-FIX preserved) — the bar is additive.
             if (entry.PeerInfo is Channel fch && (fch.flags & Channel.Flags.forum) != 0)
@@ -6776,6 +7067,7 @@ namespace TelegArm.UI
                 ResolveAndApplyComposer(entry);   // history loaded → resolve footer state
                 LoadBotMenuAsync(entry);          // bot? → fetch commands + reveal the Menu button
                 ApplyInitialReplyKeyboard();      // restore the latest reply-keyboard markup in view
+                LoadDraftIntoComposer(entry);     // DRAFTS: restore this chat's saved draft (or clear the previous chat's text)
             }
         }
 
@@ -7118,6 +7410,42 @@ namespace TelegArm.UI
         /// Raised on the UI thread from the UpdateUserStatus handler.</summary>
         public static event Action<long, UserStatus> UserStatusChanged;
 
+        /// <summary>RELEASE-FIXES-V11 (H1): raised after WE rename a peer (admin channel/group rename in EditChatInfoForm,
+        /// or a contact rename in ProfileForm) → MainForm updates the ChatEntry title + repaints the row + header live so
+        /// the new name shows WITHOUT an app reload (same instant-refresh spirit as the channel-photo fix).</summary>
+        public static event Action<long, string> PeerTitleChanged;
+
+        /// <summary>Raise the rename event from OUTSIDE MainForm (a C# event can only be .Invoke'd inside its
+        /// declaring type) — EditChatInfoForm / ProfileForm call this after a rename.</summary>
+        public static void RaisePeerTitleChanged(long peerId, string title) { PeerTitleChanged?.Invoke(peerId, title); }
+
+        private void OnPeerTitleChanged(long peerId, string title)
+        {
+            if (IsDisposed || string.IsNullOrEmpty(title)) return;
+            try { if (InvokeRequired) BeginInvoke((Action)(() => ApplyPeerTitle(peerId, title))); else ApplyPeerTitle(peerId, title); }
+            catch { }
+        }
+
+        private void ApplyPeerTitle(long peerId, string title)
+        {
+            var entry = _allChats.FirstOrDefault(c => c.PeerId == peerId);
+            if (entry != null)
+            {
+                entry.Title = title;
+                if (entry.PeerInfo is Channel ch) ch.title = title;          // keep the shared TL entity consistent
+                else if (entry.PeerInfo is Chat bc) bc.title = title;
+                FindChatItem(peerId)?.Invalidate();                          // repaint the chat-list row
+            }
+            if (_selectedChat != null && _selectedChat.PeerId == peerId)     // the OPEN chat → header
+            {
+                if (_selectedChat.PeerInfo is Channel sch) sch.title = title;
+                else if (_selectedChat.PeerInfo is Chat sbc) sbc.title = title;
+                if (_chatTitle != null) _chatTitle.Text = title;
+                _headerAvatarTitle = title;                                  // initials fallback source
+                _headerAvatar?.Invalidate();
+            }
+        }
+
         private Timer _presenceTimer;             // ONE 15s host: idle/offline transitions + dot-expiry sweep + 60s group refresh
         private int _lastActivityTick, _lastPresenceSentTick, _bgSinceTick, _presenceTicks;
         private int _lastGroupRefreshTick;        // dedupes the double-running open path (one RPC per open)
@@ -7299,25 +7627,35 @@ namespace TelegArm.UI
             if (_headerAvatarPeerId == 0) return;   // empty state (no chat) → just the background
             const int d = 40;
             var rect = new Rectangle((p.Width - d) / 2, (p.Height - d) / 2, d, d);
-            if (_headerAvatarImg != null)
+            var img = _headerAvatarImg;   // snapshot: another path can null it between the check and the draw
+            if (img != null)
             {
-                using (var clip = new System.Drawing.Drawing2D.GraphicsPath())
+                try
                 {
-                    clip.AddEllipse(rect);
-                    g.SetClip(clip);
-                    g.DrawImage(_headerAvatarImg, rect);
-                    g.ResetClip();
+                    using (var clip = new System.Drawing.Drawing2D.GraphicsPath())
+                    {
+                        clip.AddEllipse(rect);
+                        g.SetClip(clip);
+                        g.DrawImage(img, rect);
+                        g.ResetClip();
+                    }
+                    return;
+                }
+                catch
+                {
+                    // ACCOUNT-RECOVERY-SAFETY (Bug 3): the cached bitmap was disposed out from under us (an account switch
+                    // reset the avatar store mid-paint) → DrawImage throws "Parameter is not valid", and in a Paint handler
+                    // that CRASHES the app (ThreadException). Drop the dangling reference and fall through to the initials.
+                    try { g.ResetClip(); } catch { }
+                    _headerAvatarImg = null;
                 }
             }
-            else
-            {
-                using (var b = new SolidBrush(DrawHelper.AvatarColor(_headerAvatarPeerId)))
-                    g.FillEllipse(b, rect);
-                string letter = string.IsNullOrEmpty(_headerAvatarTitle) ? "?" : _headerAvatarTitle.Substring(0, 1).ToUpper();
-                using (var af = FontHelper.For(_headerAvatarTitle ?? "", 15f, FontStyle.Bold))
-                    TextRenderer.DrawText(g, letter, af, rect, Color.White,
-                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-            }
+            using (var b = new SolidBrush(DrawHelper.AvatarColor(_headerAvatarPeerId)))
+                g.FillEllipse(b, rect);
+            string letter = string.IsNullOrEmpty(_headerAvatarTitle) ? "?" : _headerAvatarTitle.Substring(0, 1).ToUpper();
+            using (var af = FontHelper.For(_headerAvatarTitle ?? "", 15f, FontStyle.Bold))
+                TextRenderer.DrawText(g, letter, af, rect, Color.White,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         }
 
         /// <summary>Points the header avatar at <paramref name="entry"/>'s peer (cache hit paints immediately;
@@ -7400,8 +7738,11 @@ namespace TelegArm.UI
         /// <summary>QUICKWINS-1 PART 1: on genuine composer input, tell the open chat's peer we're typing — throttled to
         /// ~once per TypingThrottleMs (the server keeps "typing…" alive ~6s). Empty text (cleared / just sent) cancels.
         /// Inert for a disabled composer (broadcast we can't post to). Fire-and-forget; never blocks or surfaces.</summary>
+        private bool _suppressComposerChange;   // DRAFTS: true while a draft is loaded programmatically → don't broadcast "typing"
+
         private void OnComposerTextChanged(object sender, EventArgs e)
         {
+            if (_suppressComposerChange) return;
             try
             {
                 if (_selectedChat == null || _messageInput == null || !_messageInput.Enabled) return;
@@ -7416,6 +7757,76 @@ namespace TelegArm.UI
                 }
             }
             catch { /* typing is best-effort */ }
+        }
+
+        // ── DRAFTS ──────────────────────────────────────────────────────────
+
+        /// <summary>Saves the CURRENT chat's composer text as its draft (empty text → CLEARS the draft), updates the
+        /// local model + the row indicator + float, and pushes it to the server. No-op if unchanged (no SaveDraft spam),
+        /// in a comment thread, or while editing. Returns the save Task (or null) so a close can bound-wait it.</summary>
+        private void PersistDraftForCurrentChat()
+        {
+            try
+            {
+                var chat = _selectedChat;
+                if (chat == null || _thread != null || _editTarget != null || _messageInput == null) return;
+                string text = (_messageInput.Text ?? "").Trim();
+                if (text == (chat.DraftText ?? "")) return;   // unchanged → don't spam SaveDraft
+                chat.DraftText = string.IsNullOrEmpty(text) ? null : text;
+                chat.DraftDate = string.IsNullOrEmpty(text) ? DateTime.MinValue : DateTime.UtcNow;
+                var _ = _service?.SaveDraftAsync(chat.Peer, text);   // fire-and-forget (SaveDraftAsync never throws)
+                if (!IsDisposed) RenderChatList(_searchBox != null ? _searchBox.Text : "");   // float + "Draft:" indicator, live
+                if (LogOn) System.Diagnostics.Debug.WriteLine("[DRAFT] save peer=" + chat.PeerId + " len=" + text.Length);
+            }
+            catch { }
+        }
+
+        /// <summary>Loads a chat's saved draft into the composer on open (or clears the previous chat's text when there is
+        /// no draft). Suppresses the "typing" broadcast for the programmatic set. Skipped in a thread / mid-edit.</summary>
+        private void LoadDraftIntoComposer(ChatEntry entry)
+        {
+            if (_messageInput == null || _thread != null || _editTarget != null) return;
+            _suppressComposerChange = true;
+            try
+            {
+                _messageInput.Text = entry?.DraftText ?? "";
+                try { _messageInput.SelectionStart = _messageInput.Text.Length; } catch { }
+            }
+            finally { _suppressComposerChange = false; }
+        }
+
+        /// <summary>SEND emptied the composer → clear this chat's draft too (local + server) so no stale "Draft:" lingers.
+        /// Only fires the clear RPC + re-render when the chat actually HAD a draft.</summary>
+        private void ClearDraftAfterSend(ChatEntry chat)
+        {
+            if (chat == null || !chat.HasDraft) { if (chat != null) { chat.DraftText = null; chat.DraftDate = DateTime.MinValue; } return; }
+            chat.DraftText = null; chat.DraftDate = DateTime.MinValue;
+            var _ = _service?.SaveDraftAsync(chat.Peer, "");   // idempotent if the server already cleared the draft on send
+            if (!IsDisposed) RenderChatList(_searchBox != null ? _searchBox.Text : "");
+        }
+
+        /// <summary>DRAFTS cross-device sync: an UpdateDraftMessage (a draft changed here or on another device). Update the
+        /// row's draft + float + preview; if that chat is OPEN and the user hasn't diverged from the last-known draft,
+        /// mirror the remote text into the composer too (never clobbering active composing).</summary>
+        private void HandleDraftUpdate(Peer peer, DraftMessageBase draft)
+        {
+            if (peer == null) return;
+            var entry = _allChats.FirstOrDefault(c => c.PeerId == peer.ID);
+            if (entry == null) return;
+            string oldText = entry.DraftText;
+            var dm = draft as DraftMessage;
+            string text = (dm != null && !string.IsNullOrEmpty(dm.message)) ? dm.message : null;
+            entry.DraftText = text;
+            entry.DraftDate = text != null ? dm.date : DateTime.MinValue;
+
+            if (_selectedChat == entry && _thread == null && _editTarget == null && _messageInput != null
+                && (_messageInput.Text ?? "").Trim() == (oldText ?? "").Trim())   // user hasn't typed past the known draft
+            {
+                _suppressComposerChange = true;
+                try { _messageInput.Text = text ?? ""; try { _messageInput.SelectionStart = _messageInput.Text.Length; } catch { } }
+                finally { _suppressComposerChange = false; }
+            }
+            if (!IsDisposed) RenderChatList(_searchBox != null ? _searchBox.Text : "");
         }
 
         /// <summary>QUICKWINS-1 PART 1: stop the "typing…" we last showed (message sent, composer cleared, or chat
@@ -8254,7 +8665,7 @@ namespace TelegArm.UI
             return (m.flags & Message.Flags.out_) != 0;
         }
 
-        private MessageBubbleControl CreateBubble(string text, string sender, bool outgoing, DateTime date, int messageId = 0)
+        private MessageBubbleControl CreateBubble(string text, string sender, bool outgoing, DateTime date, int messageId = 0, TL.MessageEntity[] entities = null)
         {
             var bubble = new MessageBubbleControl(text, sender, outgoing, date)
             {
@@ -8269,6 +8680,7 @@ namespace TelegArm.UI
             bubble.SelectionToggled += OnBubbleSelectionToggled;
             bubble.ReplyQuoteClicked += JumpToReply;       // tap the reply quote → scroll to + flash the original
             bubble.ViewInChatClicked += OpenRepliesEntryThread;   // REPLIES-INBOX: "View in chat" row → open the source thread
+            if (entities != null && entities.Length > 0) bubble.SetEntities(entities);   // SEND-ENTITIES: render outgoing formatting on the optimistic echo
             bubble.Measure();
             return bubble;
         }
@@ -10323,8 +10735,8 @@ namespace TelegArm.UI
         {
             if (_thread != null) { SendThreadComment(); return; }   // COMMENTS-POST: route to the discussion-thread send
             if (_footerKind != ComposerKind.Compose) return;   // gated: composer isn't shown in non-compose states
-            var text = _messageInput.Text.Trim();
-            if (text.Length == 0 || _selectedChat == null) return;
+            var raw = _messageInput.Text.Trim();
+            if (raw.Length == 0 || _selectedChat == null) return;
 
             var chat = _selectedChat;
 
@@ -10334,9 +10746,14 @@ namespace TelegArm.UI
                 var target = _editTarget;
                 _messageInput.Text = "";
                 CancelReply();          // also clears _editTarget + hides the strip
-                await ApplyEdit(chat, target, text);
+                await ApplyEdit(chat, target, raw);   // ApplyEdit parses the markdown itself
                 return;
             }
+
+            // SEND-ENTITIES: markdown → plain text + entities (no markers → entities null → plain send, unchanged).
+            TL.MessageEntity[] entities;
+            string text = MarkdownEntities.Parse(raw, out entities);
+            if (text.Length == 0) return;   // the message was only markers
 
             int replyId = _replyTarget?.ID ?? 0;       // capture before clearing the composer
             string replyPreview = null;
@@ -10348,9 +10765,10 @@ namespace TelegArm.UI
 
             _messageInput.Text = "";
             CancelReply();
+            ClearDraftAfterSend(chat);   // DRAFTS: the composer just emptied on send → clear any draft for this chat
 
             // Optimistic bubble — clock while sending, then ✓ on confirm. Carry the reply quote.
-            var bubble = CreateBubble(text, null, true, DateTime.UtcNow);
+            var bubble = CreateBubble(text, null, true, DateTime.UtcNow, 0, entities);
             bubble.Pending = true;
             if (replyPreview != null) { bubble.ReplyPreview = replyPreview; bubble.Measure(); }
             _messagePanel.Controls.Add(bubble);
@@ -10358,7 +10776,7 @@ namespace TelegArm.UI
 
             try
             {
-                var sent = await _service.SendTextAsync(chat.Peer, text, replyId);
+                var sent = await _service.SendTextAsync(chat.Peer, text, replyId, entities);
                 if (sent != null)
                 {
                     _shownMessageIds.Add(sent.ID);     // dedupe a possible echo update
@@ -10377,6 +10795,61 @@ namespace TelegArm.UI
             }
         }
 
+        // ── SEND-ENTITIES: composer formatting helpers — wrap the selection in markdown; MarkdownEntities.Parse
+        //    turns it into MessageEntity[] on send. Uses only public SelectionStart/SelectionLength/Text (no internals).
+        private void WrapComposerSelection(string open, string close)
+        {
+            var tb = _messageInput; if (tb == null) return;
+            try
+            {
+                string t = tb.Text ?? "";
+                int start = tb.SelectionStart, len = tb.SelectionLength;
+                if (start < 0) start = 0; if (start > t.Length) start = t.Length;
+                if (len < 0 || start + len > t.Length) len = 0;
+                string sel = t.Substring(start, len);
+                tb.Text = t.Substring(0, start) + open + sel + close + t.Substring(start + len);
+                tb.SelectionStart = len > 0 ? start + open.Length + len + close.Length : start + open.Length;
+                tb.Focus();
+            }
+            catch { }
+        }
+
+        private void InsertComposerLink()
+        {
+            var tb = _messageInput; if (tb == null) return;
+            try
+            {
+                string t = tb.Text ?? "";
+                int start = tb.SelectionStart, len = tb.SelectionLength;
+                if (start < 0) start = 0; if (start > t.Length) start = t.Length;
+                if (len < 0 || start + len > t.Length) len = 0;
+                string label = len > 0 ? t.Substring(start, len) : "text";
+                tb.Text = t.Substring(0, start) + "[" + label + "](url)" + t.Substring(start + len);
+                tb.SelectionStart = start + 1 + label.Length + 2;   // caret at the "url" placeholder
+                tb.SelectionLength = 3;                              // select "url" so the user overtypes it
+                tb.Focus();
+            }
+            catch { }
+        }
+
+        private void PasteIntoComposer()
+        {
+            var tb = _messageInput; if (tb == null) return;
+            try
+            {
+                if (!Clipboard.ContainsText()) return;
+                string clip = Clipboard.GetText();
+                string t = tb.Text ?? "";
+                int start = tb.SelectionStart, len = tb.SelectionLength;
+                if (start < 0) start = 0; if (start > t.Length) start = t.Length;
+                if (len < 0 || start + len > t.Length) len = 0;
+                tb.Text = t.Substring(0, start) + clip + t.Substring(start + len);
+                tb.SelectionStart = start + clip.Length;
+                tb.Focus();
+            }
+            catch { }
+        }
+
         /// <summary>COMMENTS-POST: post the composer text as a comment in the open discussion thread. Direct post is
         /// the PRIMARY path (Telegram allows commenting without the group appearing in your chat list); join is only a
         /// FALLBACK if the server rejects for membership. Optimistic bubble → raw thread-send → live-append on success.</summary>
@@ -10384,18 +10857,23 @@ namespace TelegArm.UI
         {
             var thread = _thread;
             if (thread == null || _messageInput == null) return;
-            var text = _messageInput.Text.Trim();
-            if (text.Length == 0) return;
+            var raw = _messageInput.Text.Trim();
+            if (raw.Length == 0) return;
 
             _messageInput.Text = "";
             CancelReply();
 
-            var bubble = CreateBubble(text, null, true, DateTime.UtcNow);   // outgoing, optimistic
+            // SEND-ENTITIES: markdown → plain text + entities for the comment too.
+            TL.MessageEntity[] entities;
+            string text = MarkdownEntities.Parse(raw, out entities);
+            if (text.Length == 0) return;
+
+            var bubble = CreateBubble(text, null, true, DateTime.UtcNow, 0, entities);   // outgoing, optimistic
             bubble.Pending = true;
             _messagePanel.Controls.Add(bubble);
             ScrollMessagesToBottom();
 
-            await PostThreadComment(thread, text, bubble, allowJoinRetry: true);
+            await PostThreadComment(thread, text, entities, bubble, allowJoinRetry: true);
         }
 
         /// <summary>The send + membership-fallback core. Posts via the GROUP-scoped thread (GroupPeer + GroupRootId) —
@@ -10403,11 +10881,11 @@ namespace TelegArm.UI
         /// On success: confirm the optimistic bubble + cache the (group-side) message. On a membership rejection
         /// (CHAT_WRITE_FORBIDDEN): join the group, then retry ONCE. Any other error (or a failed join): drop the
         /// optimistic bubble and restore the text so it isn't lost.</summary>
-        private async System.Threading.Tasks.Task PostThreadComment(ThreadCtx thread, string text, MessageBubbleControl bubble, bool allowJoinRetry)
+        private async System.Threading.Tasks.Task PostThreadComment(ThreadCtx thread, string text, TL.MessageEntity[] entities, MessageBubbleControl bubble, bool allowJoinRetry)
         {
             try
             {
-                var sent = await _service.SendThreadCommentAsync(thread.GroupPeer, thread.GroupRootId, text);
+                var sent = await _service.SendThreadCommentAsync(thread.GroupPeer, thread.GroupRootId, text, entities);
                 if (sent != null)
                 {
                     _shownMessageIds.Add(sent.ID);                       // dedupe the echo update
@@ -10427,7 +10905,7 @@ namespace TelegArm.UI
                         await _service.JoinChannelAsync(ipc);
                         if (_selectedChat.PeerInfo is Channel ch) ch.flags &= ~Channel.Flags.left;
                         if (LogOn) System.Diagnostics.Debug.WriteLine("[COMMENTS] join linked=" + _selectedChat.PeerId + " ok");
-                        await PostThreadComment(thread, text, bubble, allowJoinRetry: false);   // retry ONCE, no further join
+                        await PostThreadComment(thread, text, entities, bubble, allowJoinRetry: false);   // retry ONCE, no further join
                         return;
                     }
                     catch (Exception jex)
@@ -10481,10 +10959,14 @@ namespace TelegArm.UI
         {
             try
             {
-                await _service.EditMessageAsync(chat.Peer, target.ID, newText);
+                // SEND-ENTITIES: the edited text is markdown too → plain text + entities.
+                TL.MessageEntity[] entities;
+                string plain = MarkdownEntities.Parse(newText, out entities);
+                await _service.EditMessageAsync(chat.Peer, target.ID, plain, entities);
                 if (_selectedChat != chat) return;     // user switched chats meanwhile
                 var msg = _currentChatMessages.FirstOrDefault(x => x.ID == target.ID) ?? target;
-                msg.message = newText;                  // TL Message.message is settable
+                msg.message = plain;                    // TL Message.message is settable
+                msg.entities = entities;                // so the rebuilt bubble shows the new formatting
                 msg.edit_date = DateTime.UtcNow;        // so the rebuilt bubble shows "edited"
                 msg.flags |= Message.Flags.has_edit_date;
                 RebuildBubble(target.ID, msg);
@@ -11653,6 +12135,18 @@ namespace TelegArm.UI
                 HideToTray();
                 return;   // tray-hide = backgrounded; the presence timer sends offline after 30s
             }
+            // DRAFTS: best-effort save of the open chat's draft on a REAL close (bounded like presence; never blocks
+            // shutdown). The primary save is on chat/account switch — this covers "typed then closed without switching".
+            try
+            {
+                var dchat = _selectedChat;
+                if (dchat != null && _thread == null && _editTarget == null && _messageInput != null && !TelegramService.TearingDown)
+                {
+                    string dtext = (_messageInput.Text ?? "").Trim();
+                    if (dtext != (dchat.DraftText ?? "")) _service?.SaveDraftAsync(dchat.Peer, dtext)?.Wait(600);
+                }
+            }
+            catch { }
             // PRESENCE 1.2: best-effort offline on a REAL close — bounded wait, never blocks
             // shutdown (800ms cap) and never fights teardown (_tearingDown discipline).
             if (_presenceOnline && !TelegramService.TearingDown)
@@ -11774,6 +12268,12 @@ namespace TelegArm.UI
             _fellBack = true;
 
             if (_notifyIcon != null) _notifyIcon.Visible = false; // no tray while on the login screen
+
+            // ACCOUNT-SESSION-PATH-FIX: a fresh login must NOT inherit a prior account's id, or Config("session_pathname")
+            // resolves to accounts/{staleId}/session instead of _pending (the same collision as the add-account bug). Every
+            // caller means "no active account → log in fresh" (logout-last, all-corrupt recovery, add-cancel-first,
+            // connect-failure fallback), so 0 — the first-launch state — is always correct here.
+            _service.AccountId = 0;
 
             var login = new LoginForm(_service);
             login.FormClosed += (s, e) => { _reallyClosing = true; Close(); };

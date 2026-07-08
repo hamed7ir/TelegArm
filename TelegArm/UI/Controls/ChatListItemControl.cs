@@ -163,8 +163,26 @@ namespace TelegArm.UI.Controls
             int trailing = clusterW > 0 ? clusterW + 6 : (PinnedInView ? 22 : 0);
             int prevRight = Width - rightPad - trailing;
             var prevRect = new Rectangle(textLeft, 34, Math.Max(0, prevRight - textLeft), 24);
-            using (var pf = FontHelper.For(Entry.Preview ?? "", 9f))
-                DrawRowText(g, Entry.Preview ?? "", pf, prevRect, subColor);
+            if (Entry.HasDraft)
+            {
+                // DRAFTS: "Draft: " in red (Telegram-style), then the draft text in the normal sub color.
+                const string lbl = "Draft: ";
+                Color draftColor = IsDark ? Color.FromArgb(240, 116, 116) : Color.FromArgb(214, 69, 69);
+                using (var pf = FontHelper.For(Entry.DraftText ?? "", 9f))
+                {
+                    var mf = TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix;
+                    int lblW = Math.Min(prevRect.Width, TextRenderer.MeasureText(g, lbl, pf, new Size(int.MaxValue, prevRect.Height), mf).Width);
+                    TextRenderer.DrawText(g, lbl, pf, new Rectangle(prevRect.X, prevRect.Y, lblW, prevRect.Height), draftColor,
+                        mf | TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+                    var txtRect = new Rectangle(prevRect.X + lblW, prevRect.Y, Math.Max(0, prevRect.Width - lblW), prevRect.Height);
+                    DrawRowText(g, (Entry.DraftText ?? "").Replace("\r", " ").Replace("\n", " "), pf, txtRect, subColor);
+                }
+            }
+            else
+            {
+                using (var pf = FontHelper.For(Entry.Preview ?? "", 9f))
+                    DrawRowText(g, Entry.Preview ?? "", pf, prevRect, subColor);
+            }
 
             // Draw the cluster right→left. Unread = accent (GREY if muted); the "@" and heart stay ACCENT even when
             // muted (a mention breaks through; the heart is a distinct passive indicator). Cluster > pin glyph.

@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
 using TelegArm.Helpers;
+using TelegArm.UI.Controls;
 
 namespace TelegArm.UI
 {
@@ -61,12 +62,11 @@ namespace TelegArm.UI
             TelegArm.UI.Controls.TouchScroller.Enable(_optionsPanel, horizontal: false);   // finger-pan the options list (RT touch)
             AddOption(); AddOption();   // start with two
 
-            _addBtn = new Button
+            _addBtn = new RoundedButton
             {
                 Text = "+ Add option", Left = x, Top = 306, Width = 140, Height = 28,
-                FlatStyle = FlatStyle.Flat, BackColor = _field, ForeColor = _accent
+                Kind = RoundedButtonKind.Secondary
             };
-            _addBtn.FlatAppearance.BorderColor = _sub;
             _addBtn.Click += (s, e) => { AddOption(); };
             Controls.Add(_addBtn);
 
@@ -76,11 +76,9 @@ namespace TelegArm.UI
             // Multiple stands alone. Kept simple here.
             Controls.Add(_anon); Controls.Add(_multi);
 
-            var ok = new Button { Text = "Create", Width = 100, Height = 32, Left = ClientSize.Width - 222, Top = 410, FlatStyle = FlatStyle.Flat, BackColor = _accent, ForeColor = Color.White };
-            ok.FlatAppearance.BorderSize = 0;
+            var ok = new RoundedButton { Text = "Create", Width = 100, Height = 32, Left = ClientSize.Width - 222, Top = 410, Kind = RoundedButtonKind.Primary };
             ok.Click += OnCreate;
-            var cancel = new Button { Text = "Cancel", Width = 100, Height = 32, Left = ClientSize.Width - 116, Top = 410, FlatStyle = FlatStyle.Flat, BackColor = _field, ForeColor = _fg, DialogResult = DialogResult.Cancel };
-            cancel.FlatAppearance.BorderColor = _sub;
+            var cancel = new RoundedButton { Text = "Cancel", Width = 100, Height = 32, Left = ClientSize.Width - 116, Top = 410, Kind = RoundedButtonKind.Secondary, DialogResult = DialogResult.Cancel };
             Controls.Add(ok); Controls.Add(cancel);
             AcceptButton = ok; CancelButton = cancel;
         }
@@ -108,8 +106,7 @@ namespace TelegArm.UI
         {
             if (_optionBoxes.Count >= MaxOptions) return;
             var tb = new TextBox { Width = _optionsPanel.ClientSize.Width - 40, Height = 26, BackColor = _field, ForeColor = _fg, BorderStyle = BorderStyle.FixedSingle };
-            var del = new Button { Width = 26, Height = 24, Text = "✕", FlatStyle = FlatStyle.Flat, BackColor = _bg, ForeColor = _sub };
-            del.FlatAppearance.BorderSize = 0;
+            var del = new RoundedButton { Width = 26, Height = 24, Text = "✕", Kind = RoundedButtonKind.Neutral, Radius = 6 };
             del.Click += (s, e) =>
             {
                 if (_optionBoxes.Count <= 2) return;   // keep at least two

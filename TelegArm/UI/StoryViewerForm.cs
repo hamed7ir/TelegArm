@@ -30,6 +30,7 @@ namespace TelegArm.UI
         private const int StoryMs = 5000;   // photo dwell time
         private const int TickMs = 50;      // ~20fps progress fill
         private const int VideoTopH = 56;   // video is inset below this chrome strip (progress + header live here)
+        private const int SideW = 48;       // left/right nav-chevron strip; video is inset by this so the ‹ › show over it
 
         private readonly TelegramService _service;
         private readonly List<StoryPeerRef> _peers;
@@ -39,6 +40,9 @@ namespace TelegArm.UI
         private int _peerIdx;
         private List<StoryItem> _stories = new List<StoryItem>();
         private int _storyIdx;
+        private int _initialStoryIdx;   // PROFILE-STORIES: deep-link — the FIRST peer entry starts here (default 0)
+        private readonly List<StoryItem> _preloaded;   // PROFILE-STORIES: when set, the start peer shows THIS list (posted/pinned) instead of fetching the active ring
+        private readonly int _startPeerIdx;
 
         private readonly Dictionary<int, Image> _photoCache = new Dictionary<int, Image>();
         private Image _curImage;
@@ -68,13 +72,17 @@ namespace TelegArm.UI
         public HashSet<long> SeenPeers { get; } = new HashSet<long>();
 
         public StoryViewerForm(TelegramService service, List<StoryPeerRef> peers, int startIdx,
-                               Func<long, Image> avatarGetter, Color accent)
+                               Func<long, Image> avatarGetter, Color accent, int startStoryIdx = 0,
+                               List<StoryItem> preloaded = null)
         {
             _service = service;
             _peers = peers ?? new List<StoryPeerRef>();
             _avatar = avatarGetter;
             _accent = accent;
             _peerIdx = Math.Max(0, Math.Min(startIdx, _peers.Count - 1));
+            _initialStoryIdx = Math.Max(0, startStoryIdx);   // 0 for the tray (unchanged); the profile deep-links to a tapped story
+            _preloaded = preloaded;                          // null for the tray → fetch as before; the profile supplies its posted/pinned list
+            _startPeerIdx = _peerIdx;
 
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.Manual;
@@ -111,21 +119,30 @@ namespace TelegArm.UI
             _progress = 0; _timer.Stop(); _loading = true; Invalidate();
 
             List<StoryItem> items = null;
-            try
+            if (_preloaded != null && idx == _startPeerIdx)
             {
-                var res = await _service.GetPeerStoriesAsync(_peers[idx].Input);
-                var arr = res?.stories?.stories;   // Stories_PeerStories.stories (PeerStories).stories (StoryItemBase[])
-                if (arr != null)
-                    items = arr.OfType<StoryItem>()
-                               .Where(s => s.expire_date == default(DateTime) || s.expire_date > DateTime.UtcNow)
-                               .OrderBy(s => s.id).ToList();
+                items = _preloaded;   // PROFILE-STORIES: show exactly the posted/pinned stories already fetched (no expire filter)
             }
-            catch { items = null; }
+            else
+            {
+                try
+                {
+                    var res = await _service.GetPeerStoriesAsync(_peers[idx].Input);
+                    var arr = res?.stories?.stories;   // Stories_PeerStories.stories (PeerStories).stories (StoryItemBase[])
+                    if (arr != null)
+                        items = arr.OfType<StoryItem>()
+                                   .Where(s => s.expire_date == default(DateTime) || s.expire_date > DateTime.UtcNow)
+                                   .OrderBy(s => s.id).ToList();
+                }
+                catch { items = null; }
+            }
 
             if (IsDisposed || _peerIdx != idx) return;                 // superseded mid-fetch
             if (items == null || items.Count == 0) { EnterPeer(idx + 1, false); return; }   // nothing active → skip peer
             _stories = items;
-            ShowStory(atEnd ? _stories.Count - 1 : 0);
+            int start = atEnd ? _stories.Count - 1 : Math.Min(_initialStoryIdx, _stories.Count - 1);
+            _initialStoryIdx = 0;   // one-shot: only the initial (deep-link) entry honors it; later peers start at 0
+            ShowStory(start);
         }
 
         private void ShowStory(int idx)
@@ -240,7 +257,8 @@ namespace TelegArm.UI
         {
             if (_video == null) return;
             int botH = _caption != null ? Math.Min(_captionH + 30, ClientSize.Height / 3) : 0;
-            _video.Bounds = new Rectangle(0, VideoTopH, ClientSize.Width, Math.Max(1, ClientSize.Height - VideoTopH - botH));
+            // Inset by SideW on both sides so the nav chevrons (drawn in OnPaint) stay visible over the native video.
+            _video.Bounds = new Rectangle(SideW, VideoTopH, Math.Max(1, ClientSize.Width - 2 * SideW), Math.Max(1, ClientSize.Height - VideoTopH - botH));
         }
 
         private void StopVideo()
@@ -370,7 +388,33 @@ namespace TelegArm.UI
 
             DrawProgress(g, cw);
             DrawHeader(g, cw);
+            DrawNavIndicators(g, cw, ch);
             if (_caption != null && e.ClipRectangle.Bottom > ch - (_captionH + 40)) DrawCaption(g, cw, ch);
+        }
+
+        /// <summary>The tappable-zone HINTS: a ‹ on the left (previous) and a › on the right (next), vertically
+        /// centred, each in a translucent disc for contrast on bright media. The ‹ is hidden at the very first story
+        /// (nothing before it). The whole left third / right area stays the actual tap target — these just show where.</summary>
+        private void DrawNavIndicators(Graphics g, int cw, int ch)
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            int cy = ch / 2;
+            if (_peerIdx > 0 || _storyIdx > 0) DrawChevron(g, 26, cy, true);   // has a previous story/peer
+            DrawChevron(g, cw - 26, cy, false);                               // next always exists (story, peer, or close)
+        }
+
+        private static void DrawChevron(Graphics g, int cx, int cy, bool left)
+        {
+            const int r = 17, d = 6;
+            using (var b = new SolidBrush(Color.FromArgb(70, 0, 0, 0)))
+                g.FillEllipse(b, cx - r, cy - r, r * 2, r * 2);
+            using (var pen = new Pen(Color.White, 2.4f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+            {
+                Point[] pts = left
+                    ? new[] { new Point(cx + d, cy - d), new Point(cx - d, cy), new Point(cx + d, cy + d) }
+                    : new[] { new Point(cx - d, cy - d), new Point(cx + d, cy), new Point(cx - d, cy + d) };
+                g.DrawLines(pen, pts);
+            }
         }
 
         private void DrawProgress(Graphics g, int cw)

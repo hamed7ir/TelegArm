@@ -16,7 +16,7 @@
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
     <Deterministic>true</Deterministic>
     <LangVersion>7.3</LangVersion>
-    <ApplicationIcon>..\icon.ico</ApplicationIcon>
+    <ApplicationIcon>..\img-icon\icon.ico</ApplicationIcon>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <PlatformTarget>AnyCPU</PlatformTarget>
@@ -72,6 +72,7 @@
     <Compile Include="Core\Countries.cs" />
     <Compile Include="Core\DownloadHandle.cs" />
     <Compile Include="Core\LruImageCache.cs" />
+    <Compile Include="Core\MarkdownEntities.cs" />
     <Compile Include="Core\MediaCache.cs" />
     <Compile Include="Core\MediaClassifier.cs" />
     <Compile Include="Core\MediaSaver.cs" />
@@ -133,6 +134,9 @@
     <Compile Include="UI\StoryViewerForm.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="UI\StoriesGridForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="UI\SendMediaDialog.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -155,6 +159,7 @@
     <Compile Include="UI\RoundRecorderForm.cs" />
     <Compile Include="UI\CountryPickerForm.cs" />
     <Compile Include="UI\ProfileForm.cs" />
+    <Compile Include="UI\EditContactForm.cs" />
     <Compile Include="UI\ProfilePhotoViewer.cs" />
     <Compile Include="UI\ThemedContextMenuStrip.cs" />
     <Compile Include="UI\EmojiPicker.cs">
@@ -167,6 +172,8 @@
     <Compile Include="UI\Controls\MediaControlButton.cs">
       <SubType>Component</SubType>
     </Compile>
+    <Compile Include="UI\Controls\RoundedButton.cs" />
+    <Compile Include="UI\Controls\StoryThumb.cs" />
     <Compile Include="UI\Controls\MicButton.cs">
       <SubType>Component</SubType>
     </Compile>
@@ -282,11 +289,11 @@
       <Link>noto-emoji.zip</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="..\TelegArm.png">
+    <Content Include="..\img-icon\TelegArm.png">
       <Link>TelegArm.png</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="..\openrt.png">
+    <Content Include="..\img-icon\openrt.png">
       <Link>openrt.png</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
@@ -301,11 +308,11 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <!-- Tray icons (unread-aware): swapped live by unread count. Repo root → copied beside the exe. -->
-    <Content Include="..\trayicon.ico">
+    <Content Include="..\img-icon\trayicon.ico">
       <Link>trayicon.ico</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="..\trayicon-unread.ico">
+    <Content Include="..\img-icon\trayicon-unread.ico">
       <Link>trayicon-unread.ico</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>

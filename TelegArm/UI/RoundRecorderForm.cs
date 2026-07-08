@@ -102,11 +102,12 @@ namespace TelegArm.UI
 
         private Button MakeBtn(string text, int x, int y, int w, bool accent = false)
         {
-            var b = new Button { Text = text, Left = x, Top = y, Width = w, Height = 40, FlatStyle = FlatStyle.Flat, Font = FontHelper.Ui(10f, FontStyle.Bold), Cursor = Cursors.Hand };
-            b.FlatAppearance.BorderSize = accent ? 0 : 1;
-            b.BackColor = accent ? _accent : (_dark ? Color.FromArgb(54, 54, 58) : Color.White);
-            b.ForeColor = accent ? Color.White : (_dark ? Color.White : Color.FromArgb(20, 20, 20));
-            return b;
+            return new TelegArm.UI.Controls.RoundedButton
+            {
+                Text = text, Left = x, Top = y, Width = w, Height = 40,
+                Kind = accent ? TelegArm.UI.Controls.RoundedButtonKind.Primary : TelegArm.UI.Controls.RoundedButtonKind.Secondary,
+                Font = FontHelper.Ui(10f, FontStyle.Bold)
+            };
         }
 
         private async void OnShownAsync(object sender, EventArgs e)

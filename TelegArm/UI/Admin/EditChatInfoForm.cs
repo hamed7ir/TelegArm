@@ -18,7 +18,8 @@ namespace TelegArm.UI.Admin
         private readonly TelegramService _service;
         private readonly Channel _channel;
         private readonly InputPeer _peer;
-        private readonly string _origTitle, _origAbout;
+        private readonly string _origTitle;
+        private string _origAbout;   // mutable: pre-filled from ChannelFull.about after the form opens (see LoadCurrentAboutAsync)
 
         private readonly TextBox _name, _desc;
         private readonly Label _status;
@@ -44,10 +45,10 @@ namespace TelegArm.UI.Admin
             var scroll = ScrollHost.Wrap(content, dark, accent);
 
             var bottom = new Panel { Dock = DockStyle.Bottom, Height = 56, BackColor = bg };
-            _save = new Button { Text = "Save", Left = content.Width - 104, Top = 10, Width = 92, Height = 38, FlatStyle = FlatStyle.Flat, BackColor = accent, ForeColor = Color.White, Font = FontHelper.Ui(10.5f, FontStyle.Bold) };
-            _save.FlatAppearance.BorderSize = 0; _save.Click += OnSave;
-            var cancel = new Button { Text = "Cancel", Left = content.Width - 200, Top = 10, Width = 86, Height = 38, FlatStyle = FlatStyle.Flat, BackColor = field, ForeColor = fg };
-            cancel.FlatAppearance.BorderSize = 1; cancel.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
+            _save = new RoundedButton { Text = "Save", Left = content.Width - 104, Top = 10, Width = 92, Height = 38, Kind = RoundedButtonKind.Primary, Font = FontHelper.Ui(10.5f, FontStyle.Bold) };
+            _save.Click += OnSave;
+            var cancel = new RoundedButton { Text = "Cancel", Left = content.Width - 200, Top = 10, Width = 86, Height = 38, Kind = RoundedButtonKind.Secondary };
+            cancel.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
             bottom.Controls.Add(_save); bottom.Controls.Add(cancel);
             content.Controls.Add(bottom);
 
@@ -60,11 +61,33 @@ namespace TelegArm.UI.Admin
             _desc = new TextBox { Left = 16, Top = y, Width = 352, Height = 92, Multiline = true, Text = _origAbout, BackColor = field, ForeColor = fg, BorderStyle = BorderStyle.FixedSingle, Font = FontHelper.Ui(10.5f) };
             scroll.Controls.Add(_desc); y += 108;
 
-            var photoBtn = new Button { Text = "Change photo…", Left = 16, Top = y, Width = 160, Height = 40, FlatStyle = FlatStyle.Flat, BackColor = field, ForeColor = fg, Font = FontHelper.Ui(9.5f) };
-            photoBtn.FlatAppearance.BorderSize = 1; photoBtn.Click += PickPhoto;
+            var photoBtn = new RoundedButton { Text = "Change photo…", Left = 16, Top = y, Width = 160, Height = 40, Kind = RoundedButtonKind.Secondary, Font = FontHelper.Ui(9.5f) };
+            photoBtn.Click += PickPhoto;
             scroll.Controls.Add(photoBtn);
             _status = new Label { Left = 184, Top = y + 9, Width = 200, Height = 24, ForeColor = sub, Font = FontHelper.Ui(9f), Text = "", AutoEllipsis = true };
             scroll.Controls.Add(_status);
+
+            var _ = LoadCurrentAboutAsync();   // pre-fill the CURRENT description so a save doesn't blank it
+        }
+
+        /// <summary>Pre-fill FIX: the caller opens this form without the description (it isn't cheaply available at
+        /// the call site), so the Description field starts empty even when the channel HAS an about. Load the CURRENT
+        /// about (ChannelFull.about) on open and drop it in — so editing (or re-saving unchanged) PRESERVES it rather
+        /// than wiping it. Only fills if the user hasn't already started typing; failure keeps the passed-in value.</summary>
+        private async System.Threading.Tasks.Task LoadCurrentAboutAsync()
+        {
+            string about;
+            try
+            {
+                var mcf = await _service.GetChannelFullAsync(_channel);
+                about = (mcf?.full_chat as ChannelFull)?.about ?? "";
+            }
+            catch { return; }
+            if (IsDisposed || _desc == null || _desc.IsDisposed) return;
+            if (string.IsNullOrEmpty(about)) return;      // nothing to pre-fill
+            if (_desc.Text != _origAbout) return;         // the user already edited the field → respect their text
+            _origAbout = about;                           // so OnSave's change-detection compares against the REAL current value
+            _desc.Text = about;
         }
 
         private void PickPhoto(object sender, EventArgs e)
@@ -84,8 +107,12 @@ namespace TelegArm.UI.Admin
             {
                 if (_name.Text.Trim().Length > 0 && _name.Text.Trim() != _origTitle)
                 {
-                    if (!await _service.EditChatTitleAsync(_channel, _name.Text.Trim())) { Vpn("name"); return; }
+                    string newTitle = _name.Text.Trim();
+                    if (!await _service.EditChatTitleAsync(_channel, newTitle)) { Vpn("name"); return; }
                     System.Diagnostics.Debug.WriteLine("[ADMIN] title updated");
+                    _channel.title = newTitle;   // keep the shared Channel entity consistent
+                    // RELEASE-FIXES-V11 (H1): refresh the chat-list row + header + open profile INSTANTLY (no reload).
+                    TelegArm.UI.MainForm.RaisePeerTitleChanged(_channel.id, newTitle);
                 }
                 if (_desc.Text.Trim() != _origAbout)
                 {
@@ -97,6 +124,11 @@ namespace TelegArm.UI.Admin
                     _status.Text = "Uploading photo…";
                     if (!await _service.EditChatPhotoAsync(_channel, _photoPath)) { Vpn("photo"); return; }
                     System.Diagnostics.Debug.WriteLine("[ADMIN] photo updated");
+                    // CHANNEL-PHOTO-REFRESH: EditChatPhotoAsync updated _channel.photo → drop the STALE cached avatar and
+                    // re-fetch the new one so the chat-list row / header / bubbles repaint instantly (via AvatarLoaded),
+                    // no app-reload/switch needed. Same mechanism the self-avatar edit uses (PROFILE-EDIT-SELF).
+                    AvatarStore.Current?.Invalidate(_channel.id);
+                    AvatarStore.Current?.Request(_channel.id, _channel);
                 }
                 DialogResult = DialogResult.OK; Close();
             }

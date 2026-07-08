@@ -101,6 +101,20 @@ namespace TelegArm.Core
             Enqueue(peerId, peer, backfill: false);
         }
 
+        /// <summary>PROFILE-EDIT-SELF: drop a peer's cached avatar (mem image + the no-photo / in-flight / retry marks)
+        /// so the NEXT <see cref="Request"/> re-fetches — used after YOUR profile photo changes, so the new (or removed)
+        /// photo shows across the app (rows/header). Disk is photo_id-keyed, so a new photo naturally misses.</summary>
+        public void Invalidate(long peerId)
+        {
+            lock (_lock)
+            {
+                _mem.Remove(peerId);
+                _noPhoto.Remove(peerId);
+                _queuedOrInFlight.Remove(peerId);
+                _retryAfter.Remove(peerId);
+            }
+        }
+
         /// <summary>Awaitable variant for the pickers (same signature the dialogs already take). Completes
         /// with null on no-photo/failure — callers keep the letter circle.</summary>
         public Task<Image> GetAsync(long peerId, IPeerInfo peer)

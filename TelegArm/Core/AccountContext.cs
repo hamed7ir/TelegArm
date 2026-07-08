@@ -52,5 +52,52 @@ namespace TelegArm.Core
         }
 
         private static string Ensure(string d) { try { Directory.CreateDirectory(d); } catch { } return d; }
+
+        // ─────────────────────────────────────────────────────────────────────────────────────────────────
+        //  [SESSPATH] DIAGNOSTIC (ACCOUNT-SESSION-PATH-DIAG) — read-only path logging for the INSTALLED build.
+        //  Purpose: prove whether two accounts ever resolve to the SAME session file (the switch-corruption bug
+        //  that only repros installed). SAFE: these READ paths + File.Exists only; the ONE write is a throwaway
+        //  ".write_test_<guid>" probe (StoragePaths.IsWritable) — NEVER a session file, and it is deleted at once.
+        //  Gated by Logger.Enabled (off by default) and emitted via Logger.Diag → Trace, so it survives Release.
+        // ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+        private static bool _envLogged;
+
+        /// <summary>One-shot [SESSPATH] environment dump: the resolved data base, WHICH candidate it came from,
+        /// the accounts/ root, a real (non-session) write-test of that root, and the active-pointer path. No-op
+        /// when logging is off; runs at most once per process.</summary>
+        public static void LogEnvOnce()
+        {
+            if (!TelegArm.Helpers.Logger.Enabled || _envLogged) return;
+            _envLogged = true;
+            try
+            {
+                string root = AccountsRoot;
+                bool writeTestOk = StoragePaths.IsWritable(root);   // writes+deletes a NON-session probe file only
+                TelegArm.Helpers.Logger.Diag("[SESSPATH] ENV base=\"" + Base + "\" via=" + StoragePaths.CacheVia
+                    + " accountsRoot=\"" + root + "\" writeTestOk=" + writeTestOk
+                    + " activePointer=\"" + ActivePointerPath + "\"");
+            }
+            catch { }
+        }
+
+        /// <summary>[SESSPATH] logs the session file that account <paramref name="id"/> resolves to under the CURRENT
+        /// base, whether it already exists, and its size — plus the global ActiveId/LegacyMode context. Feed it the
+        /// same id from two different accounts: identical "session=" paths across accounts = the collision proven.
+        /// READ-ONLY (path build + File.Exists). No-op when logging is off.</summary>
+        public static void LogPaths(long id, string phase)
+        {
+            if (!TelegArm.Helpers.Logger.Enabled) return;
+            try
+            {
+                string sess = Path.Combine(AccountDir(id), "session");
+                bool exists = false; long bytes = -1;
+                try { var fi = new FileInfo(sess); if (fi.Exists) { exists = true; bytes = fi.Length; } } catch { }
+                TelegArm.Helpers.Logger.Diag("[SESSPATH] " + phase + " acct=" + id
+                    + " session=\"" + sess + "\" exists=" + exists + " bytes=" + bytes
+                    + " globalActiveId=" + ActiveId + " legacy=" + LegacyMode);
+            }
+            catch { }
+        }
     }
 }

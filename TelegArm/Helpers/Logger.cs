@@ -15,5 +15,16 @@
         /// <summary>The one time-of-day line prefix used by the file logger ("HH:mm:ss.fff  &lt;line&gt;").
         /// (crash.log deliberately uses a FULL-date stamp instead — crash records need the day.)</summary>
         public static string Stamp(string line) => System.DateTime.Now.ToString("HH:mm:ss.fff") + "  " + line;
+
+        /// <summary>A diagnostic emit that SURVIVES a Release build. The app's ~35 ordinary log sites use
+        /// <see cref="System.Diagnostics.Debug"/>.WriteLine, which the compiler STRIPS from Release (only TRACE is
+        /// defined there) — so none of them reach the <see cref="FileLog"/> tee in the SHIPPED installer. This uses
+        /// <see cref="System.Diagnostics.Trace"/>.WriteLine, which Release keeps, so a tagged one-off diagnostic
+        /// (e.g. "[SESSPATH]") IS captured in the installed build once the user turns logging on. Gated by
+        /// <see cref="Enabled"/> like every other site (the caller may also pre-gate to skip string building).</summary>
+        public static void Diag(string line)
+        {
+            if (Enabled && line != null) System.Diagnostics.Trace.WriteLine(line);
+        }
     }
 }

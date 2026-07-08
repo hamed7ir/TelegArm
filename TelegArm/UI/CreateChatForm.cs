@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using TL;
 using TelegArm.Helpers;
+using TelegArm.UI.Controls;
 
 namespace TelegArm.UI
 {
@@ -63,8 +64,7 @@ namespace TelegArm.UI
             }
 
             _membersLabel = new Label { Text = "No members selected", Left = 16, Top = y + 7, Width = 196, ForeColor = fg, Font = FontHelper.Ui(9f) };
-            var selectBtn = new Button { Text = "Select members", Left = 224, Top = y, Width = 140, Height = 32, FlatStyle = FlatStyle.Flat, BackColor = field, ForeColor = fg, Font = FontHelper.Ui(9f) };
-            selectBtn.FlatAppearance.BorderSize = 1;
+            var selectBtn = new RoundedButton { Text = "Select members", Left = 224, Top = y, Width = 140, Height = 32, Kind = RoundedButtonKind.Secondary, Font = FontHelper.Ui(9f) };
             selectBtn.Click += (s, e) =>
             {
                 using (var p = new PeoplePickerForm(_fetch, true, dark, accent, "Add members", _cachedAvatar, _loadAvatar))
@@ -76,16 +76,14 @@ namespace TelegArm.UI
             };
             content.Controls.Add(_membersLabel); content.Controls.Add(selectBtn);
 
-            _create = new Button { Text = "Create", Left = 196, Top = content.Height - 48, Width = 84, Height = 36, FlatStyle = FlatStyle.Flat, BackColor = accent, ForeColor = Color.White, Font = FontHelper.Ui(10f, FontStyle.Bold), Enabled = false };
-            _create.FlatAppearance.BorderSize = 0;
+            _create = new RoundedButton { Text = "Create", Left = 196, Top = content.Height - 48, Width = 84, Height = 36, Kind = RoundedButtonKind.Primary, Font = FontHelper.Ui(10f, FontStyle.Bold), Enabled = false };
             _create.Click += (s, e) =>
             {
                 ChatTitle = _title.Text.Trim();
                 ChatAbout = _desc != null ? (_desc.Text ?? "").Trim() : "";
                 DialogResult = DialogResult.OK; Close();
             };
-            var cancel = new Button { Text = "Cancel", Left = 288, Top = content.Height - 48, Width = 80, Height = 36, FlatStyle = FlatStyle.Flat, BackColor = field, ForeColor = fg };
-            cancel.FlatAppearance.BorderSize = 1;
+            var cancel = new RoundedButton { Text = "Cancel", Left = 288, Top = content.Height - 48, Width = 80, Height = 36, Kind = RoundedButtonKind.Secondary };
             cancel.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
             content.Controls.Add(_create); content.Controls.Add(cancel);
         }

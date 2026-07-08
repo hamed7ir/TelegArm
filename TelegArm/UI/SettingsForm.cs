@@ -1137,10 +1137,8 @@ namespace TelegArm.UI
                 }
                 y += 8;
 
-                var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Width = 92, Height = 32, FlatStyle = FlatStyle.Flat, ForeColor = fg, Location = new Point(W - 18 - 92, y) };
-                cancel.FlatAppearance.BorderColor = sub;
-                var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, Width = 92, Height = 32, FlatStyle = FlatStyle.Flat, BackColor = accent, ForeColor = Color.White, Location = new Point(W - 18 - 92 - 8 - 92, y) };
-                ok.FlatAppearance.BorderSize = 0;
+                var cancel = new TelegArm.UI.Controls.RoundedButton { Text = "Cancel", DialogResult = DialogResult.Cancel, Width = 92, Height = 32, Kind = TelegArm.UI.Controls.RoundedButtonKind.Secondary, Location = new Point(W - 18 - 92, y) };
+                var ok = new TelegArm.UI.Controls.RoundedButton { Text = "OK", DialogResult = DialogResult.OK, Width = 92, Height = 32, Kind = TelegArm.UI.Controls.RoundedButtonKind.Primary, Location = new Point(W - 18 - 92 - 8 - 92, y) };
                 Controls.Add(ok); Controls.Add(cancel);
                 AcceptButton = ok; CancelButton = cancel;
 

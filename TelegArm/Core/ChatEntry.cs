@@ -72,5 +72,21 @@ namespace TelegArm.Core
         /// <summary>PRESENCE: group/megagroup online member count for the header ("N members, M online");
         /// 0 = unknown/none (the ", M online" suffix is omitted). Broadcasts never use this.</summary>
         public int OnlineCount { get; set; }
+
+        // ── DRAFTS ──────────────────────────────────────────────────────────
+        /// <summary>Unsent composer text saved for this chat (from Dialog.draft / a local save / UpdateDraftMessage).
+        /// Null or empty = no draft. Shown as a red "Draft: …" preview and floats the chat up the list.</summary>
+        public string DraftText { get; set; }
+
+        /// <summary>The draft's date (DraftMessage.date, or DateTime.UtcNow for a local save) — the FLOAT key: a
+        /// drafted chat sorts by max(Date, DraftDate), so a fresh draft bumps it toward the top. MinValue = none.</summary>
+        public DateTime DraftDate { get; set; } = DateTime.MinValue;
+
+        /// <summary>True when a non-empty draft is present (drives the row indicator + the float).</summary>
+        public bool HasDraft => !string.IsNullOrEmpty(DraftText);
+
+        /// <summary>The chat-list sort key: max(last-message date, draft date) when a draft is present, else just the
+        /// last-message date — so a draft floats the chat up, and clearing it drops the chat back to its real spot.</summary>
+        public DateTime SortDate => (HasDraft && DraftDate > Date) ? DraftDate : Date;
     }
 }
