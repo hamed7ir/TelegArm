@@ -1,8 +1,7 @@
 # TelegArm
 
 **A full-featured Telegram client for the tablets Telegram forgot.**
-<img width="1280" height="810" alt="photo_2026-07-03_03-53-01" src="https://github.com/user-attachments/assets/049c1ba6-a13b-4bba-b0bc-90c521e4254b" />
-
+<img width="1280" height="704" alt="photo_2026-07-08_05-25-42" src="https://github.com/user-attachments/assets/7238ec54-7fa1-4e13-b380-cda772dc1424" />
 
 TelegArm brings a modern Telegram experience to jailbroken **Windows RT 8.1** and **Windows 10 ARM32** — hardware the official apps never supported and everyone else gave up on. It's written in pure-managed C# and speaks the MTProto protocol directly through [WTelegramClient](https://github.com/wiz0u/WTelegramClient), with zero native Telegram dependencies. One `AnyCPU` build runs everywhere: from a 2012 Surface RT to a modern x64 desktop.
 
