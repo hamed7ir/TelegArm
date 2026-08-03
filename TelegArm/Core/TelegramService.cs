@@ -2452,19 +2452,22 @@ namespace TelegArm.Core
         public void BeginLogoutCleanup(long id)
         {
             TearingDown = true;
-            System.Diagnostics.Debug.WriteLine("[CONN] client disposed reason=logout");
-            System.Diagnostics.Debug.WriteLine("[LOGOUT-TRACE] BeginLogoutCleanup: before StopConnectionWatchdog");
+            // R7: logout is the ONLY legitimate account-deleting path in the app, so its trace must survive
+            // Release — otherwise a device log cannot distinguish "the user logged out" from "something
+            // deleted an account on its own", which is precisely the question rail R4 exists to answer.
+            TelegArm.Helpers.Logger.Diag("[ACCT] logout START id=" + id + " (explicit user action; this path DOES delete)");
+            TelegArm.Helpers.Logger.Diag("[LOGOUT-TRACE] BeginLogoutCleanup: before StopConnectionWatchdog");
             StopConnectionWatchdog();
             // Deliberately SKIP Updates.SaveState — the account (and its update-state file) is being DELETED, and
             // SaveState can BLOCK on an internal UpdateManager lock held by the update loop stuck on the dead VPN.
-            System.Diagnostics.Debug.WriteLine("[LOGOUT-TRACE] BeginLogoutCleanup: after StopWatchdog (skipped SaveState); before null handles");
+            TelegArm.Helpers.Logger.Diag("[LOGOUT-TRACE] BeginLogoutCleanup: after StopWatchdog (skipped SaveState); before null handles");
             var client = Client;
             Client = null; Updates = null; Me = null;
             _silentResume = false; NeedsInteractiveLogin = false;
             // Mark this account "deleting" NOW (synchronously) so a concurrent switch/corrupt-recovery skips it as
             // a candidate — it must never try to resume an account whose files the background cleanup is removing.
             AccountStore.MarkDeleting(id);
-            System.Diagnostics.Debug.WriteLine("[LOGOUT-TRACE] BeginLogoutCleanup: after null handles; firing background cleanup");
+            TelegArm.Helpers.Logger.Diag("[LOGOUT-TRACE] BeginLogoutCleanup: after null handles; firing background cleanup");
 
             var ignore = System.Threading.Tasks.Task.Run(async () =>
             {
@@ -2483,9 +2486,9 @@ namespace TelegArm.Core
                     }
                     await AccountStore.DeleteAccountAsync(id);   // lock released → deletes cleanly (bounded retry covers a lingering handle)
                     AccountStore.ClearPending();
-                    System.Diagnostics.Debug.WriteLine("[ACCT] background logout cleanup done id=" + id);
+                    TelegArm.Helpers.Logger.Diag("[ACCT] logout cleanup DONE id=" + id + " (accounts/" + id + " + Cache/" + id + " deleted by user logout)");
                 }
-                catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[ACCT] bg logout cleanup error: " + ex.Message); }
+                catch (Exception ex) { TelegArm.Helpers.Logger.Diag("[ACCT] logout cleanup ERROR id=" + id + ": " + ex.Message); }
                 finally { AccountStore.UnmarkDeleting(id); }
             });
         }

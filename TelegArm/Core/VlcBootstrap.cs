@@ -28,9 +28,13 @@ namespace TelegArm.Core
         {
             try
             {
+                // BATCH-TA-0.1: bracket the WHOLE bootstrap. It runs synchronously before any window exists,
+                // so its cost is dead time on a blank screen — measured at ~19 s for a first-run extract on the
+                // x64 dev box, and the Tegra-3 number can only ever be captured on a device's FIRST run.
+                var swBoot = System.Diagnostics.Stopwatch.StartNew();
                 string arch = ProcessArch();                 // "arm" | "x86"
                 string want = arch + "|" + BundleVersion;
-                System.Diagnostics.Debug.WriteLine("[VLC] arch detected=" + arch);
+                Logger.Diag("[VLC] bootstrap START arch=" + arch + " bundleVersion=" + BundleVersion);
 
                 // 1. A usable folder already present (our CURRENT marker, OR a foreign/manual install) → use it.
                 foreach (var baseDir in CandidateBases())
@@ -41,22 +45,23 @@ namespace TelegArm.Core
                     if (marker == null || marker == want)
                     {
                         VlcEnvironment.UseFolder(folder);
-                        System.Diagnostics.Debug.WriteLine("[VLC] libvlc/ current → skip extraction (" + folder + ")");
+                        Logger.Diag("[VLC] libvlc/ current → skip extraction (" + folder + ")");
+                        Logger.Diag("[VLC] bootstrap END in " + swBoot.ElapsedMilliseconds + "ms (warm: no extraction)");
                         return;
                     }
-                    System.Diagnostics.Debug.WriteLine("[VLC] libvlc/ STALE at " + folder + " (marker=" + marker + ") → re-extract");
+                    Logger.Diag("[VLC] libvlc/ STALE at " + folder + " (marker=" + marker + ") → re-extract");
                 }
 
                 // 2. None usable → extract the matching-arch zip into the first writable base.
                 string zip = Path.Combine(BesideExe, arch == "arm" ? "libvlc-arm32.zip" : "libvlc-x86.zip");
                 bool zipExists = File.Exists(zip);
                 long zipLen = zipExists ? SafeLen(zip) : 0;
-                System.Diagnostics.Debug.WriteLine("[VLC] zip path=" + zip + " exists=" + zipExists + " size=" + zipLen);
-                if (!zipExists) { System.Diagnostics.Debug.WriteLine("[VLC] EXTRACT ABORT: bundled zip MISSING (copy " + Path.GetFileName(zip) + " beside the exe on RT)"); return; }
+                Logger.Diag("[VLC] zip path=" + zip + " exists=" + zipExists + " size=" + zipLen);
+                if (!zipExists) { Logger.Diag("[VLC] EXTRACT ABORT: bundled zip MISSING (copy " + Path.GetFileName(zip) + " beside the exe on RT)"); Logger.Diag("[VLC] bootstrap END in " + swBoot.ElapsedMilliseconds + "ms (aborted: zip missing)"); return; }
 
                 string target = FirstWritableBase();   // logs each candidate base's write-probe result
-                if (target == null) { System.Diagnostics.Debug.WriteLine("[VLC] EXTRACT ABORT: NO writable base (beside-exe/Documents/AppData all failed the write-probe)"); return; }
-                System.Diagnostics.Debug.WriteLine("[VLC] extract target=" + target + " freeDisk=" + FreeDiskMB(target) + "MB → extracting " + Path.GetFileName(zip));
+                if (target == null) { Logger.Diag("[VLC] EXTRACT ABORT: NO writable base (beside-exe/Documents/AppData all failed the write-probe)"); Logger.Diag("[VLC] bootstrap END in " + swBoot.ElapsedMilliseconds + "ms (aborted: no writable base)"); return; }
+                Logger.Diag("[VLC] extract target=" + target + " freeDisk=" + FreeDiskMB(target) + "MB → extracting " + Path.GetFileName(zip));
 
                 bool ok = false;
                 using (var splash = new PrepForm(() => { ok = Extract(zip, target, want); }))
@@ -66,11 +71,12 @@ namespace TelegArm.Core
                 {
                     string folder = Path.Combine(target, "libvlc");
                     VlcEnvironment.UseFolder(folder);
-                    System.Diagnostics.Debug.WriteLine("[VLC] LibVLC will init from " + folder);
+                    Logger.Diag("[VLC] LibVLC will init from " + folder);
                 }
-                else System.Diagnostics.Debug.WriteLine("[VLC] extraction failed → media unavailable until resolved");
+                else Logger.Diag("[VLC] extraction failed → media unavailable until resolved");
+                Logger.Diag("[VLC] bootstrap END in " + swBoot.ElapsedMilliseconds + "ms (FIRST-RUN extraction path, ok=" + ok + ")");
             }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[VLC] bootstrap error: " + ex.Message); }
+            catch (Exception ex) { Logger.Diag("[VLC] bootstrap error: " + ex.Message); }
         }
 
         // ── arch + candidate folders ──
@@ -100,7 +106,7 @@ namespace TelegArm.Core
             foreach (var b in CandidateBases())
             {
                 bool w = CanWrite(b);
-                System.Diagnostics.Debug.WriteLine("[VLC] write-probe " + b + " => " + (w ? "WRITABLE" : "no"));
+                Logger.Diag("[VLC] write-probe " + b + " => " + (w ? "WRITABLE" : "no"));
                 if (w && chosen == null) chosen = b;   // keep probing the rest for the log, but use the first writable
             }
             return chosen;
@@ -146,7 +152,7 @@ namespace TelegArm.Core
             string tmp = Path.Combine(baseDir, ".vlc_extract_" + Guid.NewGuid().ToString("N").Substring(0, 8));   // short tmp name → extra MAX_PATH headroom
             var sw = System.Diagnostics.Stopwatch.StartNew();
             // NO timeout — extraction is a one-time first-launch cost; a slow RT eMMC must be allowed to FINISH.
-            System.Diagnostics.Debug.WriteLine("[VLC] extract START (no timeout) → " + tmp);
+            Logger.Diag("[VLC] extract START (no timeout) → " + tmp);
             try
             {
                 // The zip root already CONTAINS a "libvlc" folder → extracting into tmp yields tmp/libvlc/.
@@ -156,7 +162,7 @@ namespace TelegArm.Core
                 // whole-extract failure.
                 ExtractZipManual(zipPath, tmp);
                 string staged = Path.Combine(tmp, "libvlc");
-                if (!HasCoreDlls(staged)) { System.Diagnostics.Debug.WriteLine("[VLC] EXTRACT FAILED after " + sw.ElapsedMilliseconds + "ms: staged folder missing core DLLs (" + staged + ")"); SafeDeleteDir(tmp); return false; }
+                if (!HasCoreDlls(staged)) { Logger.Diag("[VLC] EXTRACT FAILED after " + sw.ElapsedMilliseconds + "ms: staged folder missing core DLLs (" + staged + ")"); SafeDeleteDir(tmp); return false; }
 
                 File.WriteAllText(Path.Combine(staged, MarkerName), marker);
 
@@ -164,13 +170,21 @@ namespace TelegArm.Core
                 Directory.Move(staged, finalFolder);                            // atomic swap-in (no doubled libvlc/)
                 SafeDeleteDir(tmp);
 
-                int n = Directory.GetFiles(finalFolder, "*", SearchOption.AllDirectories).Length;
-                System.Diagnostics.Debug.WriteLine("[VLC] extract DONE in " + sw.ElapsedMilliseconds + "ms (" + n + " files) → " + finalFolder);
+                // BATCH-TA-0.1: same enumeration as before, now also summed for bytes — the device needs
+                // ms AND size to make the first-run extraction cost interpretable (a slow eMMC vs a big payload).
+                var extracted = Directory.GetFiles(finalFolder, "*", SearchOption.AllDirectories);
+                int n = extracted.Length;
+                long bytes = 0;
+                foreach (var f in extracted) { try { bytes += new FileInfo(f).Length; } catch { } }
+                long ms = sw.ElapsedMilliseconds;
+                Logger.Diag("[VLC] extract DONE in " + ms + "ms (" + n + " files, " + bytes + " bytes = "
+                    + (bytes / (1024 * 1024)) + " MB, " + (ms > 0 ? (bytes / 1024 / Math.Max(1, ms)).ToString() : "n/a")
+                    + " KB/ms) → " + finalFolder);
                 return HasCoreDlls(finalFolder);
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine("[VLC] EXTRACT FAILED after " + sw.ElapsedMilliseconds + "ms: " + ex);   // full exception (incl. inner/stack)
+                Logger.Diag("[VLC] EXTRACT FAILED after " + sw.ElapsedMilliseconds + "ms: " + ex);   // full exception (incl. inner/stack)
                 SafeDeleteDir(tmp);
                 return false;
             }
@@ -185,6 +199,9 @@ namespace TelegArm.Core
         {
             Directory.CreateDirectory(destRoot);
             int ok = 0, failed = 0, total = 0, processed = 0, maxPath = 0;
+            long bytes = 0;   // BATCH-TA-0.1: uncompressed bytes written — also reported when the extract FAILS
+                              // and Extract's DONE line therefore never prints.
+            var swEntries = System.Diagnostics.Stopwatch.StartNew();
             using (var fs = new FileStream(zipPath, FileMode.Open, FileAccess.Read, FileShare.Read))
             using (var archive = new ZipArchive(fs, ZipArchiveMode.Read))
             {
@@ -203,19 +220,21 @@ namespace TelegArm.Core
                         using (var os = new FileStream(dest, FileMode.Create, FileAccess.Write, FileShare.None))
                             es.CopyTo(os);
                         ok++;
+                        bytes += entry.Length;
                     }
                     catch (Exception ex)
                     {
                         failed++;
                         if (failed <= 3)   // first few in detail; avoids 390 noisy lines if the failure is systematic
-                            System.Diagnostics.Debug.WriteLine("[VLC] ENTRY FAILED (" + dest.Length + " chars) " + entry.FullName
+                            Logger.Diag("[VLC] ENTRY FAILED (" + dest.Length + " chars) " + entry.FullName
                                 + " → " + dest + " : " + ex.GetType().FullName + ": " + ex.Message
                                 + (failed == 1 ? " | " + ex.StackTrace : ""));
                     }
-                    if (processed % 130 == 0) System.Diagnostics.Debug.WriteLine("[VLC] extracting… " + processed + "/" + total);
+                    if (processed % 130 == 0) Logger.Diag("[VLC] extracting… " + processed + "/" + total);
                 }
             }
-            System.Diagnostics.Debug.WriteLine("[VLC] extract entries: " + ok + " ok, " + failed + " failed of " + total + " (longest dest=" + maxPath + " chars)");
+            Logger.Diag("[VLC] extract entries: " + ok + " ok, " + failed + " failed of " + total
+                + " in " + swEntries.ElapsedMilliseconds + "ms, " + bytes + " bytes (longest dest=" + maxPath + " chars)");
         }
 
         private static void SafeDeleteDir(string dir)

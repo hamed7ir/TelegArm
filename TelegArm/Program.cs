@@ -146,6 +146,11 @@ namespace TelegArm
 
         private static void Run()
         {
+            // BATCH-TA-0: start the cold-start clock before anything else, so every [BOOT] rung below is
+            // measured from the same origin. Emitting can only begin once FileLog.Init has registered the
+            // tee (a few lines down) — Logger.Diag simply drops anything raised before that.
+            PerfLog.StartBoot();
+
             // Crash capture FIRST — always on, independent of the diagnostic-logging toggle. Records to
             // crash.log (Documents-first) from all three unhandled-exception surfaces; zero cost until a crash.
             try { CrashLog.Install(); } catch { /* crash capture must never block startup */ }
@@ -157,6 +162,7 @@ namespace TelegArm
             // Re-log the resolved cache root now that the file listener is up (the normalizer's own line fires
             // during AppSettings load, before FileLog registered) — so the RT log shows which root won.
             try { System.Diagnostics.Debug.WriteLine("[CACHE] active cache root = " + AppSettings.Instance.MediaCacheFolder); } catch { }
+            PerfLog.Boot("Program.Run (logging up)");
 
             // DPI: declared HERE at runtime (no manifest), TOGGLE-CONTROLLED as of v0.9.0 (DPI-MODE-TOGGLE):
             //  • DEFAULT (DpiUnaware=false): SYSTEM-aware — sharp everywhere, but on a scaled display
@@ -243,13 +249,20 @@ namespace TelegArm
             });
 
             AccountStore.Init();   // read the active-account pointer / detect a legacy session before resuming
+            PerfLog.Boot("AccountStore.Init done → VlcBootstrap.EnsureReady");
 
             // Extract the bundled, matching-arch libVLC on first run (one-time) so audio/video work without
             // the user hand-placing a libvlc/ folder. Later launches skip it (version marker). Never throws.
             VlcBootstrap.EnsureReady();
+            // BATCH-TA-0: bracketed deliberately. This call is SYNCHRONOUS and runs BEFORE any window exists, so
+            // whatever it costs is dead time on a blank screen. VlcBootstrap's own [VLC] traces are Debug-only
+            // (stripped in Release), so without this rung the cost is invisible on the installed build — which is
+            // the only build that matters on RT, where the extract is slowest.
+            PerfLog.Boot("VlcBootstrap.EnsureReady done");
 
             var service = new TelegramService();
 
+            PerfLog.Boot("pre-UI done (vlc+accounts+settings) → Application.Run");
             if (TelegramService.SessionExists)
                 Application.Run(new MainForm(service, StartupLaunch));   // STARTUP: silent tray start when launched with --startup
             else
