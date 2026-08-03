@@ -10,6 +10,13 @@ ApiCredentials.Local.cs
 *.user
 *.suo
 
+# ── Native build residue ──────────────────────────────────────────────────
+# rlottie ships as a DLL only: the app loads it by P/Invoke ([DllImport], cdecl),
+# so the linker's import library (.lib) and export file (.exp) are never used —
+# not at build time, not at runtime. Only rlottie.dll is referenced by the csproj.
+TelegArm/rlottie/**/*.lib
+TelegArm/rlottie/**/*.exp
+
 # ── Sensitive runtime / auth material (if it ever lands in-tree) ──────────
 *.session
 TelegArm.session
@@ -25,14 +32,30 @@ TelegArm*.zip
 installer/Output/
 TelegArm-Setup-*.exe
 
+# ── Dev scratch / captures (never belong in the repo) ─────────────────────
+asyncvoid_report.txt
+blindspots.txt
+telegarm-debug.log
+crash.log
+*.ogg
+
 # ── Tooling / packages ────────────────────────────────────────────────────
 nuget.exe
 packages/
-telegarm-debug.log
 
-# ── Local Claude Code settings ────────────────────────────────────────────
-.claude/settings.local.json
-trayicon.ico
-trayicon-unread.ico
-TelegArm.png
-icon.ico
+# ── Internal docs + AI session memory (kept LOCAL — travels with the folder,
+#    deliberately NOT published; see .claude/NOTES-carried.md) ─────────────
+# Leading "/" = ROOT-ANCHORED, on purpose: a bare "BUILD.md" would also match
+# third-party/rlottie/BUILD.md (exactly the trap described at the bottom of this file).
+/mdfiles/
+/.claude/
+/CLAUDE.md
+/BUILD.md
+/STATE.md
+/INVARIANTS.md
+
+# ── DO NOT add unanchored asset names here ────────────────────────────────
+# A bare pattern like "icon.ico" matches at EVERY depth, which silently excluded
+# img-icon/{icon,trayicon,trayicon-unread}.ico + img-icon/TelegArm.png from the
+# repo — while TelegArm.csproj REQUIRES them (<ApplicationIcon> + <Content>), so a
+# fresh clone could not build. Anchor any future asset rule with a leading "/".

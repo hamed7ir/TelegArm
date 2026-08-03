@@ -1,6 +1,0 @@
-UI\EmojiPicker.cs::LoadPreview L315 -> top-level silent catch @ L413: catch { }
-UI\MainForm.cs::FlushCustomEmoji L2101 -> top-level silent catch @ L2119: catch { }
-UI\MainForm.cs::OpenMention L2155 -> top-level silent catch @ L2169: catch { }
-UI\MainForm.cs::StartCardThumbLoad L6071 -> top-level silent catch @ L6085: catch { }
-UI\MainForm.cs::StartCardDocThumbLoad L6088 -> top-level silent catch @ L6101: catch { }
-UI\ProfileForm.cs::LoadThumb L990 -> top-level silent catch @ L1001: catch { }
