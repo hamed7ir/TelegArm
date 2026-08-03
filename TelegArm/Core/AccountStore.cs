@@ -45,7 +45,7 @@ namespace TelegArm.Core
                 AccountContext.ActiveId = active;
                 AccountContext.LegacyMode = false;
                 WriteActive(active);
-                System.Diagnostics.Debug.WriteLine("[ACCT] active account loaded id=" + active + " (of " + ids.Count + ")");
+                TelegArm.Helpers.Logger.Diag("[ACCT] active account loaded id=" + active + " (of " + ids.Count + ")");
                 // [SESSPATH] 0.4: the accounts present on disk + the chosen active. Two ids here that later collide on
                 // ONE session path (see the client-open probe) is the corruption fingerprint.
                 if (TelegArm.Helpers.Logger.Enabled)
@@ -55,7 +55,7 @@ namespace TelegArm.Core
             {
                 AccountContext.ActiveId = 0;
                 AccountContext.LegacyMode = true;   // resume the flat session, migrate after the id is known
-                System.Diagnostics.Debug.WriteLine("[ACCT] legacy single-account session detected → will migrate");
+                TelegArm.Helpers.Logger.Diag("[ACCT] legacy single-account session detected → will migrate");
                 if (TelegArm.Helpers.Logger.Enabled)
                     TelegArm.Helpers.Logger.Diag("[SESSPATH] init legacyMode session=\"" + AccountContext.LegacySession + "\"");
             }
@@ -185,7 +185,7 @@ namespace TelegArm.Core
             MoveLegacyCache(id);
             WriteMeta(id, name);
             WriteActive(id);
-            System.Diagnostics.Debug.WriteLine("[ACCT] migrated legacy session+cache → accounts/" + id);
+            TelegArm.Helpers.Logger.Diag("[ACCT] migrated legacy session+cache → accounts/" + id);
         }
 
         /// <summary>Moves accounts/_pending/* into accounts/{id}/ after an add-account login resolved the id.</summary>
@@ -198,7 +198,7 @@ namespace TelegArm.Core
                     MoveFile(Path.Combine(AccountContext.PendingDir, f), Path.Combine(AccountContext.AccountDir(id), f));
                 WriteMeta(id, name);
                 WriteActive(id);
-                System.Diagnostics.Debug.WriteLine("[ACCT] relocated _pending → accounts/" + id);
+                TelegArm.Helpers.Logger.Diag("[ACCT] relocated _pending → accounts/" + id);
             }
             catch { }
         }
@@ -219,7 +219,7 @@ namespace TelegArm.Core
                 catch { System.Threading.Thread.Sleep(50); }
             }
             try { string s = Path.Combine(AccountContext.PendingDir, "session"); if (File.Exists(s)) File.Delete(s); } catch { }
-            System.Diagnostics.Debug.WriteLine("[ACCT] WARNING: _pending not fully cleared");
+            TelegArm.Helpers.Logger.Diag("[ACCT] WARNING: _pending not fully cleared");
         }
 
         /// <summary>True if a (stale) session lingers in accounts/_pending/ — it would be wrongly RESUMED by an
@@ -240,9 +240,15 @@ namespace TelegArm.Core
             // This removed Cache/{id}/thumbs|media (real directory deletion) — drop the created-this-run set so a
             // re-login of the same id in this run re-creates the folders instead of writing into deleted paths.
             MediaCache.InvalidateEnsured();
-            System.Diagnostics.Debug.WriteLine("[LOGOUT-TRACE] DeleteAccount: done id=" + id);
+            TelegArm.Helpers.Logger.Diag("[ACCT] DELETE done id=" + id + " (accounts/ + Cache/ removed)");
         }
 
+        // R7 / rail R4: this is THE engine that actually removes an account directory. It was entirely
+        // Debug.WriteLine, i.e. SILENT in Release — so on the installed build there was no positive record of a
+        // deletion at all, and the ONLY way to catch a rogue auto-delete was filesystem inspection after the fact.
+        // Every rung now emits [ACCT] DELETE via Trace, so a device log answers "who deleted this account, and
+        // was it the user?" directly. The legitimate caller is explicit logout (BeginLogoutCleanup); recovery
+        // must NEVER reach here — if a [RECOVERY] line is ever followed by one of these, that is the bug.
         private static async System.Threading.Tasks.Task DeleteDirAsync(string dir, string label)
         {
             if (string.IsNullOrEmpty(dir)) return;
@@ -250,18 +256,18 @@ namespace TelegArm.Core
             {
                 try
                 {
-                    if (!Directory.Exists(dir)) { System.Diagnostics.Debug.WriteLine("[LOGOUT-TRACE] DeleteAccount: " + label + " already gone"); return; }
+                    if (!Directory.Exists(dir)) { TelegArm.Helpers.Logger.Diag("[ACCT] DELETE: " + label + " already gone"); return; }
                     Directory.Delete(dir, true);
-                    System.Diagnostics.Debug.WriteLine("[LOGOUT-TRACE] DeleteAccount: deleted " + label);
+                    TelegArm.Helpers.Logger.Diag("[ACCT] DELETE: removed " + label + " \"" + dir + "\"");
                     return;
                 }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine("[LOGOUT-TRACE] DeleteAccount: " + label + " delete retry " + attempt + " (locked: " + ex.Message + ")");
+                    TelegArm.Helpers.Logger.Diag("[ACCT] DELETE: " + label + " retry " + attempt + "/6 (locked: " + ex.Message + ")");
                     await System.Threading.Tasks.Task.Delay(150);
                 }
             }
-            System.Diagnostics.Debug.WriteLine("[LOGOUT-TRACE] WARNING: " + label + " could not be deleted (still locked)");
+            TelegArm.Helpers.Logger.Diag("[ACCT] DELETE WARNING: " + label + " could not be deleted (still locked)");
         }
 
         private static void MoveLegacyCache(long id)
@@ -301,7 +307,7 @@ namespace TelegArm.Core
                 catch { System.Threading.Thread.Sleep(60); }
             }
             try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
-            System.Diagnostics.Debug.WriteLine("[ACCT] WARNING: move failed " + from + " → " + to);
+            TelegArm.Helpers.Logger.Diag("[ACCT] WARNING: move failed " + from + " → " + to);
             return false;
         }
 
@@ -352,7 +358,10 @@ namespace TelegArm.Core
                 catch (IOException) { await System.Threading.Tasks.Task.Delay(100).ConfigureAwait(false); }   // still locked → wait + retry
                 catch { return; }                                                                 // perms/other → don't block recovery
             }
-            System.Diagnostics.Debug.WriteLine("[SESSION] WaitSessionUnlocked timed out id=" + id + " (proceeding)");
+            // R7: Logger.Diag (Trace), NOT Debug — this is the ONLY signal that the cold reopen went ahead
+            // against a session file that is still locked, i.e. the exact two-client window that corrupts it.
+            // On Release it was silent, so a device run could not tell "unlocked cleanly" from "gave up".
+            TelegArm.Helpers.Logger.Diag("[RECOVERY] WaitSessionUnlocked TIMED OUT id=" + id + " (proceeding — two-client risk)");
         }
 
         /// <summary>ACCOUNT-RECOVERY-SAFETY (Bug 2): a genuinely-unreadable session is MOVED ASIDE, NEVER deleted — renames
@@ -371,10 +380,12 @@ namespace TelegArm.Core
                 for (int i = 1; Directory.Exists(dst); i++) dst = src + ".corrupt-" + stamp + "_" + i;   // never overwrite an earlier backup
                 for (int attempt = 0; attempt < 8; attempt++)                                            // a just-released handle may linger briefly
                 {
-                    try { Directory.Move(src, dst); System.Diagnostics.Debug.WriteLine("[SESSION] corrupt account dir MOVED ASIDE (not deleted): " + dst); return dst; }
+                    // R7: [RECOVERY] via Logger.Diag so the MOVED-ASIDE confirmation survives Release — it is the
+                    // positive proof, on-device, that recovery preserved the account instead of deleting it.
+                    try { Directory.Move(src, dst); TelegArm.Helpers.Logger.Diag("[RECOVERY] MOVED ASIDE dir id=" + id + " → \"" + dst + "\" (PRESERVED, NOT deleted)"); return dst; }
                     catch { System.Threading.Thread.Sleep(60); }
                 }
-                System.Diagnostics.Debug.WriteLine("[SESSION] WARNING: could not move corrupt account dir aside id=" + id + " → LEFT IN PLACE (still NOT deleted)");
+                TelegArm.Helpers.Logger.Diag("[RECOVERY] move-aside FAILED id=" + id + " after 8 attempts → LEFT IN PLACE (still NOT deleted)");
                 return null;
             }
             catch { return null; }

@@ -93,7 +93,33 @@ namespace TelegArm.Helpers
                   .Append(" usr=").Append(GetGuiResources(proc, GR_USEROBJECTS));
             }
             catch { }
-            Debug.WriteLine(sb.ToString());
+            // R7: Logger.Diag (Trace) — Debug.WriteLine is STRIPPED from Release, so the whole [PERF]
+            // line was invisible in the installed build, which is where the RT numbers actually matter.
+            Logger.Diag(sb.ToString());
+        }
+
+        // ─────────────────────────────────────────────────────────────────────────────────────────────
+        //  COLD-START LADDER (BATCH-TA-0). The app had NO boot timing on any build: PerfLog measures only
+        //  steady-state paint/measure/update buckets, and everything emitted via Debug.WriteLine vanished
+        //  from Release. Without this ladder every load-time change is unfalsifiable on the RT device.
+        //  Emits through Logger.Diag (Trace) so it SURVIVES Release, self-gated by Logger.Enabled.
+        // ─────────────────────────────────────────────────────────────────────────────────────────────
+
+        private static Stopwatch _boot;
+
+        /// <summary>Starts the cold-start clock. Called once at the very top of Program.Run, BEFORE any
+        /// logging sink exists — the first <see cref="Boot"/> line lands once FileLog.Init has run.</summary>
+        public static void StartBoot()
+        {
+            if (_boot == null) _boot = Stopwatch.StartNew();
+        }
+
+        /// <summary>One rung of the cold-start ladder: "[BOOT] +1234ms &lt;phase&gt;". Cold sites only (a
+        /// handful per launch), so no pre-gate is needed — Logger.Diag drops the line when logging is off.</summary>
+        public static void Boot(string phase)
+        {
+            if (_boot == null) return;   // Boot() before StartBoot() → nothing to measure against
+            Logger.Diag("[BOOT] +" + _boot.ElapsedMilliseconds + "ms " + phase);
         }
 
         private static void Bucket(StringBuilder sb, string name, P p)

@@ -351,20 +351,29 @@ namespace TelegArm.UI
 
         public MainForm(TelegramService service, bool startMinimized = false)
         {
+            PerfLog.Boot("MainForm ctor ENTER");
             _activeService = service;
             AvatarStore.SetActive(_service.Avatars);   // MULTI-ACCOUNT: the active account's store is the ambient .Current
             _avatars.AvatarLoaded += OnAvatarLoaded;    // (_avatars ⇒ _service.Avatars — the active service's store)
             PeerTitleChanged += OnPeerTitleChanged;     // RELEASE-FIXES-V11 (H1): live row/header refresh on a rename
 
+            // BATCH-TA-0.1: the sub-stamps proved BuildUi is only ~120 ms — the bulk of the pre-network cold
+            // start is HERE, between ctor entry and BuildUi. MaterialSkinManager.Instance is the singleton's
+            // first touch (it loads its OWN embedded Roboto set); ApplyTheme + the icon decode follow.
+            PerfLog.Boot("  ctor: before MaterialSkinManager.Instance");
             _skin = MaterialSkinManager.Instance;
+            PerfLog.Boot("  ctor: MaterialSkinManager.Instance resolved");
             _skin.AddFormToManage(this);
+            PerfLog.Boot("  ctor: AddFormToManage done");
             ApplyTheme();
+            PerfLog.Boot("  ctor: ApplyTheme done");
 
             // Font scaling only; never Dpi/None. MaterialSkin.2 + system-DPI awareness.
             AutoScaleMode = AutoScaleMode.Font;
 
             Text = "TelegArm";   // taskbar / alt-tab identity — the tall title action bar that drew it is removed below
             try { Icon = System.Drawing.Icon.ExtractAssociatedIcon(System.Windows.Forms.Application.ExecutablePath); } catch { }
+            PerfLog.Boot("  ctor: window icon decoded (ExtractAssociatedIcon)");
             ClientSize = new Size(960, 600);
             MinimumSize = new Size(720, 480);
             StartPosition = FormStartPosition.CenterScreen;
@@ -372,6 +381,7 @@ namespace TelegArm.UI
             // holds min/max/close → a slim caption that just fits the buttons (reclaims ~40px of title height). Drag/
             // resize/snap stay in MaterialForm's WndProc; the title text no longer draws in the caption (still taskbar).
             FormStyle = MaterialForm.FormStyles.ActionBar_None;
+            PerfLog.Boot("  ctor: FormStyle set (reflected, non-const)");
             // STARTUP-SETTING: a --startup (auto-launch-at-login) start is SILENT — minimized + off-taskbar, no full
             // window. OnLoad still fires (the form is shown, just minimized) so the session resumes + the tray icon
             // appears (SetupTray, post-auth); a tray click restores via RestoreFromTray (which re-enables the taskbar).
@@ -379,6 +389,11 @@ namespace TelegArm.UI
 
             BuildUi();
             ApplyPanelColors();
+            // BATCH-TA-0: splits the constructor's cost. BuildUi triggers FontHelper's static ctor (five embedded
+            // TTFs registered with GDI+ AND gdi32) plus the whole control tree; RestorePhotoCacheIndex is a
+            // SYNCHRONOUS Directory.GetFiles over Cache/{id}/media on the UI thread, unbounded in the cache size.
+            // Both run before any window is shown, so the split decides which one is worth moving off-thread.
+            PerfLog.Boot("BuildUi + ApplyPanelColors done → RestorePhotoCacheIndex");
             RestorePhotoCacheIndex();
             // TOUCH-FREEZE: UI-hang confessor — a frozen pump writes its own stack to crash.log.
             try { TelegArm.Helpers.HangWatch.Start(this); } catch { /* diagnostics must never block startup */ }
@@ -438,6 +453,7 @@ namespace TelegArm.UI
                 _photoCachePaths.Clear();
                 _currentChatMessages.Clear();
             };
+            PerfLog.Boot("MainForm ctor EXIT (BuildUi + RestorePhotoCacheIndex done)");
         }
 
         protected override bool ProcessCmdKey(ref System.Windows.Forms.Message msg, Keys keyData)
@@ -497,6 +513,10 @@ namespace TelegArm.UI
 
         private void BuildUi()
         {
+            // BATCH-TA-0.1: BuildUi measured ~1.9 s of a ~2.1 s pre-network cold start on the x64 dev box.
+            // These stamps attribute that; they add no logic and reorder nothing. BuildUi itself is only a
+            // shell (SplitContainer + two builders), so the cost is inside BuildLeftPanel/BuildRightPanel.
+            PerfLog.Boot("  BuildUi ENTER");
             _split = new SplitContainer
             {
                 Dock = DockStyle.Fill,
@@ -510,13 +530,17 @@ namespace TelegArm.UI
             _split.Panel1MinSize = 240;
             _split.Panel2MinSize = 360;
             try { _split.SplitterDistance = 300; } catch { /* width too small yet */ }
+            PerfLog.Boot("  BuildUi: SplitContainer ready");
 
             BuildLeftPanel();
+            PerfLog.Boot("  BuildUi: BuildLeftPanel done");
             BuildRightPanel();
+            PerfLog.Boot("  BuildUi EXIT (BuildRightPanel done)");
         }
 
         private void BuildLeftPanel()
         {
+            PerfLog.Boot("    BuildLeftPanel ENTER");
             // FOLDER-SIDEBAR: layout style is decided ONCE here (restart-apply). In BOTH modes the chat-list
             // host is created identically and placed in its FINAL parent before its handle exists — no live
             // reparent, so TouchScroller registration, the freeze guards, host buffering, and the
@@ -530,6 +554,9 @@ namespace TelegArm.UI
                 Margin = new Padding(2, 12, 10, 6)
             };
             _searchBox.TextChanged += (s, e) => OnSearchTextChanged();
+            // First MaterialTextBox2 in the process — MaterialSkin resolves its own font stack here, so this
+            // rung isolates that from our control-tree construction.
+            PerfLog.Boot("    BuildLeftPanel: first MaterialTextBox2 constructed");
 
             _searchDebounce = new Timer { Interval = 500 };
             _searchDebounce.Tick += (s, e) => DoMessageSearch();
@@ -674,10 +701,12 @@ namespace TelegArm.UI
             };
             // STORY-TRAY-HIDE: touch pans set AutoScrollPosition WITHOUT a Scroll event → gate on TouchScroller too.
             TouchScroller.Scrolled += surface => { if (surface == _chatListPanel) UpdateStoryTrayVisibility(); };
+            PerfLog.Boot("    BuildLeftPanel EXIT");
         }
 
         private void BuildRightPanel()
         {
+            PerfLog.Boot("    BuildRightPanel ENTER");
             var layout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -808,6 +837,10 @@ namespace TelegArm.UI
             bottomBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 48));   // 4 mic
             bottomBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96));   // 5 send
 
+            // FIRST FontHelper call in BuildUi. FontHelper's static ctor is LAZY and registers five embedded
+            // TTFs with BOTH GDI+ (PrivateFontCollection) and gdi32 (AddFontMemResourceEx) — if that cost is
+            // in the ~1.9 s, it lands between these two rungs.
+            PerfLog.Boot("    BuildRightPanel: before first FontHelper.Ui call");
             _botMenuButton = new Button
             {
                 Text = "", Anchor = AnchorStyles.None, Width = 44, Height = 38, Visible = false,
@@ -815,6 +848,7 @@ namespace TelegArm.UI
                 BackColor = _dark ? Color.FromArgb(54, 54, 58) : Color.FromArgb(225, 225, 228),
                 ForeColor = _dark ? Color.FromArgb(225, 225, 228) : Color.FromArgb(40, 40, 44)
             };
+            PerfLog.Boot("    BuildRightPanel: after first FontHelper.Ui call (fonts registered)");
             _botMenuButton.FlatAppearance.BorderSize = 0;
             _botMenuButton.Click += (s, e) => ShowBotMenu();
             // The "≡" menu icon is DRAWN (3 accent lines, like the hamburger) — a font "≡" substitutes an ugly
@@ -1041,6 +1075,7 @@ namespace TelegArm.UI
             };
 
             AudioPlayer.StateChanged += OnAudioStateChanged;
+            PerfLog.Boot("    BuildRightPanel EXIT");
         }
 
         private void OnAudioStateChanged()
@@ -3702,6 +3737,7 @@ namespace TelegArm.UI
         protected override async void OnLoad(EventArgs e)
         {
             base.OnLoad(e);
+            PerfLog.Boot("MainForm.OnLoad → ResumeSessionAsync");
             await ResumeSessionAsync();
         }
 
@@ -3726,7 +3762,7 @@ namespace TelegArm.UI
                 if (!await FinalizeNewAccountAsync(AccountContext.LegacyMode)) { await OnConnectFailedAsync(); return; }
 
             HideConnecting();
-            System.Diagnostics.Debug.WriteLine("[CONN] connected — entering app");
+            Logger.Diag("[CONN] connected — entering app");
             SetupTray();              // only once we're authorized and staying on MainForm
             await AfterConnectAsync();
         }
@@ -3743,14 +3779,14 @@ namespace TelegArm.UI
             for (int attempt = 1; ; attempt++)
             {
                 if (_abortConnect != null && _abortConnect.IsCancellationRequested)   // user tapped Cancel on a switch
-                { System.Diagnostics.Debug.WriteLine("[ACCT] connect loop aborted by user"); return false; }
+                { Logger.Diag("[ACCT] connect loop aborted by user"); return false; }
 
                 if (_retryNowCts != null) { try { _retryNowCts.Dispose(); } catch { } }
                 _retryNowCts = new System.Threading.CancellationTokenSource();   // "Retry now" cancels this (attempt + backoff)
                 var token = _retryNowCts.Token;
 
                 ShowConnecting(attempt == 1 ? firstMsg : "Waiting for network — make sure your VPN is on.");
-                System.Diagnostics.Debug.WriteLine("[CONN] connect attempt " + attempt);
+                Logger.Diag("[CONN] connect attempt " + attempt);
 
                 var loginTask = _service.LoginAsync(silentResume: true);   // silent: stored phone, no code/password block; MAY hang
                 var waiter = System.Threading.Tasks.Task.Delay(TelegramService.ConnectAttemptTimeoutMs, token);
@@ -3762,13 +3798,13 @@ namespace TelegArm.UI
                 {
                     Exception failure = null;
                     try { await loginTask; } catch (Exception ex) { failure = ex; }   // observe success/exception
-                    if (_service.IsAuthorized) return true;                            // connected + authorized
+                    if (_service.IsAuthorized) { PerfLog.Boot("LoginAsync returned AUTHORIZED (attempt " + attempt + ")"); return true; }   // connected + authorized
 
                     if (failure != null)
                     {
                         bool corrupt = IsCorruptSessionError(failure);
                         bool needsLogin = IsNeedsLoginError(failure) || _service.NeedsInteractiveLogin || IsAuthError(failure);
-                        System.Diagnostics.Debug.WriteLine("[CONN] attempt " + attempt + " failed: " + failure.Message
+                        Logger.Diag("[CONN] attempt " + attempt + " failed: " + failure.Message
                             + (corrupt ? "  [SESSION unreadable → recover]"
                                : needsLogin ? "  [no usable session/phone → stop; caller recovers]"
                                : "  [hard failure " + (hardFailures + 1) + "/" + maxHardFailures + "]"));
@@ -3781,7 +3817,7 @@ namespace TelegArm.UI
                         hardFailures++;
                         await _service.DiscardFaultedClientAsync();
                         if (hardFailures >= maxHardFailures)
-                        { System.Diagnostics.Debug.WriteLine("[CONN] gave up after " + hardFailures + " non-network failures → caller recovers"); return false; }
+                        { Logger.Diag("[CONN] gave up after " + hardFailures + " non-network failures → caller recovers"); return false; }
                     }
                     else
                     {
@@ -3794,7 +3830,7 @@ namespace TelegArm.UI
                 else
                 {
                     bool userRetry = token.IsCancellationRequested;
-                    System.Diagnostics.Debug.WriteLine("[CONN] attempt " + attempt + (userRetry
+                    Logger.Diag("[CONN] attempt " + attempt + (userRetry
                         ? " interrupted by Retry-now → tearing down hung attempt"
                         : " timed out after " + (TelegramService.ConnectAttemptTimeoutMs / 1000) + "s → tearing down hung attempt"));
                     await _service.TeardownHungConnectAsync();
@@ -3804,9 +3840,9 @@ namespace TelegArm.UI
 
                 int secs = Math.Max(1, backoffMs / 1000);
                 SetConnectingDetail("Waiting for network — make sure your VPN is on.\nRetrying in " + secs + "s… (or tap Retry now)");
-                System.Diagnostics.Debug.WriteLine("[CONN] backoff " + secs + "s before next attempt");
+                Logger.Diag("[CONN] backoff " + secs + "s before next attempt");
                 try { await System.Threading.Tasks.Task.Delay(backoffMs, token); }
-                catch (OperationCanceledException) { System.Diagnostics.Debug.WriteLine("[CONN] Retry-now → retrying immediately"); }
+                catch (OperationCanceledException) { Logger.Diag("[CONN] Retry-now → retrying immediately"); }
                 backoffMs = Math.Min(backoffMs * 2, TelegramService.ConnectMaxBackoffMs);
             }
         }
@@ -3830,7 +3866,7 @@ namespace TelegArm.UI
             // backfill below); the 400ms warm stagger keeps the overlapping warm connects from hammering RT. Warmed
             // ONCE (the old end-of-method call is removed). Idempotent + gated by WarmConnections.
             var __ = WarmOthersAsync();
-            if (!rebind) await _service.SeedUpdateManagerAsync();   // seed the manager's baseline — REQUIRED for live updates
+            if (!rebind) { await _service.SeedUpdateManagerAsync(); PerfLog.Boot("SeedUpdateManagerAsync RETURNED (full dialog sweep done)"); }   // seed the manager's baseline — REQUIRED for live updates
             // NOTIFY-FIX: persist the freshly-seeded update state NOW. Otherwise the state file only updates at clean
             // exit/switch, and a crash-restart re-attaches from a stale pts → getDifference replays the whole previous
             // session's tail through the notify gate.
@@ -3860,6 +3896,7 @@ namespace TelegArm.UI
             // sooner and an early switch can wait-then-rebind. Warmed once, earlier. This is still where the active
             // account's own startup completes; re-warming the just-left account happens via that earlier kick too.)
             LoadStoriesAsync();   // STORIES-BUILD-1: fetch the story tray (fire-and-forget; tray hidden if none). Runs on cold connect AND rebind.
+            PerfLog.Boot("AfterConnectAsync RETURNED (rebind=" + rebind + ") — startup complete");
         }
 
         /// <summary>Keys a just-resumed temp session to accounts/{Me.id}/: dispose (unlock the temp session),
@@ -3935,17 +3972,28 @@ namespace TelegArm.UI
             try
             {
                 var svc = await TelegramService.CreateWarmServiceAsync(id, RouteUpdate);
-                if (IsDisposed) { if (svc != null) svc.DisposeWarmService(); return null; }
+                if (IsDisposed) { if (svc != null) { try { await svc.DisposeWarmServiceAsync(); } catch { } } return null; }
                 if (svc != null && id != AccountContext.ActiveId && !_warm.ContainsKey(id))
                 {
                     _warm[id] = svc;
-                    System.Diagnostics.Debug.WriteLine("[WARMCONN] warm id=" + id + " READY in " + sw.ElapsedMilliseconds + "ms");   // tune WarmupWaitMs against this
+                    Logger.Diag("[WARMCONN] warm id=" + id + " READY in " + sw.ElapsedMilliseconds + "ms");   // tune WarmupWaitMs against this
                     return svc;
                 }
-                if (svc != null) svc.DisposeWarmService();   // became active mid-warm, or already warm → drop the extra
+                // ACCOUNT-RECOVERY-SAFETY (Bug 1, FOURTH drop site — was still the OLD synchronous path).
+                // This branch fires when the warm target BECAME THE ACTIVE ACCOUNT mid-warm-up, i.e. exactly when
+                // the active service is opening — or is about to open — the SAME accounts/{id}/session file. The
+                // sync DisposeWarmService calls Client.Dispose() with no socket-abort and does NOT await handle
+                // release, which is the documented recipe for AUTH_KEY_DUPLICATED / a mid-write corruption. The
+                // three switch drop sites were fixed in v1.1; this one was missed.
+                // ⚠ SHORTENED, NOT CLOSED: CreateWarmServiceAsync never re-checks ActiveId, so the warm client has
+                // already held the session for the whole warm-up by the time we get here. Awaiting the teardown
+                // ends the overlap promptly; it does not prevent the overlap. Detector = two [SESSPATH] lines
+                // (client-open / warm-open) carrying the SAME session path. Closing it needs an ActiveId re-check
+                // or a cancellation token inside CreateWarmServiceAsync — deliberately OUT OF SCOPE here.
+                if (svc != null) { try { await svc.DisposeWarmServiceAsync(); } catch { } }   // became active mid-warm, or already warm → drop the extra
                 return null;
             }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[WARMCONN] warm-one id=" + id + " error: " + ex.Message); return null; }
+            catch (Exception ex) { Logger.Diag("[WARMCONN] warm-one id=" + id + " error: " + ex.Message); return null; }
             finally { _warming.Remove(id); }
         }
 
@@ -4012,7 +4060,7 @@ namespace TelegArm.UI
                     _allChats.Sort((a, b) => b.Date.CompareTo(a.Date));
                     RenderChatList(_searchBox != null ? _searchBox.Text : "");
                 }
-                catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[WARMCONN] tier-1 pre-render failed: " + ex.Message); }
+                catch (Exception ex) { Logger.Diag("[WARMCONN] tier-1 pre-render failed: " + ex.Message); }
             }
             await AfterConnectAsync(rebind: true);     // fast dialog refresh + backfill + watchdog; SKIPS UM attach/seed (ws has both)
         }
@@ -4023,12 +4071,16 @@ namespace TelegArm.UI
             PersistDraftForCurrentChat();   // DRAFTS: save the open chat's draft to the OUTGOING account before _service swaps
             long prevId = AccountContext.ActiveId;
             string prevName = _service.Me != null ? DisplayName(_service.Me) : null;
-            System.Diagnostics.Debug.WriteLine("[ACCT] switch start → " + targetId);
+            Logger.Diag("[ACCT] switch start → " + targetId);
             // [SESSPATH] 0.3: the switch intent + the target's resolved session file + the CURRENT service/global ids.
             if (TelegArm.Helpers.Logger.Enabled)
                 TelegArm.Helpers.Logger.Diag("[SESSPATH] switch-start from=" + prevId + " to=" + targetId
                     + " targetSession=\"" + System.IO.Path.Combine(AccountContext.AccountDir(targetId), "session") + "\""
                     + " serviceAcctId=" + _service.AccountId + " globalActiveId=" + AccountContext.ActiveId);
+            // BATCH-TA-0 (A5): LogPaths was DEAD CODE — defined, never called. It adds exists= and bytes=, which the
+            // switch-start line above does NOT print, and a 0-byte session is exactly what distinguishes a genuinely
+            // corrupt account from a merely contended one. Wired here (target) and at recovery entry.
+            AccountContext.LogPaths(targetId, "switch-start");
 
             int myGen = ++_switchGen;   // WARMUP-FIX B: a newer switch supersedes this one's warm-up wait / commit
             _switchInProgress = true; _switchAborted = false;
@@ -4039,11 +4091,11 @@ namespace TelegArm.UI
             if (ws != null && ws.IsAuthorized && await ws.PingAliveAsync())
             {
                 if (myGen != _switchGen) { _warm[targetId] = ws; return; }   // superseded during the ping → return it to the pool
-                System.Diagnostics.Debug.WriteLine("[WARMCONN] REBIND (seamless) → " + targetId + " — no overlay/teardown/handshake");
+                Logger.Diag("[WARMCONN] REBIND (seamless) → " + targetId + " — no overlay/teardown/handshake");
                 _switchInProgress = false;
                 await RebindToWarmAsync(ws);
                 HideSwitchOverlay();   // clean up any overlay a superseded prior switch left showing
-                System.Diagnostics.Debug.WriteLine("[ACCT] switch done (rebind) → " + targetId);
+                Logger.Diag("[ACCT] switch done (rebind) → " + targetId);
                 return;
             }
             // ACCOUNT-RECOVERY-SAFETY (Bug 1): warm but not adoptable → AWAIT its full teardown (socket reset + dispose +
@@ -4057,7 +4109,7 @@ namespace TelegArm.UI
             System.Threading.Tasks.Task<TelegramService> warming;
             if (_warming.TryGetValue(targetId, out warming) && warming != null)
             {
-                System.Diagnostics.Debug.WriteLine("[WARMCONN] target " + targetId + " mid-warm-up → wait ≤" + WarmupWaitMs + "ms, then rebind");
+                Logger.Diag("[WARMCONN] target " + targetId + " mid-warm-up → wait ≤" + WarmupWaitMs + "ms, then rebind");
                 ShowSwitchOverlay(targetId, targetName);
                 await System.Threading.Tasks.Task.WhenAny(warming, System.Threading.Tasks.Task.Delay(WarmupWaitMs));
                 if (myGen != _switchGen) return;   // user switched again → the newer switch owns the overlay + state
@@ -4065,15 +4117,15 @@ namespace TelegArm.UI
                 if (ws2 != null && ws2.IsAuthorized && await ws2.PingAliveAsync())
                 {
                     if (myGen != _switchGen) { _warm[targetId] = ws2; return; }
-                    System.Diagnostics.Debug.WriteLine("[WARMCONN] REBIND (after warm-up wait) → " + targetId);
+                    Logger.Diag("[WARMCONN] REBIND (after warm-up wait) → " + targetId);
                     _switchInProgress = false;
                     await RebindToWarmAsync(ws2);
                     HideSwitchOverlay();
-                    System.Diagnostics.Debug.WriteLine("[ACCT] switch done (rebind-after-wait) → " + targetId);
+                    Logger.Diag("[ACCT] switch done (rebind-after-wait) → " + targetId);
                     return;
                 }
                 if (ws2 != null) { try { await ws2.DisposeWarmServiceAsync(); } catch { } }   // AWAIT release before cold reopen (Bug 1)
-                System.Diagnostics.Debug.WriteLine("[WARMCONN] warm-up wait didn't land for " + targetId + " → cold");
+                Logger.Diag("[WARMCONN] warm-up wait didn't land for " + targetId + " → cold");
                 // overlay stays up; the cold path below reuses it (idempotent) + adds the connecting card
             }
 
@@ -4106,7 +4158,7 @@ namespace TelegArm.UI
             if (!connected && _switchAborted && prevId != 0)
             {
                 // Cancel → restore the previously-active account (it's still valid; just reconnect on it).
-                System.Diagnostics.Debug.WriteLine("[ACCT] switch cancelled → restoring active=" + prevId);
+                Logger.Diag("[ACCT] switch cancelled → restoring active=" + prevId);
                 _abortConnect = null;                 // the restore must NOT auto-abort
                 AccountContext.ActiveId = prevId;
                 _service.AccountId = prevId;           // MULTI-ACCOUNT (3b): restore → resolve the previous account's paths
@@ -4125,7 +4177,7 @@ namespace TelegArm.UI
             HideConnecting();
             await AfterConnectAsync();
             HideSwitchOverlay();
-            System.Diagnostics.Debug.WriteLine("[ACCT] switch done → " + targetId);
+            Logger.Diag("[ACCT] switch done (cold) → " + targetId);
         }
 
         /// <summary>Clears the ACTIVE account's on-screen VIEW + in-memory render model (open chat, chat list,
@@ -4476,6 +4528,9 @@ namespace TelegArm.UI
             long badId = AccountContext.ActiveId;
             bool legacy = AccountContext.LegacyMode || badId == 0;
             bool stillCorrupt = true;   // we were invoked because a corrupt signal fired; the retry may clear it
+            // BATCH-TA-0 (A5): exists= / bytes= at recovery entry — a 0-byte session is the signature of the
+            // truncating two-client race, and nothing else in the [RECOVERY] trace reports the file's size.
+            AccountContext.LogPaths(badId, "recover-entry");
 
             // (1) CLEAN RETRY (once per account, real accounts only). A "corrupt" connect is USUALLY transient contention —
             // a just-dropped warm client's handle still releasing, or a mid-write from the switch race — not permanent rot.
@@ -4606,7 +4661,7 @@ namespace TelegArm.UI
             if (text.Length > 160) text = text.Substring(0, 160) + "…";
 
             _lastNotifiedAccountId = acctId; _lastNotifiedPeerId = peerId;
-            System.Diagnostics.Debug.WriteLine("[NOTIFY-BG] toast acct=" + acctId + " peer=" + peerId + " msg=" + m.ID);
+            Logger.Diag("[NOTIFY-BG] toast acct=" + acctId + " peer=" + peerId + " msg=" + m.ID);
             try { _notifyIcon.ShowBalloonTip(4000, acctName + " · " + chatTitle, text, ToolTipIcon.None); } catch { /* tray gone */ }
         }
 
@@ -5522,6 +5577,7 @@ namespace TelegArm.UI
             {
                 _chatTitle.Text = "Loading chats…";
                 var dialogs = await _service.GetDialogsAsync();
+                PerfLog.Boot("Messages_GetDialogs RESPONSE (first page)");
 
                 _allChats.Clear();
                 _allChats.AddRange(BuildDialogEntries(dialogs));
@@ -5626,7 +5682,13 @@ namespace TelegArm.UI
             if (keepY > 0) { try { _chatListPanel.AutoScrollPosition = new Point(0, keepY); } catch { } }
             RefreshFolderBadges();   // FOLDER-SIDEBAR: keep per-folder badges live on whichever navigator is shown
             PerfLog.Rec(PerfLog.P.RenderChatList, __t);
+            // BATCH-TA-0: FIRST paint only — this is time-to-first-usable-chat-list, the number the whole
+            // load-time effort is judged on. Later rebuilds are counted by the [PERF] fullRender bucket.
+            if (!_firstChatListPainted) { _firstChatListPainted = true; PerfLog.Boot("FIRST chat list PAINTED (rows=" + _chatListPanel.Controls.Count + ")"); }
         }
+
+        /// <summary>BATCH-TA-0 cold-start ladder: latches the first chat-list paint so the [BOOT] rung fires once.</summary>
+        private bool _firstChatListPainted;
 
         private void RenderChatListCore(string filter)
         {
@@ -12194,8 +12256,8 @@ namespace TelegArm.UI
         /// <summary>One [NOTIFY] line per gate decision (Logger.Enabled-gated; nothing per tick).</summary>
         private static void NotifyLog(string what, long peerId, int msgId, string reason)
         {
-            if (!Logger.Enabled) return;
-            System.Diagnostics.Debug.WriteLine("[NOTIFY] " + what + " peer=" + peerId + " msg=" + msgId
+            if (!Logger.Enabled) return;   // pre-gate: skip the string building entirely when logging is off
+            Logger.Diag("[NOTIFY] " + what + " peer=" + peerId + " msg=" + msgId
                 + (reason != null ? " reason=" + reason : ""));
         }
 
