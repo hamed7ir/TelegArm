@@ -2397,6 +2397,12 @@ namespace TelegArm.Core
         public async System.Threading.Tasks.Task TeardownForSwitchAsync(int timeoutMs = 10000)
         {
             TearingDown = true;   // before anything lets go of the client (TEARDOWN-HYGIENE 1.2)
+            // BATCH-TA-4 (A3): the teardown had NO trace at all, which is why the device run's two opens of one
+            // session path 71 s apart could only be explained by INFERENCE ("the add-account flow must have torn
+            // the first client down in between") rather than proven from the log. These two lines make the
+            // release an observable event, so the [SESSPATH] same-path fingerprint becomes decidable: two opens
+            // of one path with a teardown between them is correct; without one it is the two-client bug.
+            TelegArm.Helpers.Logger.Diag("[ACCT] teardown ENTER acct=" + AccountId + " session=\"" + SessionPath + "\" (switch: keeps the session, releases the handle)");
             System.Diagnostics.Debug.WriteLine("[CONN] client disposed reason=acct-switch");
             StopConnectionWatchdog();
             try { if (Updates != null) Updates.SaveState(UpdateStatePath); } catch { }
@@ -2420,9 +2426,11 @@ namespace TelegArm.Core
                     try { client.Dispose(); } catch { }
                 });
                 var done = await System.Threading.Tasks.Task.WhenAny(teardown, System.Threading.Tasks.Task.Delay(timeoutMs));
-                if (done == teardown) System.Diagnostics.Debug.WriteLine("[ACCT] teardown complete (session flushed, handle released)");
-                else { System.Diagnostics.Debug.WriteLine("[ACCT] WARNING: teardown timed out (" + timeoutMs + "ms) — session handle may linger briefly"); SwallowTaskFault(teardown); }
+                if (done == teardown) TelegArm.Helpers.Logger.Diag("[ACCT] teardown complete (session flushed, handle released)");
+                else { TelegArm.Helpers.Logger.Diag("[ACCT] WARNING: teardown TIMED OUT (" + timeoutMs + "ms) — session handle may linger briefly (two-client risk on the next open)"); SwallowTaskFault(teardown); }
             }
+            // Unconditional exit rung — covers the client==null path too, so every teardown is bracketed in the log.
+            TelegArm.Helpers.Logger.Diag("[ACCT] teardown EXIT acct=" + AccountId + " hadClient=" + (client != null));
         }
 
         /// <summary>Discards the CURRENT client (dispose + null) and waits for its session-file handle to release,
