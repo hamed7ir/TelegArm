@@ -5623,6 +5623,98 @@ namespace TelegArm.UI
             if (fire) { var _ = LoadMoreDialogsAsync(); }
         }
 
+        // ─────────────────────────────────────────────────────────────────────────────────────────────
+        //  BATCH-TA-14/T1 — THE ONE MERGE RULE. Every path that receives freshly-built ChatEntries for
+        //  peers we may already hold uses THIS: the scroll pager and the targeted folder fetch. Written
+        //  once so the two cannot drift into disagreeing about what "fresh" means.
+        //
+        //  It replaces TA-8's P1 defect. The old page merge was:
+        //      foreach (var e in fresh) if (known.Add(e.PeerId)) { _allChats.Add(e); }
+        //  i.e. a peer ALREADY present was skipped entirely and its freshly-built entry DISCARDED, along
+        //  with everything the server had just told us — title, preview, top message, unread/mention/
+        //  reaction counts, read watermarks, mute state, pin flags and draft. The expensive rebuild was
+        //  not even rendering the freshest data it held.
+        //
+        //  ⚠ UPDATE IN PLACE, NEVER REPLACE THE OBJECT. ChatEntry identity is load-bearing:
+        //    RenderChatListCore compares `entry == _selectedChat` BY REFERENCE, and every live
+        //    ChatListItemControl holds an Entry reference. Swapping the object would silently deselect the
+        //    open chat and leave existing rows bound to an orphan.
+        //
+        //  Three field classes, and the two non-obvious ones are both anti-flicker rules:
+        //    · SERVER WINS for descriptive state.
+        //    · MONOTONIC MAX for read watermarks — a chat read locally must not be marked unread again
+        //      just because a merge landed before the read round-tripped.
+        //    · NEWEST WINS for drafts — a draft being typed must never be erased by a merge.
+        //
+        //  ⚠ AND A FOURTH CLASS THAT MUST NOT BE TOUCHED AT ALL: ParticipantsCount, CountFetchTried,
+        //    OnlineCount and FocusMessageId are LOCAL state that the dialogs response does not carry.
+        //    A naive field-for-field copy would reset ParticipantsCount to 0 and CountFetchTried to false,
+        //    blanking the header subtitle and re-arming the lazy count fetch on every merge.
+        // ─────────────────────────────────────────────────────────────────────────────────────────────
+        private static void MergeServerEntry(ChatEntry local, ChatEntry fresh)
+        {
+            if (local == null || fresh == null) return;
+
+            // ── SERVER WINS ──
+            local.Title = fresh.Title;
+            local.Preview = fresh.Preview;
+            local.Date = fresh.Date;
+            local.TopMessageId = fresh.TopMessageId;
+            local.IsGroup = fresh.IsGroup;
+            if (fresh.PeerInfo != null) local.PeerInfo = fresh.PeerInfo;
+            // Not in the specified list, added deliberately: a peer's access_hash can rotate, and a stale
+            // InputPeer makes every later call for that chat fail. Guarded so a null never clears a good one.
+            if (fresh.Peer != null) local.Peer = fresh.Peer;
+            local.OnlineUntil = fresh.OnlineUntil;
+            local.Muted = fresh.Muted;
+            local.MuteUntil = fresh.MuteUntil;
+            local.MainPinOrder = fresh.MainPinOrder;
+            local.ArchivePinOrder = fresh.ArchivePinOrder;
+            local.Archived = fresh.Archived;
+            local.UnreadMentions = fresh.UnreadMentions;
+            local.UnreadReactions = fresh.UnreadReactions;
+
+            // ── MONOTONIC MAX: read watermarks, with UnreadCount following whichever side won ──
+            // If our local inbox watermark is at least the server's, our read is the newer truth and the
+            // server's unread_count is stale — keep ours. Only adopt the server's count when it genuinely
+            // knows about reads we don't.
+            bool serverInboxNewer = fresh.ReadInboxMaxId > local.ReadInboxMaxId;
+            local.ReadInboxMaxId = Math.Max(local.ReadInboxMaxId, fresh.ReadInboxMaxId);
+            local.ReadOutboxMaxId = Math.Max(local.ReadOutboxMaxId, fresh.ReadOutboxMaxId);
+            if (serverInboxNewer) local.UnreadCount = fresh.UnreadCount;
+            else if (local.ReadInboxMaxId >= fresh.ReadInboxMaxId && fresh.UnreadCount < local.UnreadCount)
+                local.UnreadCount = fresh.UnreadCount;   // server saw a read we hadn't: only ever LOWERS here
+
+            // ── NEWEST WINS: drafts ──
+            if (fresh.DraftDate > local.DraftDate)
+            {
+                local.DraftText = fresh.DraftText;
+                local.DraftDate = fresh.DraftDate;
+            }
+
+            // ParticipantsCount / CountFetchTried / OnlineCount / FocusMessageId: deliberately untouched.
+        }
+
+        /// <summary>BATCH-TA-14/T1: merges a freshly-built batch into _allChats — updating peers we already
+        /// hold (never discarding their fresh state) and adding the ones we don't. Returns how many were ADDED;
+        /// <paramref name="updated"/> reports how many existing rows were refreshed.</summary>
+        private int MergeFreshEntries(System.Collections.Generic.IEnumerable<ChatEntry> fresh, out int updated)
+        {
+            updated = 0;
+            int added = 0;
+            if (fresh == null) return 0;
+            var byId = new Dictionary<long, ChatEntry>(_allChats.Count);
+            foreach (var c in _allChats) byId[c.PeerId] = c;   // last wins; RenderChatListCore dedups by PeerId anyway
+            foreach (var e in fresh)
+            {
+                if (e == null) continue;
+                ChatEntry local;
+                if (byId.TryGetValue(e.PeerId, out local)) { MergeServerEntry(local, e); updated++; }
+                else { _allChats.Add(e); byId[e.PeerId] = e; added++; }
+            }
+            return added;
+        }
+
         private async System.Threading.Tasks.Task LoadMoreDialogsAsync()
         {
             if (_dlgLoadingMore || _dlgExhausted || _service == null) return;
@@ -5634,15 +5726,16 @@ namespace TelegArm.UI
                 if (IsDisposed || page == null) return;
                 CaptureDialogOffsets(page);   // advance the cursor FIRST — even an all-known page moves forward
                 var fresh = BuildDialogEntries(page);
-                var known = new HashSet<long>(_allChats.Select(c => c.PeerId));
-                int added = 0;
-                foreach (var e in fresh) if (known.Add(e.PeerId)) { _allChats.Add(e); added++; }
+                // BATCH-TA-14/T1: was an add-only merge that DISCARDED the fresh entry for any peer already
+                // present (TA-8's P1 defect — a shipping staleness bug). Now the one shared merge rule.
+                int updated;
+                int added = MergeFreshEntries(fresh, out updated);
                 // BATCH-TA-6/P1 (R7): Logger.Diag, not Debug — Release strips Debug.WriteLine, and the
                 // absence of this line is why the TA-5 gate could not confirm from the log that paging
                 // had happened and had to fall back to a human eyeball pass.
-                if (LogOn) Logger.Diag("[SCROLL] chat-list page merged +" + added
+                if (LogOn) Logger.Diag("[SCROLL] chat-list page merged +" + added + " updated=" + updated
                     + " (total=" + _allChats.Count + ", exhausted=" + _dlgExhausted + ")");
-                if (added > 0)
+                if (added > 0 || updated > 0)
                 {
                     _allChats.Sort((a, b) => b.Date.CompareTo(a.Date));
                     int y = -_chatListPanel.AutoScrollPosition.Y;      // keep the user's place through the rebuild
@@ -5833,6 +5926,18 @@ namespace TelegArm.UI
             // ARE matches — no empty header). The normal (unfiltered) list has no header.
             if (!string.IsNullOrWhiteSpace(filter) && ordered.Count > 0)
                 AddSectionHeader("CHATS");
+
+            // BATCH-TA-14/T4 — be honest about an incomplete folder instead of just looking short. Before this,
+            // a folder silently showed only the members that happened to be in the first ~100 dialogs, and the
+            // badge undercounted by the same rows, so nothing hinted anything was missing (TA-11/M2).
+            if (string.IsNullOrWhiteSpace(filter) && !_showArchive && _activeFolder is TL.DialogFilter)
+            {
+                if (_folderFetching)
+                    AddSectionHeader("LOADING THIS FOLDER'S CHATS…");
+                else if (_folderMissingCount > 0)
+                    AddSectionHeader(_folderMissingCount + " CHAT" + (_folderMissingCount == 1 ? "" : "S")
+                                     + " IN THIS FOLDER COULDN'T BE LOADED");
+            }
 
             var seen = new HashSet<long>();   // dedup by PeerId → exactly one row per peer
             foreach (var entry in ordered)
@@ -7193,7 +7298,153 @@ namespace TelegArm.UI
         {
             _showArchive = false;
             _activeFolder = folder;
+            // BATCH-TA-14/T4: clear the previous folder's counters BEFORE the first paint, or switching from
+            // an incomplete folder to a complete one flashes the old "couldn't be loaded" line.
+            _folderMissingCount = 0;
+            _folderFetching = false;
             RebuildFolders();
+            RenderChatList(_searchBox.Text);
+            var _ = EnsureFolderMembersLoadedAsync(folder as TL.DialogFilter);   // BATCH-TA-14/T2
+        }
+
+        // BATCH-TA-14/T4 — how many enumerable members of the active folder we could not show, and whether a
+        // fetch is in flight. Read by RenderChatListCore to say so instead of silently looking half-empty.
+        private int _folderMissingCount;
+        private bool _folderFetching;
+
+        /// <summary>TA-14a: distinct InputPeer type names already reported as un-enumerable, so each is logged
+        /// once per session rather than once per folder open. Same shape as TA-6b/G2's unhandled-update set.
+        /// UI-thread only (SetActiveFolder → EnsureFolderMembersLoadedAsync), so a plain HashSet needs no lock.</summary>
+        private readonly HashSet<string> _unenumerablePeerTypes = new HashSet<string>();
+
+        /// <summary>TA-14a: PeerIdOf returned 0 for this peer, so it cannot be matched against _allChats and is
+        /// silently excluded from the targeted fetch. PeerIdOf handles InputPeerUser / InputPeerChannel /
+        /// InputPeerChat and returns 0 for everything else — InputPeerSelf, InputPeerUserFromMessage,
+        /// InputPeerChannelFromMessage, InputPeerEmpty. Naming the concrete type is what turns "4 peers went
+        /// missing" into a fixable finding.</summary>
+        private void NoteUnenumerablePeer(InputPeer p)
+        {
+            if (!Logger.Enabled) return;
+            string tn = p != null ? p.GetType().Name : "null";
+            if (_unenumerablePeerTypes.Add(tn))
+                Logger.Diag("[FOLDERFETCH] SKIPPED peer type=" + tn
+                            + " (first this session; PeerIdOf returned 0, so it cannot be matched or fetched)");
+        }
+
+        // ─────────────────────────────────────────────────────────────────────────────────────────────
+        //  BATCH-TA-14/T2 — TARGETED FOLDER FETCH.
+        //
+        //  A folder view renders _allChats and nothing else (TA-11/M2): no placeholder, no lookup. But
+        //  _allChats holds ONE page of ~100 dialogs and only grows when the MAIN list is scrolled to its
+        //  bottom — and CheckChatListPaging only fires when the visible content overflows the viewport.
+        //  A sparse folder does not overflow, so the model never grows: the folder is incomplete because
+        //  the model is incomplete, and the model will not grow because the incomplete folder has nothing
+        //  to scroll. That self-lock is what this closes, for the ENUMERABLE case.
+        //
+        //  Enumerable means a real DialogFilter's pinned_peers ∪ include_peers. Flags-only membership
+        //  ("all groups") has no member list and is NOT handled here — that is v1.3 via
+        //  Messages_GetAllDialogs, deliberately deferred because that helper has no cancellation and no
+        //  progress and sleeps internally on FLOOD_WAIT.
+        //
+        //  Cheap because we already hold real InputPeers with access_hash, straight off the filter.
+        // ─────────────────────────────────────────────────────────────────────────────────────────────
+        private async System.Threading.Tasks.Task EnsureFolderMembersLoadedAsync(TL.DialogFilter folder)
+        {
+            _folderMissingCount = 0;
+            if (folder == null || _service == null) return;
+
+            // BATCH-TA-14a — RAW counts beside the enumerated one. A folder reported enumerable=11 against a
+            // dump that had shown include_peers(15), and the log could not distinguish "the user edited the
+            // folder" from "PeerIdOf silently dropped 4 peers". These three numbers settle it on sight:
+            // includeRaw==enumerable means the folder genuinely changed; includeRaw>enumerable is a PeerIdOf gap.
+            int pinnedRaw = folder.pinned_peers != null ? folder.pinned_peers.Length : 0;
+            int includeRaw = folder.include_peers != null ? folder.include_peers.Length : 0;
+
+            var wanted = new Dictionary<long, InputPeer>();
+            foreach (var arr in new[] { folder.pinned_peers, folder.include_peers })
+                if (arr != null)
+                    foreach (var p in arr)
+                    {
+                        long id = PeerIdOf(p);
+                        if (id == 0) { NoteUnenumerablePeer(p); continue; }   // TA-14a: name the type that fell through
+                        if (!wanted.ContainsKey(id)) wanted[id] = p;
+                    }
+
+            if (Logger.Enabled)
+                Logger.Diag("[FOLDERFETCH] folder=" + folder.id + " pinnedRaw=" + pinnedRaw
+                            + " includeRaw=" + includeRaw + " enumerable=" + wanted.Count
+                            + (wanted.Count < pinnedRaw + includeRaw
+                               ? "  ⚠ " + (pinnedRaw + includeRaw - wanted.Count) + " raw entr(ies) did not enumerate (duplicate id, or a peer type PeerIdOf does not handle — see [FOLDERFETCH] SKIPPED)"
+                               : ""));
+
+            if (wanted.Count == 0) return;
+
+            var have = new HashSet<long>(_allChats.Select(c => c.PeerId));
+            var missing = wanted.Where(kv => !have.Contains(kv.Key)).Select(kv => kv.Value).ToList();
+            if (missing.Count == 0) return;
+
+            // T3: remember WHAT we are fetching for, so a switch mid-flight can be detected.
+            long forAccount = _service.AccountId;
+            int forFolderId = folder.id;
+            _folderMissingCount = missing.Count;
+            _folderFetching = true;
+            RenderChatList(_searchBox.Text);   // paint the "still loading" line immediately (T4)
+
+            if (Logger.Enabled)
+                Logger.Diag("[FOLDERFETCH] folder=" + forFolderId + " enumerable=" + wanted.Count
+                            + " missing=" + missing.Count + " → fetching");
+
+
+            int addedTotal = 0, updatedTotal = 0, failedBatches = 0;
+            try
+            {
+                for (int i = 0; i < missing.Count; i += 100)   // TA-11/M3: no documented cap, batch at 100 anyway
+                {
+                    var batch = missing.Skip(i).Take(100).ToArray();
+                    TL.Messages_DialogsBase res;
+                    try { res = await _service.GetPeerDialogsAsync(batch); }
+                    catch (Exception ex)
+                    {
+                        // One bad peer (left channel → 406 CHANNEL_PRIVATE) fails the whole REQUEST, not just
+                        // that peer. Degrade to "the folder shows what it has" — today's behaviour — never an
+                        // error dialog on a folder click.
+                        failedBatches++;
+                        if (Logger.Enabled) Logger.Diag("[FOLDERFETCH] folder=" + forFolderId + " batch@" + i + " FAILED — " + ex.Message);
+                        continue;
+                    }
+
+                    // T3 — post-await identity check. The fetch is awaited, so the user may have switched
+                    // account or folder, or closed the form, while it was in flight.
+                    if (IsDisposed) return;
+                    if (_service == null || _service.AccountId != forAccount)
+                    {
+                        if (Logger.Enabled) Logger.Diag("[FOLDERFETCH] folder=" + forFolderId + " ABANDONED — account switched mid-fetch");
+                        return;
+                    }
+                    var stillActive = _activeFolder as TL.DialogFilter;
+                    if (stillActive == null || stillActive.id != forFolderId)
+                    {
+                        if (Logger.Enabled) Logger.Diag("[FOLDERFETCH] folder=" + forFolderId + " ABANDONED — view changed mid-fetch");
+                        return;
+                    }
+
+                    if (res == null) continue;
+                    int upd;
+                    addedTotal += MergeFreshEntries(BuildDialogEntries(res), out upd);
+                    updatedTotal += upd;
+                }
+            }
+            finally { _folderFetching = false; }
+
+            if (IsDisposed) return;
+            var have2 = new HashSet<long>(_allChats.Select(c => c.PeerId));
+            _folderMissingCount = wanted.Keys.Count(id => !have2.Contains(id));
+
+            if (Logger.Enabled)
+                Logger.Diag("[FOLDERFETCH] folder=" + forFolderId + " added=" + addedTotal + " updated=" + updatedTotal
+                            + " stillMissing=" + _folderMissingCount + (failedBatches > 0 ? " failedBatches=" + failedBatches : ""));
+
+            RebuildFolders();                    // badges were undercounting by the same missing rows
             RenderChatList(_searchBox.Text);
         }
 

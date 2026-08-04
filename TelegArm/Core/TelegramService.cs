@@ -918,6 +918,34 @@ namespace TelegArm.Core
             return Client.Messages_GetDialogs(offsetDate, offsetId, offsetPeer, limit: 100);
         }
 
+        /// <summary>BATCH-TA-14: dialogs for a SPECIFIC set of peers (messages.getPeerDialogs) — the targeted
+        /// fetch that lets a custom folder show members the paged main list never reached.
+        /// The caller already holds real <see cref="InputPeer"/>s (a filter's pinned_peers/include_peers carry
+        /// access_hash), so wrapping them is the entire conversion — no username lookup, no getFullChat.
+        /// ⚠ ADAPTER, AND IT IS LOAD-BEARING: Messages_PeerDialogs is NOT a Messages_DialogsBase — both derive
+        /// from Object, verified by reflection — so the response cannot be handed to BuildDialogEntries
+        /// directly. TL.Messages_Dialogs carries exactly the same four fields, so copying them across lets the
+        /// result flow through the EXISTING, already-correct entry builder. That matters: BuildDialogEntries
+        /// seeds 22 fields, while the one hand-rolled alternative in the tree (EntryFromPeerInfo) seeds 5 and
+        /// leaves Date=default, which sinks a row to the bottom of the list with no unread badge.
+        /// Returns null for an empty/failed request so the caller can no-op rather than merge nothing.</summary>
+        public async Task<Messages_DialogsBase> GetPeerDialogsAsync(InputPeer[] peers)
+        {
+            if (peers == null || peers.Length == 0) return null;
+            var wrapped = new InputDialogPeerBase[peers.Length];
+            for (int i = 0; i < peers.Length; i++) wrapped[i] = new InputDialogPeer { peer = peers[i] };
+
+            var res = await Client.Messages_GetPeerDialogs(wrapped).ConfigureAwait(false);
+            if (res == null) return null;
+            return new Messages_Dialogs
+            {
+                dialogs = res.dialogs,
+                messages = res.messages,
+                chats = res.chats,
+                users = res.users
+            };
+        }
+
         /// <summary>One category's notify defaults (users / chats / broadcasts) — a peer with no explicit
         /// notify setting inherits these (NOTIFY-FIX 1.2). Null on failure (treated as not muted).</summary>
         public async Task<PeerNotifySettings> GetNotifyDefaultsAsync(InputNotifyPeerBase category)
