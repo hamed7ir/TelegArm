@@ -197,6 +197,18 @@ namespace TelegArm.Core
         /// </summary>
         public async Task<User> LoginAsync(bool silentResume = false)
         {
+            // BATCH-TA-13/L1 — rungs INSIDE the single largest unattributed interval in startup.
+            // The device measured 5,010 ms (45.4% of an 11,037 ms cold start) between MainForm.OnLoad and
+            // "LoginAsync returned AUTHORIZED", with NOT ONE rung inside it — the exact shape TA-9 Part B
+            // warned gets misattributed to whatever rung happens to follow. It matters more now that TA-12
+            // established a FLOOD_WAIT of up to 60 s is absorbed as a silent Task.Delay inside an awaited
+            // WTC call: a rate-limit sleep would be hiding in precisely this interval and would look like a
+            // hang. These rungs bound the phone read and the client construction; the split INSIDE
+            // LoginUserIfNeeded (TCP → handshake → auth) now comes from W1's [WTC] lines, which is strictly
+            // better than anything we could stamp from outside because it is the library's own view.
+            // NOTE: PerfLog.Boot emits for the life of the process, so these also instrument ACCOUNT SWITCHES
+            // and reconnects, not just cold start — deliberate, and cheap (Logger.Diag is Enabled-gated).
+            PerfLog.Boot("  LoginAsync ENTER (silentResume=" + silentResume + ")");
             _silentResume = silentResume;
             NeedsInteractiveLogin = false;
 
@@ -206,9 +218,14 @@ namespace TelegArm.Core
             // interactive login → a spurious "all accounts logged out" (the MULTI-fix wipe).
             if (silentResume)
                 AuthManager.PhoneNumber = LoadPhone();
+            PerfLog.Boot("  LoginAsync: phone loaded (disk)");
 
             EnsureClient();
+            PerfLog.Boot("  LoginAsync: EnsureClient done (client constructed, session file opened)");
+
             Me = await Client.LoginUserIfNeeded();
+            PerfLog.Boot("  LoginAsync: LoginUserIfNeeded RETURNED (TCP + MTProto handshake + auth)");
+
             Interlocked.Exchange(ref _lastActivityTicks, DateTime.UtcNow.Ticks);
             return Me;
         }
@@ -1710,9 +1727,27 @@ namespace TelegArm.Core
         public Task UnpinMessageAsync(InputPeer peer, int id, bool forEveryone)
             => Client.Messages_UpdatePinnedMessage(peer, id, unpin: true, pm_oneside: !forEveryone);
 
-        /// <summary>Archived dialogs (folder_id = 1).</summary>
-        public Task<Messages_DialogsBase> GetArchivedDialogsAsync()
-            => Client.Messages_GetDialogs(folder_id: 1);
+        /// <summary>Archived dialogs (folder_id = 1) — ALL of them.
+        /// BATCH-TA-13/R1. This used to be `Client.Messages_GetDialogs(folder_id: 1)`: no offsets, no limit,
+        /// i.e. ONE server-default page of ~100 — exactly what the note on <see cref="GetDialogsAsync"/> warns
+        /// about. But unlike the main list, the archive has NO pager anywhere (LoadArchivedAsync is its only
+        /// caller and it merges a single response), so an archive of more than ~100 dialogs silently lost the
+        /// remainder, with nothing in the log to show it.
+        /// WHY the WTC helper is acceptable HERE and not for the main list: the helper pages internally to
+        /// completion and offers NO cancellation and NO progress callback (TA-12/B1), so it is only safe where
+        /// the result set is small and bounded by nature. The archive is; the 627-dialog main list is not —
+        /// there the scroll-driven pager stays, because one blocking sweep would trade a responsive list for a
+        /// multi-second stall on ARM32.
+        /// The count is logged so the truncation this fixes would have been PROVABLE before, and the new
+        /// behaviour is provable now.</summary>
+        public async Task<Messages_DialogsBase> GetArchivedDialogsAsync()
+        {
+            var res = await Client.Messages_GetAllDialogs(1).ConfigureAwait(false);
+            if (TelegArm.Helpers.Logger.Enabled)
+                TelegArm.Helpers.Logger.Diag("[ARCHIVE] getAllDialogs(folder 1) → " + (res?.Dialogs?.Length ?? 0)
+                    + " dialog(s)" + (res?.Dialogs != null && res.Dialogs.Length > 100 ? "  ⚠ >100: the OLD single-page call would have TRUNCATED here" : ""));
+            return res;
+        }
 
         /// <summary>Moves a chat to a folder: 1 = Archive, 0 = main list (unarchive).</summary>
         public Task SetChatFolderAsync(InputPeer peer, int folderId)
