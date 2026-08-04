@@ -5321,7 +5321,22 @@ namespace TelegArm.UI
 
             // Pinned-in-THIS-view chats keep their position; non-pinned move to the TOP OF THE NON-PINNED
             // SECTION — index just after the last pinned-in-view row, never absolute 0.
-            if (!IsPinnedInView(entry))
+            //
+            // BATCH-TA-5/C3 — DO NOT REPOSITION WHILE THE PANEL IS FILTERED.
+            // PinnedBoundary() (:5659) counts leading ChatListItemControls and `else break`s on the first
+            // non-row child, so it returns 0 whenever a Label sits at index 0. That is true in BOTH
+            // filtered modes: the "CHATS" section header (AddSectionHeader, added by RenderChatListCore
+            // when a filter is active) and the in-chat-search scope chip (AddInChatScopeChip, a Label).
+            // Repositioning then moved the row to absolute 0 — ABOVE the header and above pinned rows.
+            // In-chat search is worse still: those rows are search RESULTS whose Entry.PeerId is the
+            // SENDER's id (RenderInChatResults), so FindChatItem above can match a result row that has
+            // nothing to do with this chat, and we would move+repaint someone else's row.
+            // Both filtered views are rebuilt wholesale when the filter changes, so skipping the move
+            // costs only a momentarily stale ORDER inside a filtered list — the row content is still
+            // repainted by the Invalidate() below.
+            bool filtered = _inChatSearchEntry != null
+                            || (_searchBox != null && !string.IsNullOrWhiteSpace(_searchBox.Text));
+            if (!filtered && !IsPinnedInView(entry))
                 _chatListPanel.Controls.SetChildIndex(item, PinnedBoundary());
             item.Invalidate();
 
@@ -5680,9 +5695,18 @@ namespace TelegArm.UI
             // 462 ms at 90 rows, ~4 ms/row, usr climbing to 940. Logger.Enabled-gated; a rebuild is a cold-ish
             // site (per incoming message), not a per-frame path.
             long __renderTs = Logger.Enabled ? System.Diagnostics.Stopwatch.GetTimestamp() : 0L;
-            // DPI-REVERT addendum: rebuilds fire on EVERY incoming message (busy channels = every few
-            // seconds) and used to reset the scroll to the top — the bottom of a long list was practically
-            // unreachable, which alone reads as "older chats never load". Keep the user's place.
+            // ⚠ CORRECTED 2026-08-03 (BATCH-TA-5/C1). This comment used to say "rebuilds fire on EVERY
+            // incoming message". That WAS true, but has not been for a long time, and the stale wording
+            // misled THREE consecutive analyses into targeting the wrong code — leave this note here.
+            // What actually happens now: the per-message path is UpdateChatListForMessageCore, and it is
+            // INCREMENTAL — it looks the row up (:5309 FindChatItem), then repositions + repaints just
+            // that one row (:5324-5326 SetChildIndex + Invalidate). It reaches a full rebuild ONLY via
+            // the row-ABSENT fallback at :5320. A steady stream of messages into chats already on screen
+            // therefore costs ZERO rebuilds.
+            // The real full-rebuild drivers are the BULK sites: the warm-switch pre-render (:4061, which
+            // alone renders the whole cached dialog set on every account switch), dialog paging (:5563),
+            // the archive load (:5459), first load (:5590), and the pin/archive/folder/search sites.
+            // The keepY capture below still matters for exactly those.
             int keepY = -_chatListPanel.AutoScrollPosition.Y;
             RenderChatListCore(filter);
             if (keepY > 0) { try { _chatListPanel.AutoScrollPosition = new Point(0, keepY); } catch { } }
@@ -6982,7 +7006,16 @@ namespace TelegArm.UI
         {
             if (_inChatSearchEntry == null) return;
             _chatListPanel.SuspendLayout();
+            // BATCH-TA-5/C2: dispose before clearing — same shape as RenderChatListCore (:5725) and the
+            // folder bar (:6373). This path runs on EVERY keystroke while in-chat search is open, so the
+            // undisposed rows it left behind leaked one HWND + two GDI fonts each, per keystroke.
+            // _selectedItem MUST be nulled: it may point at a row we are about to dispose, and
+            // OnChatItemClick later does `_selectedItem.Selected = false`, whose setter calls
+            // Invalidate() → ObjectDisposedException on a disposed control. Harmless before this change
+            // (Clear left a live orphan), a real fault after it.
+            foreach (var c in _chatListPanel.Controls.Cast<Control>().ToArray()) c.Dispose();
             _chatListPanel.Controls.Clear();
+            _selectedItem = null;
             AddInChatScopeChip();
             _chatListPanel.ResumeLayout();
         }
@@ -7028,7 +7061,14 @@ namespace TelegArm.UI
             _chatListPanel.SuspendLayout();
             if (replace)
             {
+                // BATCH-TA-5/C2: dispose before clearing (same shape as :5725 / :6373). This is the
+                // heavier of the two in-chat sites — it builds up to 40 real ChatListItemControl HWNDs
+                // per query (SearchInChatAsync requests 40) and replace:true fires on every new query.
+                // Only the replace branch clears; the append/paging path below must NOT dispose.
+                // _selectedItem nulled for the same disposed-control reason as RenderInChatSearchChrome.
+                foreach (var c in _chatListPanel.Controls.Cast<Control>().ToArray()) c.Dispose();
                 _chatListPanel.Controls.Clear();
+                _selectedItem = null;
                 AddInChatScopeChip();
                 _inChatTotal = (res as Messages_MessagesSlice)?.count ?? (res as Messages_ChannelMessages)?.count ?? msgs.Count;
                 AddSectionHeader(_inChatTotal + (_inChatTotal == 1 ? " MESSAGE FOUND" : " MESSAGES FOUND"));
