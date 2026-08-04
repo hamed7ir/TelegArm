@@ -105,6 +105,21 @@ namespace TelegArm.Helpers
         //  Emits through Logger.Diag (Trace) so it SURVIVES Release, self-gated by Logger.Enabled.
         // ─────────────────────────────────────────────────────────────────────────────────────────────
 
+        /// <summary>GDI + USER handle counts for this process — the RT leak gauge (Tegra 3 dies slowly on
+        /// handle leaks). Already sampled once per [PERF] tick; exposed so a specific rung can sample it at
+        /// the exact moment of interest. Never throws; returns 0/0 if the syscall is unavailable.</summary>
+        public static void GuiHandles(out uint gdi, out uint usr)
+        {
+            gdi = 0; usr = 0;
+            try
+            {
+                IntPtr proc = GetCurrentProcess();
+                gdi = GetGuiResources(proc, GR_GDIOBJECTS);
+                usr = GetGuiResources(proc, GR_USEROBJECTS);
+            }
+            catch { }
+        }
+
         private static Stopwatch _boot;
 
         /// <summary>Starts the cold-start clock. Called once at the very top of Program.Run, BEFORE any

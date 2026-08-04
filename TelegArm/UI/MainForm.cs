@@ -5674,6 +5674,12 @@ namespace TelegArm.UI
             if (_inChatSearchEntry != null) return;
             TouchScroller.StopMomentum();   // 3.4: the chat list is being rebuilt — a coast must not scroll the new content
             long __t = PerfLog.T();
+            // BATCH-TA-4 (A1): a dedicated rung so ms/row is readable directly instead of being inferred from the
+            // aggregated [PERF] fullRender bucket. Spans exactly the same code as that bucket (keepY + Core +
+            // RefreshFolderBadges) so it stays comparable to the recorded device baseline: 2632 ms at 627 rows,
+            // 462 ms at 90 rows, ~4 ms/row, usr climbing to 940. Logger.Enabled-gated; a rebuild is a cold-ish
+            // site (per incoming message), not a per-frame path.
+            long __renderTs = Logger.Enabled ? System.Diagnostics.Stopwatch.GetTimestamp() : 0L;
             // DPI-REVERT addendum: rebuilds fire on EVERY incoming message (busy channels = every few
             // seconds) and used to reset the scroll to the top — the bottom of a long list was practically
             // unreachable, which alone reads as "older chats never load". Keep the user's place.
@@ -5682,6 +5688,16 @@ namespace TelegArm.UI
             if (keepY > 0) { try { _chatListPanel.AutoScrollPosition = new Point(0, keepY); } catch { } }
             RefreshFolderBadges();   // FOLDER-SIDEBAR: keep per-folder badges live on whichever navigator is shown
             PerfLog.Rec(PerfLog.P.RenderChatList, __t);
+            if (__renderTs != 0)
+            {
+                double __ms = (System.Diagnostics.Stopwatch.GetTimestamp() - __renderTs) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+                int __rows = _chatListPanel.Controls.Count;
+                uint __gdi, __usr; PerfLog.GuiHandles(out __gdi, out __usr);
+                Logger.Diag("[RENDER] chat-list rebuild rows=" + __rows
+                    + " ms=" + __ms.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)
+                    + " msPerRow=" + (__rows > 0 ? (__ms / __rows).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture) : "n/a")
+                    + " gdi=" + __gdi + " usr=" + __usr);
+            }
             // BATCH-TA-0: FIRST paint only — this is time-to-first-usable-chat-list, the number the whole
             // load-time effort is judged on. Later rebuilds are counted by the [PERF] fullRender bucket.
             if (!_firstChatListPainted) { _firstChatListPainted = true; PerfLog.Boot("FIRST chat list PAINTED (rows=" + _chatListPanel.Controls.Count + ")"); }
@@ -5693,6 +5709,20 @@ namespace TelegArm.UI
         private void RenderChatListCore(string filter)
         {
             _chatListPanel.SuspendLayout();
+            // BATCH-TA-4 (A2): DISPOSE the outgoing rows before clearing. Controls.Clear() only detaches — each
+            // ChatListItemControl keeps its HWND plus two per-instance Fonts (ChatListItemControl.cs:22-23,
+            // and FontHelper.Make allocates a NEW Font per call — there is no font cache), so a rebuild leaked
+            // one window handle + two GDI fonts PER ROW. The device measured usr climbing to 940 at 627 rows.
+            // Same shape as the three existing precedents in this file: the folder bar (:6373), the forum-topic
+            // bar (:6410) and the story tray (:6476) all Dispose-then-Clear; ClearActiveAccountView (:4203)
+            // does the Remove+Dispose variant on THIS very panel.
+            // SAFE because the row does NOT own its avatar: ChatListItemControl.Avatar is a plain auto-property
+            // (:39) holding a NON-OWNING reference into the LruImageCache, and Dispose (:436-444) frees only
+            // _timeFont/_badgeFont. Disposing a row therefore cannot hand a disposed bitmap back to the cache —
+            // the trap that the drawer-avatar cache hit. It also RETIRES the ghost-row hazard: a disposed row
+            // leaves Controls, so a late avatar arrival can no longer land on an orphan that still reads
+            // !IsDisposed.
+            foreach (var c in _chatListPanel.Controls.Cast<Control>().ToArray()) c.Dispose();
             _chatListPanel.Controls.Clear();
             _selectedItem = null;
 
