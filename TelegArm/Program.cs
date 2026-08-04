@@ -12,6 +12,14 @@ namespace TelegArm
 {
     static class Program
     {
+        /// <summary>BATCH-TA-13/W1: minimum WTelegramClient log severity teed into our log. WTC uses 1..5.
+        /// Levels 1-2 are PER-PACKET ("Sending/Receiving …") — measured on a quiet 40 s run, floor 1 emitted
+        /// 131 library lines and took the session log from 137 to 213 lines with no chat activity at all.
+        /// Level 3+ is the exceptional traffic we actually want: reactor faults, alt-DC disconnects, duplicate
+        /// /old msg_id (dedupe), server-salt changes, RpcErrors. Raising the volume distorts the [BOOT] and
+        /// [PERF] numbers read from this same file, so LOWERING THIS NEEDS A WRITTEN REASON.</summary>
+        private const int WtcLogSeverityFloor = 3;
+
         /// <summary>Application version (Major.Minor.Build), read from the assembly so AssemblyInfo is the ONE
         /// source of truth. Shown in the login title + About screen, and reported to Telegram as app_version.</summary>
         public static readonly string Version = ReadVersion();
@@ -159,6 +167,32 @@ namespace TelegArm
             // traces (native load / VLC extract / fonts) are captured on RT, where DebugView can't run.
             // Default OFF: only the session header is written and no handle is held (Settings→Advanced toggles).
             try { FileLog.Init(AppSettings.Instance.FileLogging); } catch { /* logging must never block startup */ }
+
+            // BATCH-TA-13/W1 — tee WTelegramClient's OWN log into ours. Until now the library was a black box:
+            // TA-12 established from its source (D:\repo\WTelegramClient @ telegarm/shipped-4.4.6) that a
+            // FLOOD_WAIT of up to FloodRetryThreshold (default 60) is absorbed as a silent Task.Delay inside
+            // the awaited call (src/Client.cs:1623-1630), and that reactor reconnects retry on a fixed 5 s
+            // timer and only surface every MaxAutoReconnects'th time (src/Client.cs:388-393). Neither produced
+            // a single line in our logs, so on the device both look exactly like a hang. This also makes WTC's
+            // update dedupe, gap recovery and server-salt renegotiation visible — all of which TA-7 had to
+            // infer from the outside.
+            //
+            // ⚠ WTelegram.Helpers.Log is a STATIC, PROCESS-WIDE hook — set ONCE here, never per-client.
+            //   Reassigning it on each account switch would race the warm-connection pool.
+            // ⚠ CONSEQUENCE, ACCEPTED NOT FIXED: with warm multi-account clients live at once, lines from
+            //   several Client instances INTERLEAVE with no account id. WTC's own text usually carries a DC
+            //   hint ("4>Sending …") and that is all the attribution there is. Threading account state through
+            //   a static hook is out of scope here.
+            // R7: Logger.Diag (Trace) so it survives Release — the only build that ships to the device.
+            try
+            {
+                WTelegram.Helpers.Log = (level, line) =>
+                {
+                    if (!Logger.Enabled || level < WtcLogSeverityFloor || line == null) return;
+                    Logger.Diag("[WTC:" + level + "] " + line);
+                };
+            }
+            catch { /* observability must never block startup */ }
             // Re-log the resolved cache root now that the file listener is up (the normalizer's own line fires
             // during AppSettings load, before FileLog registered) — so the RT log shows which root won.
             try { System.Diagnostics.Debug.WriteLine("[CACHE] active cache root = " + AppSettings.Instance.MediaCacheFolder); } catch { }
