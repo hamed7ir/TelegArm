@@ -274,7 +274,23 @@ namespace TelegArm
                 {
                     if (DateTime.Now - settings.LastCacheCleanup > TimeSpan.FromDays(1))
                     {
-                        MediaCache.DeleteOlderThan(settings.MediaCacheFolder, settings.MediaCacheRetentionDays);
+                        // BATCH-TA-3/D1 — SECOND GUARD, deliberately duplicated. DeleteOlderThan already
+                        // refuses days <= 0, but this call site is the one that runs UNATTENDED once a day
+                        // against the whole cache root, so the intent is stated where the damage would have
+                        // happened rather than only inside the callee. Retention 0 = keep forever.
+                        int retain = settings.MediaCacheRetentionDays;
+                        if (retain <= 0)
+                        {
+                            Logger.Diag("[CACHE-PRUNE] daily job SKIPPED — retention=" + retain + " means keep forever");
+                        }
+                        else
+                        {
+                            string refusal = MediaCache.PruneRefusalReason(settings.MediaCacheFolder);
+                            if (refusal != null)
+                                Logger.Diag("[CACHE-PRUNE] daily job REFUSED folder=\"" + (settings.MediaCacheFolder ?? "") + "\" reason=" + refusal);
+                            else
+                                MediaCache.DeleteOlderThan(settings.MediaCacheFolder, retain);
+                        }
                         settings.LastCacheCleanup = DateTime.Now;
                         settings.Save();
                     }

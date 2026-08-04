@@ -1196,7 +1196,10 @@ namespace TelegArm.UI
             // label measures (thumbs/ + media/) — NOT the global root (which would wipe OTHER accounts too). The
             // daily retention job stays global by design. DeleteOlderThan skips locked/in-use files (can't crash)
             // and invalidates the ensured-dir set so the next download recreates the folders.
-            long freed = MediaCache.DeleteOlderThan(AccountContext.CacheRootFor(_cacheBox.Text.Trim()), 0); // 0 days = everything
+            // BATCH-TA-3/D1: was DeleteOlderThan(root, 0), relying on "0 days = everything". Retention 0 now
+            // means KEEP FOREVER (matching the label two rows up), so that call would have made this button a
+            // silent no-op. ClearAll is the explicit "delete the lot" path — same D2 safety layers, no age filter.
+            long freed = MediaCache.ClearAll(AccountContext.CacheRootFor(_cacheBox.Text.Trim()));
             System.Diagnostics.Debug.WriteLine("[MEDIA] active-account cache cleared, freed " + freed + " bytes");
             RefreshCacheSizes();
             MessageBox.Show(this, "Cleared " + DrawHelper.FormatSize(freed),
@@ -1216,7 +1219,26 @@ namespace TelegArm.UI
             s.AnimateWebmStickers = _animateWebm.Checked;
             s.EnableNotifications = _notifications.Checked;
             s.MaxAutoDownloadSizeMB = (int)_maxSize.Value;
-            s.MediaCacheFolder = _cacheBox.Text.Trim();
+            // BATCH-TA-3/D2 — VALIDATE ON SET, not only when the daily job runs. MediaCacheFolder is free text
+            // and the prune recurses AllDirectories, so a folder that is / contains / sits inside the accounts
+            // root would put a delete sweep next to session files. The prune refuses such a target at run time
+            // too, but refusing it HERE means the bad value never reaches settings.json in the first place, and
+            // the user finds out while they are looking at the field rather than silently a day later.
+            string wantCache = _cacheBox.Text.Trim();
+            string cacheRefusal = MediaCache.PruneRefusalReason(wantCache);
+            // "does not exist" is not a reason to reject — EnsureFolder below creates it. Only overlap is fatal.
+            if (cacheRefusal != null && cacheRefusal.IndexOf("does not exist", StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                TelegArm.Helpers.Logger.Diag("[CACHE-PRUNE] settings REJECTED cache folder=\"" + wantCache + "\" reason=" + cacheRefusal);
+                MessageBox.Show(this,
+                    "That media-cache folder can't be used, because " + cacheRefusal + ".\n\n" +
+                    "TelegArm deletes old files from this folder, so it must not overlap where your account " +
+                    "sessions are stored. Pick a dedicated folder (the default is a \"Cache\" folder).",
+                    "TelegArm — cache folder", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;   // nothing saved; the dialog stays open on the offending value
+            }
+
+            s.MediaCacheFolder = wantCache;
             s.DefaultSaveFolder = _saveBox.Text.Trim();
             s.MediaCacheRetentionDays = (int)_retention.Value;
 

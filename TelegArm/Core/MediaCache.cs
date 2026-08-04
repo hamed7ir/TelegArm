@@ -98,20 +98,135 @@ namespace TelegArm.Core
             return path;
         }
 
-        /// <summary>
-        /// Deletes files in <paramref name="folder"/> last modified more than
-        /// <paramref name="days"/> days ago (days = 0 clears everything). Returns bytes freed.
-        /// Silent and resilient — never throws.
-        /// </summary>
-        public static long DeleteOlderThan(string folder, int days)
+        // ─────────────────────────────────────────────────────────────────────────────────────────────
+        //  BATCH-TA-3 — THE PRUNE PATH IS A DELETE PATH. Two defects were fixed here, and one trap avoided.
+        //
+        //  D1  Retention 0 used to mean DELETE EVERYTHING, while the Settings label said "0 = keep forever"
+        //      (SettingsForm.cs:478) and the stepper's Minimum=0 made it reachable. Anyone who set 0 was
+        //      losing their entire cache once a day, silently. 0 now means RETAIN INDEFINITELY, matching
+        //      the label. No migration: users who set 0 wanted exactly what they now get.
+        //
+        //      ⚠ THE TRAP: Settings "Clear now" called DeleteOlderThan(root, 0) and relied on 0 meaning
+        //      "everything" — its own comment said so. Simply redefining 0 would have turned that button
+        //      into a silent no-op reporting "Cleared 0 bytes". The sentinel was doing two opposite jobs,
+        //      so it is gone: retention lives in DeleteOlderThan, "delete the lot" lives in ClearAll.
+        //
+        //  D2  MediaCacheFolder is free text and the sweep recurses AllDirectories, so a mis-set folder
+        //      could reach account session files. TWO independent layers, both required, because either
+        //      alone is one mistake away from data loss:
+        //        (a) refuse outright when the target IS, CONTAINS, or SITS INSIDE the accounts root;
+        //        (b) delete ONLY files whose names match a stem this cache actually writes. A prune that
+        //            removes just what it recognises cannot delete "session" or "meta.json" even if (a)
+        //            were somehow bypassed.
+        //
+        //  D3  Every decision is logged via Logger.Diag (R7: Trace, survives Release). A delete path must
+        //      never be silent in the shipped build.
+        // ─────────────────────────────────────────────────────────────────────────────────────────────
+
+        /// <summary>Filename stems this cache actually writes — the complete set, swept from every call site
+        /// of <see cref="ThumbPath"/>/<see cref="MediaPath"/>/<see cref="CacheFileName"/>:
+        /// thumb_ photo_ video_ voice_ doc_ (MediaCache) · avatar_ (AvatarStore) · sticker_ gif_ (EmojiPicker)
+        /// · customemoji_ tgs_ sticker_ (MainForm) · audio_.
+        /// ⚠ ADD A STEM HERE WHENEVER A NEW CACHE WRITER IS ADDED, or its files will never be pruned and the
+        /// cache will grow without bound. That is the deliberate trade: an unrecognised file is kept, never
+        /// deleted, because the cost of keeping junk is disk and the cost of the opposite is a lost session.</summary>
+        private static readonly string[] CacheStems =
         {
-            long freed = 0;
+            "thumb_", "photo_", "video_", "voice_", "doc_", "avatar_",
+            "sticker_", "gif_", "tgs_", "customemoji_", "audio_"
+        };
+
+        /// <summary>True when a file name matches something this cache created (D2 layer b).</summary>
+        public static bool IsCacheFileName(string fileName)
+        {
+            if (string.IsNullOrEmpty(fileName)) return false;
+            foreach (var stem in CacheStems)
+                if (fileName.StartsWith(stem, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        private static string NormDir(string p)
+        {
             try
             {
-                if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder)) return 0;
-                var cutoff = DateTime.Now.AddDays(-Math.Max(0, days));
+                if (string.IsNullOrWhiteSpace(p)) return null;
+                return Path.GetFullPath(p).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                       + Path.DirectorySeparatorChar;
+            }
+            catch { return null; }
+        }
+
+        /// <summary>Why <paramref name="folder"/> must NOT be pruned, or null when it is safe (D2 layer a).
+        /// Public so Settings can validate the folder the moment it is set, not only when the job runs.
+        /// NOTE the comparison is against the ACCOUNTS root, not the whole data root — the default cache
+        /// folder legitimately sits beside accounts\ under the same base, and refusing that would disable
+        /// pruning for every default install.</summary>
+        public static string PruneRefusalReason(string folder)
+        {
+            if (string.IsNullOrWhiteSpace(folder)) return "no cache folder is configured";
+            string f = NormDir(folder);
+            if (f == null) return "the configured path is not a usable directory path";
+
+            string accounts = NormDir(AccountContext.AccountsRoot);
+            if (accounts != null)
+            {
+                if (string.Equals(f, accounts, StringComparison.OrdinalIgnoreCase))
+                    return "it IS the accounts root — session files live there";
+                if (accounts.StartsWith(f, StringComparison.OrdinalIgnoreCase))
+                    return "it CONTAINS the accounts root (" + AccountContext.AccountsRoot + ") — a recursive sweep would reach session files";
+                if (f.StartsWith(accounts, StringComparison.OrdinalIgnoreCase))
+                    return "it sits INSIDE the accounts root — session files live there";
+            }
+            if (!Directory.Exists(folder)) return "the folder does not exist";
+            return null;
+        }
+
+        /// <summary>Deletes cache files older than <paramref name="days"/> days. Returns bytes freed.
+        /// <paramref name="days"/> &lt;= 0 means RETAIN INDEFINITELY and deletes nothing (D1 — this used to
+        /// mean "delete everything", which contradicted the Settings label). Never throws.</summary>
+        public static long DeleteOlderThan(string folder, int days)
+        {
+            if (days <= 0)
+            {
+                Log("[CACHE-PRUNE] SKIPPED retention=" + days + " (0 = keep forever) folder=\"" + (folder ?? "") + "\" — nothing deleted");
+                return 0;
+            }
+            return PruneCore(folder, DateTime.Now.AddDays(-days), "retention=" + days + "d");
+        }
+
+        /// <summary>Explicit user action ("Clear now"): deletes ALL recognised cache files regardless of age.
+        /// Separate from <see cref="DeleteOlderThan"/> because the two want opposite things from the same
+        /// argument — see the D1 note above. Still subject to BOTH D2 safety layers.</summary>
+        public static long ClearAll(string folder)
+        {
+            return PruneCore(folder, DateTime.MaxValue, "clear-all (explicit user action)");
+        }
+
+        private static void Log(string line)
+        {
+            if (TelegArm.Helpers.Logger.Enabled) TelegArm.Helpers.Logger.Diag(line);
+        }
+
+        private static long PruneCore(string folder, DateTime cutoff, string what)
+        {
+            string refusal = PruneRefusalReason(folder);
+            if (refusal != null)
+            {
+                Log("[CACHE-PRUNE] REFUSED " + what + " folder=\"" + (folder ?? "") + "\" reason=" + refusal);
+                return 0;
+            }
+
+            long freed = 0;
+            int seen = 0, recognised = 0, deleted = 0, skippedUnknown = 0, failed = 0;
+            try
+            {
                 foreach (var file in Directory.GetFiles(folder, "*", SearchOption.AllDirectories))
                 {
+                    seen++;
+                    // D2 layer (b): only ever touch files this cache created. A session file, meta.json, or
+                    // anything a user parked in the folder is not recognised and is therefore untouchable.
+                    if (!IsCacheFileName(Path.GetFileName(file))) { skippedUnknown++; continue; }
+                    recognised++;
                     try
                     {
                         var fi = new FileInfo(file);
@@ -120,15 +235,25 @@ namespace TelegArm.Core
                             long len = fi.Length;
                             fi.Delete();
                             freed += len;
+                            deleted++;
                         }
                     }
-                    catch { /* skip locked/in-use files */ }
+                    catch { failed++; /* locked/in-use — skip, never fatal */ }
                 }
             }
-            catch { /* non-fatal */ }
-            // Both cache-deletion paths (Settings "Clear now" + the daily retention job) funnel through here.
-            // Today this only removes FILES (dirs persist), but invalidating is harmless + future-proofs against
-            // a dir-removing change — and keeps the guarantee the audit (G-5/C-6) asked for at one choke point.
+            catch (Exception ex)
+            {
+                Log("[CACHE-PRUNE] ERROR " + what + " folder=\"" + folder + "\" — " + ex.Message);
+            }
+
+            Log("[CACHE-PRUNE] " + what + " folder=\"" + folder + "\" files=" + seen
+                + " recognised=" + recognised + " deleted=" + deleted
+                + " keptUnrecognised=" + skippedUnknown + " lockedSkipped=" + failed
+                + " freed=" + freed + "B");
+
+            // Both deletion paths funnel through here. Today this only removes FILES (dirs persist), but
+            // invalidating is harmless + future-proofs against a dir-removing change — and keeps the
+            // guarantee the audit (G-5/C-6) asked for at one choke point.
             InvalidateEnsured();
             return freed;
         }
