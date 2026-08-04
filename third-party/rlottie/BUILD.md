@@ -93,6 +93,15 @@ $pe=[BitConverter]::ToInt32($b,0x3C); '0x{0:X4}' -f [BitConverter]::ToUInt16($b,
 Then confirm the CRT is really static — `dumpbin /dependents rlottie.dll` must **not** list
 `VCRUNTIME140.dll` / `MSVCP140.dll`. If it does, `CMP0091` didn't apply and the DLL will not load on RT.
 
+> ⚠ **The shipped x86 DLL FAILS this check — only the ARM32 one passes** (verified 2026-08-04 from the
+> PE import tables: `rlottie/ARM/rlottie.dll` imports only `KERNEL32.dll` + `SHLWAPI.dll`, while
+> `rlottie/x86/rlottie.dll` imports `MSVCP140.dll`, `VCRUNTIME140.dll` and 8 `api-ms-win-crt-*`). The
+> recipe above is correct on paper, so the shipped x86 binary predates the `CMP0091` fix and was never
+> re-cut. It is not fatal — x86 is the desktop/dev target, where the VC++ 2015-2022 redist is usually
+> present — but on a clean desktop without it `LoadLibrary` fails, and because `NativeLibraries.cs:33`
+> sets `SEM_FAILCRITICALERRORS` the failure is **silent**: animated `.tgs` stickers simply disappear
+> with no error. Rebuild x86 with the recipe above before trusting this section again.
+
 The C API we bind is `inc/rlottie_capi.h` (undecorated cdecl): `lottie_animation_from_data`,
 `_get_totalframe`, `_get_framerate`, `_render`, `_destroy`. The render buffer is **BGRA
 premultiplied**, which maps directly onto GDI+ `Format32bppPArgb` with no conversion.

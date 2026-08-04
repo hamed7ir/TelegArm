@@ -108,17 +108,27 @@ namespace TelegArm.UI
             // ── Open-source credits ──
             string[][] credits =
             {
+                // BATCH-TA-2 — WTelegramClient was missing entirely: the MTProto library the whole app
+                // is built on. Concentus.OggFile is a separate package from Concentus and was also absent.
+                new[] { "WTelegramClient", "MIT" },
                 new[] { "MaterialSkin.2", "MIT" },
                 new[] { "LibVLCSharp · libVLC", "LGPL-2.1" },
                 new[] { "Newtonsoft.Json", "MIT" },
                 new[] { "NAudio", "Ms-PL" },
                 new[] { "Concentus (Opus)", "BSD-3-Clause" },
+                new[] { "Concentus.OggFile", "BSD-3-Clause" },
                 new[] { "SixLabors.ImageSharp", "Apache-2.0" },
                 new[] { "QRCoder", "MIT" },
                 new[] { "rlottie", "MIT" },
                 new[] { "Vazirmatn font", "SIL OFL 1.1" },
-                new[] { "Roboto font", "Apache-2.0" },
-                new[] { "Noto Emoji", "Apache-2.0" },
+                // BATCH-TA-2/L2 — these three lines used to declare licences the copyright holders
+                // never granted. Verified from each artefact itself: Roboto Regular/Bold are v3.009
+                // (2024) under the OFL per their own `name` table, only Medium is the 2013 Apache-2.0
+                // build; and the LICENSE we actually redistribute inside noto-emoji.zip is the OFL,
+                // not Apache-2.0. THIRD-PARTY-NOTICES.txt carries the full split.
+                new[] { "Roboto (Regular/Bold)", "SIL OFL 1.1" },
+                new[] { "Roboto (Medium)", "Apache-2.0" },
+                new[] { "Noto Emoji", "SIL OFL 1.1" },
             };
             int ch = 40 + credits.Length * 24 + 8;
             var cr = Card(M, y, CW, ch, _card, _border);
@@ -134,7 +144,10 @@ namespace TelegArm.UI
             y += ch + 14;
 
             // ── Footer ──
-            scroll.Controls.Add(Text2("Full license texts: THIRD-PARTY-NOTICES.txt (in the repo root).", M, y, CW, _sub, FontHelper.Ui(8.25f), 18, bg, ContentAlignment.MiddleCenter)); y += 20;
+            // BATCH-TA-2/L1 — was "(in the repo root)", which was false for every installed copy: neither
+            // installer shipped the file at all. Both now drop LICENSE.txt + THIRD-PARTY-NOTICES.txt into
+            // the install directory, so point at where the user can actually find them.
+            scroll.Controls.Add(Text2("Full license texts: LICENSE.txt and THIRD-PARTY-NOTICES.txt, beside the app.", M, y, CW, _sub, FontHelper.Ui(8.25f), 18, bg, ContentAlignment.MiddleCenter)); y += 20;
             scroll.Controls.Add(Text2("© 2026 TelegArm · Licensed under GPL-3.0-only", M, y, CW, _sub, FontHelper.Ui(8.25f), 18, bg, ContentAlignment.MiddleCenter)); y += 30;
 
             scroll.Controls.Add(new Panel { Location = new Point(0, y), Size = new Size(4, 8), BackColor = bg });   // extend the scroll extent
