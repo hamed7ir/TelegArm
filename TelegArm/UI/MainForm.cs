@@ -5862,21 +5862,16 @@ namespace TelegArm.UI
             var entry = (sender as ChatListItemControl)?.Entry;
             if (entry == null) return;
             var menu = new ThemedContextMenuStrip();
-            // BATCH-TA-9b/S2 — folder-scoped pinning is UNIMPLEMENTED, so don't offer the action there.
-            // In a custom folder PinRankInView (:5721) reads _activeFolder.PinnedPeers and never the
-            // MainPinOrder/ArchivePinOrder fields, so IsPinnedInView is permanently false there. That made
-            // the old unguarded item actively harmful: the label always read "Pin" (never "Unpin", so there
-            // was no way to undo), Messages_ToggleDialogPin — which takes NO folder_id (TelegramService
-            // :2137) — pinned the chat in its HOME list instead, and TogglePin then shifted every OTHER
-            // main pin up by one, silently reordering All Chats from a view you weren't looking at. Repeat
-            // clicks kept inflating those ranks while the clicked row never moved.
-            // ARCHIVE IS NOT AFFECTED and is deliberately still offered: SetArchive() nulls _activeFolder
-            // (:7013) and SetActiveFolder() clears _showArchive (:7004), so the two are mutually exclusive;
-            // an archived chat is folder_id 1, so the server pins it in the archive — client and server
-            // agree there. Real folder pinning needs messages.updateDialogFilter plus a second writer for
-            // _folders — that is BATCH-TA-10, which will REPLACE this guard rather than keep it. Until
-            // then the action is withheld, not silently misapplied to another view.
-            if (_activeFolder == null)
+            // BATCH-TA-10 — the Pin item is offered in All, in Archive, and in a real custom folder.
+            // Each of those three routes to a DIFFERENT write, and TogglePin picks by _activeFolder:
+            //   All / Archive  → Messages_ToggleDialogPin (no folder_id; the server pins the dialog in
+            //                    whatever folder it already lives in, so client and server agree).
+            //   custom folder  → Messages_UpdateDialogFilter on that folder's own pinned_peers.
+            // DialogFilterChatlist is STILL withheld: those are shared folders owned by their invite
+            // link, and writing one back is not the same operation as editing a folder you own. The
+            // server's dialogFilterDefault also arrives as a NULL element, but it never becomes
+            // _activeFolder (SetActiveFolder(null) means "All"), so null here is the All view.
+            if (_activeFolder == null || _activeFolder is TL.DialogFilter)
                 AddMenuItem(menu, IsPinnedInView(entry) ? "📌   Unpin" : "📌   Pin", () => TogglePin(entry));
             AddMenuItem(menu, entry.Muted ? "🔔   Unmute" : "🔕   Mute", () => ToggleChatMute(entry));
             if (entry.UnreadCount > 0)
@@ -6023,13 +6018,18 @@ namespace TelegArm.UI
 
         private async void TogglePin(ChatEntry entry)
         {
+            // BATCH-TA-10 — a CUSTOM FOLDER pins through the folder's own filter, not through the dialog
+            // list. Messages_ToggleDialogPin carries no folder_id and would pin in the chat's HOME list
+            // instead, which is a view the user isn't looking at. Archive is NOT this case: SetArchive()
+            // nulls _activeFolder, so `_showArchive` never reaches here with a filter active.
+            var activeFilter = _activeFolder as TL.DialogFilter;
+            if (activeFilter != null) { await TogglePinInFolderAsync(entry, activeFilter); return; }
+
             bool pinning = !IsPinnedInView(entry);
             try { await _service.ToggleDialogPinAsync(entry.Peer, pinning); }
             catch (Exception ex) { ThemedDialog.Show(this, "Pin", "Couldn't change pin: " + ex.Message, "OK"); return; }
 
             // Reflect in the ACTIVE view's pin rank; a new pin floats to the top of that view's pinned group.
-            // (Custom-folder pinning needs updateDialogFilter — not wired here; ToggleDialogPinAsync pins in
-            //  the chat's home folder, so the change shows in All/Archive.)
             //
             // BATCH-TA-9/A1 — SHIFT-UP, replacing a scheme that could never work.
             // The old code was `MinPinRank(...) - 1`, i.e. "one better than the current best". But ranks are
@@ -6067,6 +6067,181 @@ namespace TelegArm.UI
                 else entry.MainPinOrder = -1;
             }
             RenderChatList(_searchBox.Text);
+        }
+
+        // ─────────────────────────────────────────────────────────────────────────────────────────────
+        //  BATCH-TA-10 — REAL FOLDER PINNING (messages.updateDialogFilter).
+        //
+        //  THE VECTORS ARE DISJOINT. Settled from this account's own server state (TA-10/R2a), not from
+        //  the docs, which do not say: a chat pinned inside a folder appears in pinned_peers ONLY, and
+        //  include_peers is left alone. So:
+        //     PIN   → add to pinned_peers only. include_peers stays BYTE-IDENTICAL.
+        //     UNPIN → remove from pinned_peers, then ask whether the chat is still in the folder at all.
+        //  That second question is the data-loss one. In a flags-based folder ("Channels" = broadcasts)
+        //  an unpinned channel still matches the flag and stays. In a pure include-list folder (no type
+        //  flags at all — real examples exist in this account) a chat that was ONLY there because it was
+        //  pinned has nothing to fall back on, and a naive unpin EJECTS it from the folder. So unpin adds
+        //  it to include_peers, but ONLY when it would otherwise vanish — doing it unconditionally would
+        //  silently rewrite a flags-based folder into an explicit list the user never asked for.
+        //
+        //  The "is it still in the folder" test runs the PRODUCTION MatchesFolder against the candidate
+        //  filter rather than re-implementing the flag logic, so it cannot drift from real filtering.
+        //  Because the candidate's pinned_peers no longer holds the peer, FolderPeerSets' Include∪Pinned
+        //  union answers exactly the right question.
+        //
+        //  ⚠ CONSTRUCT, NEVER MUTATE. The TA-6/P2 folder-match cache is keyed on the filter INSTANCE; a
+        //  new object is what makes the stale entry unreachable. Mutating pinned_peers in place would
+        //  leave the cache holding pre-edit peer sets → wrong filtering AND wrong badges.
+        // ─────────────────────────────────────────────────────────────────────────────────────────────
+        private async System.Threading.Tasks.Task TogglePinInFolderAsync(ChatEntry entry, TL.DialogFilter cached)
+        {
+            // `pinning` is deliberately derived from the CACHED object — that is the state the user was
+            // looking at when they clicked, so it is their intent. It is then applied to the FRESH arrays
+            // below, where the add/remove is idempotent, so a pin that already happened elsewhere can't
+            // duplicate and an unpin that already happened can't fail.
+            bool pinning = !IsPinnedInView(entry);
+
+            // ── BATCH-TA-10/R2b — RE-FETCH BEFORE THE WRITE ──────────────────────────────────────────
+            // This is a read-modify-write of a whole filter object, and `_folders` is only ever refreshed
+            // by LoadFolders (cold connect / account switch / recovery — TA-7). It can therefore be HOURS
+            // stale. Building the payload from it would silently REVERT every folder edit made on another
+            // device since this session started: add a chat to the folder on your phone, pin something
+            // here, and the phone's edit is gone. We re-read the one filter we are about to overwrite.
+            // Only ONE filter is taken from the response — `_folders` as a whole is NOT refreshed here,
+            // so the blast radius stays exactly one folder and one write.
+            TL.DialogFilterBase[] fresh;
+            try { fresh = await _service.GetDialogFiltersFreshAsync(); }
+            catch (Exception ex)
+            {
+                if (Logger.Enabled) Logger.Diag("[FOLDERPIN] folder=" + cached.id + " re-fetch FAILED, no write — " + ex.Message);
+                ThemedDialog.Show(this, "Pin", "Couldn't reach Telegram to update the folder: " + ex.Message, "OK");
+                return;
+            }
+            if (IsDisposed) return;
+
+            // Locate BY ID, never by title (this account has two folders both called "Groups"), and skip
+            // the null element — the server's dialogFilterDefault deserialises to null in WTC 4.4.6.
+            TL.DialogFilter folder = null;
+            bool nowChatlist = false;
+            foreach (var f in fresh)
+            {
+                if (f == null || f.ID != cached.id) continue;
+                folder = f as TL.DialogFilter;
+                nowChatlist = folder == null;
+                break;
+            }
+            if (folder == null)
+            {
+                string why = nowChatlist ? "is now a shared folder" : "no longer exists";
+                if (Logger.Enabled) Logger.Diag("[FOLDERPIN] folder=" + cached.id + " " + why + " on the server — ABORT, nothing written");
+                ThemedDialog.Show(this, "Pin", "That folder " + why + ", so nothing was changed.", "OK");
+                return;
+            }
+
+            // If this ever fires, the difference IS the staleness window — worth seeing once.
+            if (Logger.Enabled)
+            {
+                string cp = PeerIds(cached.pinned_peers),  fp = PeerIds(folder.pinned_peers);
+                string ci = PeerIds(cached.include_peers), fi = PeerIds(folder.include_peers);
+                string ce = PeerIds(cached.exclude_peers), fe = PeerIds(folder.exclude_peers);
+                if (cp != fp || ci != fi || ce != fe)
+                    Logger.Diag("[FOLDERPIN] STALE _folders id=" + cached.id
+                                + " pinned cached[" + cp + "] fresh[" + fp + "]"
+                                + " include cached[" + ci + "] fresh[" + fi + "]"
+                                + " exclude cached[" + ce + "] fresh[" + fe + "]"
+                                + " → writing from FRESH (the cached copy would have reverted that difference)");
+            }
+
+            var pinned  = folder.pinned_peers  ?? new InputPeer[0];
+            var include = folder.include_peers ?? new InputPeer[0];
+
+            // Pin → the new pin takes the TOP of this folder's pinned group (index 0), matching the
+            // shift-up semantics the main list uses. The Where() also de-dupes a stale entry.
+            InputPeer[] newPinned;
+            if (pinning)
+            {
+                var list = new List<InputPeer> { entry.Peer };
+                list.AddRange(pinned.Where(p => PeerIdOf(p) != entry.PeerId));
+                newPinned = list.ToArray();
+            }
+            else newPinned = pinned.Where(p => PeerIdOf(p) != entry.PeerId).ToArray();
+
+            var candidate = CloneFilterWith(folder, newPinned, include);
+            bool rescuedFromEjection = false;
+
+            if (!pinning && !MatchesFolder(entry, candidate))
+            {
+                var inc = new List<InputPeer>(include) { entry.Peer };
+                candidate = CloneFilterWith(folder, newPinned, inc.ToArray());
+                rescuedFromEjection = true;
+            }
+
+            if (Logger.Enabled)
+                Logger.Diag("[FOLDERPIN] " + (pinning ? "pin" : "unpin") + " peer=" + entry.PeerId
+                            + " folder=" + folder.id + " pinned " + pinned.Length + "→" + newPinned.Length
+                            + " include " + include.Length + "→" + (candidate.include_peers ?? new InputPeer[0]).Length
+                            + (rescuedFromEjection ? " (ADDED to include_peers: unpin would have EJECTED it)" : ""));
+
+            try { await _service.UpdateDialogFilterAsync(folder.id, candidate); }
+            catch (Exception ex)
+            {
+                // Touch NOTHING on failure — _folders and _activeFolder keep pointing at the object the
+                // server still has, so local state cannot drift from the server. R7: survives Release.
+                if (Logger.Enabled) Logger.Diag("[FOLDERPIN] folder=" + folder.id + " FAILED, no local change — " + ex.Message);
+                ThemedDialog.Show(this, "Pin", "Couldn't change pin: " + ex.Message, "OK");
+                return;
+            }
+
+            // Swap the array element AND repoint _activeFolder TOGETHER. RebuildFolderBar marks the active
+            // tab with ReferenceEquals(f, _activeFolder), so doing one without the other loses the active
+            // highlight and keeps the view filtering on a stale object.
+            // Key on ID: titles are NOT unique (this account has two folders both called "Groups"), and the
+            // server's dialogFilterDefault arrives as a NULL element, so never index-shift and always
+            // null-check before reading f.ID.
+            int idx = -1;
+            for (int i = 0; i < _folders.Length; i++)
+            {
+                var f = _folders[i];
+                if (f != null && f.ID == folder.id) { idx = i; break; }
+            }
+            if (idx >= 0) _folders[idx] = candidate;
+            else if (Logger.Enabled) Logger.Diag("[FOLDERPIN] folder=" + folder.id + " not found in _folders; next LoadFolders resyncs");
+
+            // R2b added a second await, so the user may have switched folders while the re-fetch and the
+            // write were in flight. Only repoint the ACTIVE view if it is still this folder — otherwise we
+            // would yank them back to a folder they navigated away from. The array element is replaced
+            // either way, so whenever they return, they see the new state.
+            if (_activeFolder != null && _activeFolder.ID == folder.id) _activeFolder = candidate;
+
+            RebuildFolders();                    // re-registers badge sources against the NEW instance
+            RenderChatList(_searchBox.Text);
+        }
+
+        /// <summary>Peer ids of a filter vector as a stable csv, for the [FOLDERPIN] staleness diff. "-" when
+        /// empty, so an empty vector and a missing one read the same in the log.</summary>
+        private static string PeerIds(InputPeer[] peers)
+        {
+            if (peers == null || peers.Length == 0) return "-";
+            return string.Join(",", peers.Select(PeerIdOf));
+        }
+
+        /// <summary>BATCH-TA-10: a NEW DialogFilter with only pinned_peers/include_peers swapped; every other
+        /// field is carried across by reference, verbatim. Reconstructing title/emoticon/flags instead of
+        /// copying them is what triggers FILTER_TITLE_EMPTY, and rebuilding exclude_peers would risk
+        /// CHATLIST_EXCLUDE_INVALID — so neither is ever rebuilt here.</summary>
+        private static TL.DialogFilter CloneFilterWith(TL.DialogFilter src, InputPeer[] pinnedPeers, InputPeer[] includePeers)
+        {
+            return new TL.DialogFilter
+            {
+                flags         = src.flags,          // carries has_emoticon / has_color / title_noanimate
+                id            = src.id,
+                title         = src.title,          // TextWithEntities — reference, never rebuilt
+                emoticon      = src.emoticon,
+                color         = src.color,
+                pinned_peers  = pinnedPeers,
+                include_peers = includePeers,
+                exclude_peers = src.exclude_peers,  // FENCE: never touched by TA-10
+            };
         }
 
         private async void ToggleArchive(ChatEntry entry)
@@ -7093,14 +7268,24 @@ namespace TelegArm.UI
         //  make that airtight, both verified before this was written:
         //    (1) TelegramService.GetDialogFiltersAsync (:1930-1934) issues a FRESH Messages_GetDialogFilters
         //        every call and returns the newly-deserialized array — it caches nothing and reuses no
-        //        instance. `_folders` is assigned in exactly ONE place (LoadFolders), wholesale.
+        //        instance. `_folders` is assigned wholesale in LoadFolders.
         //    (2) NOTHING mutates a folder's peer arrays in place — repo-wide there is no assignment to
-        //        IncludePeers / PinnedPeers / exclude_peers anywhere.
+        //        IncludePeers / PinnedPeers / exclude_peers on an existing filter.
         //  So every event that could invalidate a set REPLACES the key object and the stale entry simply
         //  becomes unreachable:
         //    · folder list refreshed        → LoadFolders → new objects
         //    · account switched             → LoadDialogsAsync → LoadFolders → new objects
         //    · folder edited on another device → only ever surfaces via LoadFolders → new objects
+        //    · WE pin/unpin inside a folder → TogglePinInFolderAsync → CloneFilterWith → new object
+        //
+        //  ⚠ UPDATED BY BATCH-TA-10 — that last bullet is new, and it is the SECOND writer of `_folders`.
+        //  Fact (1) used to say "assigned in exactly ONE place"; TogglePinInFolderAsync now also replaces
+        //  a single ELEMENT of the array after a successful Messages_UpdateDialogFilter. Fact (2) is what
+        //  keeps this cache correct, and it still holds ONLY because that path CONSTRUCTS a brand-new
+        //  DialogFilter (CloneFilterWith) instead of writing into the existing one. If anyone ever
+        //  "optimises" that into an in-place `folder.pinned_peers = …`, this cache silently keeps the
+        //  pre-edit peer sets and the result is WRONG FILTERING AND WRONG BADGES, not a stale perf number.
+        //  Any future folder writer must replace the object too.
         //  A ConditionalWeakTable also means entries die with their folder, so nothing accumulates
         //  across account switches. There is deliberately NO manual Invalidate() to forget to call —
         //  the trap with a hand-invalidated cache is that a missed hook turns a perf win into WRONG

@@ -1933,6 +1933,32 @@ namespace TelegArm.Core
             catch { return new DialogFilterBase[0]; }
         }
 
+        /// <summary>BATCH-TA-10/R2b: a FRESH read of the dialog filters, for the read-modify-write in
+        /// MainForm.TogglePinInFolderAsync.
+        /// ⚠ Unlike <see cref="GetDialogFiltersAsync"/> this does NOT swallow. There, an empty array is a
+        /// benign "no folders" fallback; here it would be indistinguishable from "the folder was deleted
+        /// on another device", so a network blip would report the wrong thing to the user. The caller needs
+        /// to tell those two apart, so the exception has to reach it.</summary>
+        public async Task<DialogFilterBase[]> GetDialogFiltersFreshAsync()
+        {
+            var r = await Client.Messages_GetDialogFilters();
+            return (r as Messages_DialogFilters)?.filters ?? new DialogFilterBase[0];
+        }
+
+        /// <summary>BATCH-TA-10: writes one dialog filter back (messages.updateDialogFilter). Used only to
+        /// change a folder's pinned_peers — see MainForm.TogglePin.
+        /// ⚠ DELIBERATELY NOT try/catch'd, unlike <see cref="GetDialogFiltersAsync"/> above. This is a WRITE:
+        /// swallowing the error would leave the caller believing the server accepted a folder edit it
+        /// rejected, and the local folder object would then diverge from the server's. The caller must see
+        /// the RpcException so it can surface the server's own message and roll back.
+        /// Documented 400s include FILTER_ID_INVALID, FILTER_INCLUDE_EMPTY, FILTER_TITLE_EMPTY,
+        /// PEER_ID_INVALID and CHATLIST_EXCLUDE_INVALID — the last three of which fire when the filter is
+        /// reconstructed badly, which is why the caller copies every field verbatim.</summary>
+        public Task<bool> UpdateDialogFilterAsync(int id, DialogFilterBase filter)
+        {
+            return Client.Messages_UpdateDialogFilter(id, filter);
+        }
+
         /// <summary>Adds or replaces our reaction on a message (empty emoticon clears it).</summary>
         public async Task<bool> SendReactionAsync(InputPeer peer, int msgId, string emoticon)
         {
