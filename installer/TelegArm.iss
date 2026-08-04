@@ -65,6 +65,13 @@ WizardStyle=modern
 ; Inno 6 hides the Welcome page by default (DisableWelcomePage=yes); show it so the branded
 ; WelcomeLabel text + the large WizardImageFile art appear on their own first page.
 DisableWelcomePage=no
+; --- Licence (BATCH-TA-2/L1) ---
+; GPL-3.0 s4 / LGPL-2.1 s6 / MIT / BSD / Apache / OFL all require the licence to ACCOMPANY the
+; binary. Until v1.1.0 neither installer shipped one, so every published package was
+; non-compliant. Show the licence in the wizard AND drop it (plus the notices) into {app} below -
+; a link from the About screen is not a copy. LICENSE has no extension; Inno detects RTF by
+; content, so a plain-text file is read correctly here.
+LicenseFile=..\LICENSE
 ; --- Branding ---
 SetupIconFile=..\img-icon\icon.ico
 ; Top-right small logo = our app icon (icon.ico) converted to white-background BMPs, multi-size
@@ -98,6 +105,11 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 ;       *.png = TelegArm.png    *.ico = trayicon.ico, trayicon-unread.ico
 Source: "{#SrcDir}\TelegArm.exe";        DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SrcDir}\TelegArm.exe.config"; DestDir: "{app}"; Flags: ignoreversion
+; --- Licence + notices (BATCH-TA-2/L1). Loose files beside the exe, NOT embedded resources:
+;     that is what the GPL/LGPL want, and it is what AboutForm.cs now points the user at.
+;     Sourced from the repo root (SrcDir is bin\Release, so these use "..\" explicitly).
+Source: "..\LICENSE";                    DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
+Source: "..\THIRD-PARTY-NOTICES.txt";    DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SrcDir}\*.zip";               DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SrcDir}\*.png";               DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SrcDir}\*.ico";               DestDir: "{app}"; Flags: ignoreversion

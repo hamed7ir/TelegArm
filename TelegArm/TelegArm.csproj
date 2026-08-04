@@ -283,8 +283,10 @@
       <Link>rlottie\x86\rlottie.dll</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <!-- Packed Noto Emoji (Apache-2.0; LICENSE bundled inside the zip). One file replaces the loose
-         Emoji\72x72 PNG folder; EmojiRenderer reads it once at startup. Lives at the repo root. -->
+    <!-- Packed Noto Emoji (SIL OFL 1.1 — the LICENSE bundled inside the zip reads "Copyright 2013
+         Google LLC ... SIL Open Font License, Version 1.1"; this comment said Apache-2.0 until
+         BATCH-TA-2/L2 corrected it). One file replaces the loose Emoji\72x72 PNG folder;
+         EmojiRenderer reads it once at startup. Lives at the repo root. -->
     <Content Include="..\noto-emoji.zip">
       <Link>noto-emoji.zip</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

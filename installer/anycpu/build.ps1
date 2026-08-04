@@ -32,6 +32,12 @@ $stage = Join-Path $env:TEMP ("tgpay_" + [Guid]::NewGuid().ToString('N'))
 New-Item $stage, "$stage\dll" -ItemType Directory -Force | Out-Null
 Copy-Item "$rel\TelegArm.exe", "$rel\TelegArm.exe.config" $stage
 Copy-Item "$rel\*.zip", "$rel\*.png", "$rel\*.ico" $stage
+# Licence + notices (BATCH-TA-2/L1). GPL-3.0 s4 / LGPL-2.1 s6 / MIT / BSD / Apache / OFL all require
+# the licence to ACCOMPANY the binary; until v1.1.0 neither installer shipped one. Setup.cs extracts
+# payload.zip wholesale into the target directory, so staging them here puts them beside the exe on
+# the device. This is the RT ship vehicle - it is the ONLY installer Windows RT can run.
+Copy-Item (Join-Path $root 'LICENSE') (Join-Path $stage 'LICENSE.txt')
+Copy-Item (Join-Path $root 'THIRD-PARTY-NOTICES.txt') $stage
 Copy-Item "$rel\rlottie" $stage -Recurse
 Copy-Item "$rel\*.dll" "$stage\dll"
 
