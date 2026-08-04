@@ -3282,6 +3282,8 @@ namespace TelegArm.UI
                                           ReturnTo = channelEntry, ReturnAnchorId = anchor,
                                           GroupEntry = groupEntry };   // COMMENTS-JOIN-FLYOUT: join source (Peer + 'left' flag)
                 groupEntry.UnreadCount = 0;           // open the thread at the bottom (latest comments)
+                UpdateTrayTooltip();     // TA-6b/B: the tray gap at this site — unread dropped to 0 unannounced
+                RefreshFolderBadges();   // TA-6b/G1 (DOWN): opening a comment thread reads the discussion group
                 _selectedChat = groupEntry;           // paging / scroll / updates target the thread from here
                 await LoadHistoryAsync(groupEntry, 0);   // pages via GetReplies (thread mode, source-swapped)
                 if (_thread == null) return;             // back was hit while loading
@@ -4690,12 +4692,41 @@ namespace TelegArm.UI
                 if (IsHandleCreated && !IsDisposed)
                     BeginInvoke((Action)(() =>
                     {
-                        // Guard the UI-thread dispatch so a handler exception can't crash the app or stall delivery.
+                        // TA-6b/F: a throwing handler branch is a PERMANENTLY LOST update — UpdateManager
+                        // commits local.pts BEFORE calling us (UpdateManager.cs:182/223/281) and RaiseUpdate
+                        // (:519-530) discards whatever we throw, so getDifference will never re-deliver it.
+                        // Until now this was recorded with Debug.WriteLine, i.e. invisible in Release (R7) —
+                        // the exact build where it matters. Now it names the update type in the Release log.
+                        // NOT rethrown here, deliberately: this lambda runs on the UI thread under BeginInvoke,
+                        // NOT on WTC's callback stack, so a rethrow would reach Application.ThreadException and
+                        // put a crash dialog in front of the user rather than being swallowed by WTC. The
+                        // rethrow the batch asked for belongs on the outer catch below, which IS WTC's stack.
                         try { ProcessSingleUpdate(update); }
-                        catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[UM] ProcessSingleUpdate EX: " + ex); }
+                        catch (Exception ex)
+                        {
+                            Logger.Diag("[UM] HANDLER EX type=" + (update != null ? update.GetType().Name : "null")
+                                + " — UPDATE PERMANENTLY LOST (pts already committed; getDifference cannot recover it): " + ex);
+                            CrashLog.RecordThrottled("ProcessSingleUpdate", ex);
+                        }
                     }));
+                // TA-6b/D: the guard's ELSE was silent. An update arriving before the handle exists, or
+                // after Dispose, is DISCARDED here — and (see the commit message) the UpdateManager has
+                // already advanced its pts/seq by the time our callback returns, so getDifference will
+                // NOT bring it back. That makes this an unrecoverable hole, not a deferral. Logging it is
+                // not the fix; it is how we find out whether it ever actually happens in the field.
+                else if (Logger.Enabled)
+                    Logger.Diag("[UM] UPDATE DROPPED (window not ready) type="
+                        + (update != null ? update.GetType().Name : "null")
+                        + " handleCreated=" + IsHandleCreated + " disposed=" + IsDisposed);
             }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[UM] OnManagerUpdate EX: " + ex); }
+            catch (Exception ex)
+            {
+                // TA-6b/F: THIS one is on WTC's callback stack, so the rethrow is safe — RaiseUpdate
+                // (UpdateManager.cs:519-530) catches and logs it internally. Log first: WTC's own
+                // Helpers.Log is not wired into our FileLog, so without this line the throw is invisible.
+                Logger.Diag("[UM] CALLBACK EX type=" + (update != null ? update.GetType().Name : "null") + ": " + ex);
+                throw;
+            }
             return System.Threading.Tasks.Task.CompletedTask;
         }
 
@@ -4823,7 +4854,29 @@ namespace TelegArm.UI
                 HandleChannelStateUpdate(uchn.channel_id);
             else if (update is UpdateChat ucht)
                 HandleBasicChatStateUpdate(ucht.chat_id);
+            // ── TA-6b/G2: THE DEFAULT ARM ────────────────────────────────────────────────────────────
+            // This chain had NO else, so every update type we do not handle was dropped in complete
+            // silence — and the only per-update trace above uses Debug.WriteLine, which Release strips
+            // (rail R7). On the shipped build there was literally no evidence an update had arrived,
+            // let alone been ignored. BATCH-TA-7's coverage matrix (rename, avatar, pin/unpin, folder
+            // membership — all unhandled) had to be assembled by reading code, because the running app
+            // could not report it. This one arm makes that class of gap self-reporting: the next time
+            // something "doesn't update live", grep the Release log for [UPDATE] UNHANDLED.
+            // Deduped per session so a chatty type (typing, view counts) cannot flood the log; the
+            // FIRST occurrence of each distinct type is what tells you the handler is missing.
+            // Logging only — no behaviour change, no update is consumed differently.
+            else if (Logger.Enabled)
+            {
+                var __tn = update != null ? update.GetType().Name : "null";
+                if (_unhandledUpdateTypes.Add(__tn))
+                    Logger.Diag("[UPDATE] UNHANDLED type=" + __tn + " (first this session; no handler in ProcessSingleUpdateCore)");
+            }
         }
+
+        /// <summary>TA-6b/G2: distinct update type names already reported as unhandled, so each is logged
+        /// once per session rather than once per occurrence. UI-thread only (ProcessSingleUpdateCore is
+        /// always reached via BeginInvoke), so a plain HashSet needs no lock.</summary>
+        private readonly HashSet<string> _unhandledUpdateTypes = new HashSet<string>();
 
         /// <summary>MUTE-PREDICATE-FIX: a peer is muted IFF it's set SILENT (has_silent + silent=true — mute_until may be
         /// 0/past for these, the missing "7"), OR mute_until is in the FUTURE (a timed mute OR the 9999 "forever" max).
@@ -4964,6 +5017,7 @@ namespace TelegArm.UI
             entry.UnreadCount = Math.Max(0, stillUnread);
             FindChatItem(peerId)?.Invalidate();
             UpdateTrayTooltip();
+            RefreshFolderBadges();   // TA-6b/G1 (DOWN): read on ANOTHER device — the fix that matters most
         }
 
         /// <summary>Remote deletion → remove the deleted messages' bubbles in the OPEN chat (the SAME dispose
@@ -5295,9 +5349,14 @@ namespace TelegArm.UI
             entry.Preview = GetDisplayText(m);
             entry.Date = MsgDate(m);
             entry.TopMessageId = m.ID;
+            // BATCH-TA-6/P3 (BUG-2): a folder's unread badge is a function of UnreadCount, so remember
+            // whether this message actually moved it. Only this branch changes an unread count — an own
+            // message, or one into the open chat, changes no badge and must not pay for a refresh.
+            bool unreadChanged = false;
             if (!outgoing && entry != _selectedChat)
             {
                 entry.UnreadCount += 1;
+                unreadChanged = true;
                 // MENTION-REACTION: a mentioned/replied-to message lights the "@" badge (Message.Flags.mentioned covers
                 // both @mentions and replies). The break-through-mute NOTIFICATION is decided separately in MaybeToast.
                 if (m is Message mm && (mm.flags & Message.Flags.mentioned) != 0) entry.UnreadMentions += 1;
@@ -5313,6 +5372,7 @@ namespace TelegArm.UI
             if (!IsVisibleInCurrentView(entry))
             {
                 if (item != null) { _chatListPanel.Controls.Remove(item); item.Dispose(); }
+                if (unreadChanged) RefreshFolderBadges();   // P3: the chat is off-view but still counts toward its folders' badges
                 UpdateTrayTooltip();
                 return;
             }
@@ -5339,6 +5399,14 @@ namespace TelegArm.UI
             if (!filtered && !IsPinnedInView(entry))
                 _chatListPanel.Controls.SetChildIndex(item, PinnedBoundary());
             item.Invalidate();
+
+            // BATCH-TA-6/P3 — closes BUG-2. RefreshFolderBadges() was reachable ONLY from the
+            // RenderChatList wrapper, so this incremental path (the steady-state per-message path)
+            // never updated per-folder unread badges — they went stale until some unrelated event
+            // forced a full rebuild. Measured cost of a refresh with 9 folders / 107 chats: 0.19-0.23 ms,
+            // against a 200-315 ms full rebuild, so calling it per message is affordable. Gated on
+            // unreadChanged so an own message or one into the open chat costs nothing.
+            if (unreadChanged) RefreshFolderBadges();
 
             UpdateTrayTooltip();
         }
@@ -5569,7 +5637,10 @@ namespace TelegArm.UI
                 var known = new HashSet<long>(_allChats.Select(c => c.PeerId));
                 int added = 0;
                 foreach (var e in fresh) if (known.Add(e.PeerId)) { _allChats.Add(e); added++; }
-                if (LogOn) System.Diagnostics.Debug.WriteLine("[SCROLL] chat-list page merged +" + added
+                // BATCH-TA-6/P1 (R7): Logger.Diag, not Debug — Release strips Debug.WriteLine, and the
+                // absence of this line is why the TA-5 gate could not confirm from the log that paging
+                // had happened and had to fall back to a human eyeball pass.
+                if (LogOn) Logger.Diag("[SCROLL] chat-list page merged +" + added
                     + " (total=" + _allChats.Count + ", exhausted=" + _dlgExhausted + ")");
                 if (added > 0)
                 {
@@ -5813,10 +5884,10 @@ namespace TelegArm.UI
             try { ok = await _service.ToggleMuteAsync(entry.Peer, target); }
             catch (Exception ex)
             {
-                if (Logger.Enabled) System.Diagnostics.Debug.WriteLine("[NOTIFY] mute write peer=" + entry.PeerId + " mute=" + target + " FAILED ex=" + ex.Message);
+                if (Logger.Enabled) Logger.Diag("[NOTIFY] mute write peer=" + entry.PeerId + " mute=" + target + " FAILED ex=" + ex.Message);   // R7: survives Release (BATCH-TA-6/P1)
                 ThemedDialog.Show(this, "Mute", "Couldn't change mute: " + ex.Message, "OK"); return;
             }
-            if (Logger.Enabled) System.Diagnostics.Debug.WriteLine("[NOTIFY] mute write peer=" + entry.PeerId + " mute=" + target + (ok ? " ok" : " FAILED (server returned false)"));
+            if (Logger.Enabled) Logger.Diag("[NOTIFY] mute write peer=" + entry.PeerId + " mute=" + target + (ok ? " ok" : " FAILED (server returned false)"));   // R7 (BATCH-TA-6/P1)
             if (!ok) { ThemedDialog.Show(this, "Mute", "Telegram didn't accept the change — try again.", "OK"); return; }
             entry.Muted = target;
             // Keep the explicit-setting mirror consistent for the notify gate until the server echo lands
@@ -5833,6 +5904,7 @@ namespace TelegArm.UI
             entry.UnreadCount = 0;
             FindChatItem(entry.PeerId)?.Invalidate();
             UpdateTrayTooltip();
+            RefreshFolderBadges();   // TA-6b/G1 (DOWN): context-menu "Mark as read"
         }
 
         private async void MarkChatUnread(ChatEntry entry)
@@ -5842,6 +5914,7 @@ namespace TelegArm.UI
             if (entry.UnreadCount == 0) entry.UnreadCount = 1;   // local cue (we don't track the unread_mark flag separately)
             FindChatItem(entry.PeerId)?.Invalidate();
             UpdateTrayTooltip();
+            RefreshFolderBadges();   // TA-6b/G1 (UP): context-menu "Mark as unread" — the one local site that RAISES a count
         }
 
         private async void ClearChatHistory(ChatEntry entry)
@@ -5853,6 +5926,7 @@ namespace TelegArm.UI
             FindChatItem(entry.PeerId)?.Invalidate();
             if (_selectedChat == entry) await LoadHistoryAsync(entry, 0);   // refresh the now-empty open chat
             UpdateTrayTooltip();
+            RefreshFolderBadges();   // TA-6b/G1 (DOWN): clearing a history zeroes its unread
         }
 
         /// <summary>"Delete chat" for a user; "Leave channel"/"Leave group" for a channel/group.</summary>
@@ -6756,8 +6830,20 @@ namespace TelegArm.UI
         /// has registered sources.</summary>
         private void RefreshFolderBadges()
         {
+            // BATCH-TA-6/P3 measurement rung. This must be CHEAP before BUG-2 can be fixed by calling it
+            // from the per-message incremental path: each source is a full LINQ sweep of _allChats, and a
+            // custom folder's sweep runs MatchesFolder per entry. P2 removed the per-chat HashSet churn;
+            // this line is how we find out whether what remains is affordable per message.
+            long __ts = Logger.Enabled ? System.Diagnostics.Stopwatch.GetTimestamp() : 0L;
             for (int i = 0; i < _folderBadgeSources.Count; i++)
                 _folderBadgeSources[i].Key.Unread = _folderBadgeSources[i].Value();
+            if (__ts != 0)
+            {
+                double __ms = (System.Diagnostics.Stopwatch.GetTimestamp() - __ts) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+                Logger.Diag("[BADGES] refresh sources=" + _folderBadgeSources.Count + " folders=" + _folders.Length
+                    + " chats=" + _allChats.Count
+                    + " ms=" + __ms.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture));
+            }
         }
 
         /// <summary>One folder TAB (tabbed mode): label + unread badge pill, accent when active. Owner-drawn
@@ -6907,11 +6993,14 @@ namespace TelegArm.UI
           try
           {
             var df = folder as TL.DialogFilter;
-            if (df != null && PeerIdSet(df.exclude_peers).Contains(e.PeerId)) return false;
-
-            var incl = PeerIdSet(folder.IncludePeers);
-            incl.UnionWith(PeerIdSet(folder.PinnedPeers));
-            if (incl.Contains(e.PeerId)) return true;
+            // BATCH-TA-6/P2: the peer sets are now built ONCE PER FOLDER and cached, not rebuilt per
+            // chat. This method runs per entry in two sweeps of ~645 chats (IsVisibleInCurrentView when
+            // a custom folder is active, and FolderUnread for every folder badge), and it used to call
+            // PeerIdSet up to THREE times per call — ~9,700 short-lived HashSets per badge refresh at
+            // 645 chats / 5 folders, on a Tegra 3.
+            var sets = FolderPeerSets(folder);
+            if (df != null && sets.Exclude.Contains(e.PeerId)) return false;
+            if (sets.Include.Contains(e.PeerId)) return true;
 
             if (df == null) return false;   // chatlist with no explicit match
             var flags = df.flags;
@@ -6949,6 +7038,55 @@ namespace TelegArm.UI
             if (peers != null)
                 foreach (var p in peers) { long id = PeerIdOf(p); if (id != 0) set.Add(id); }
             return set;
+        }
+
+        // ─────────────────────────────────────────────────────────────────────────────────────────────
+        //  BATCH-TA-6/P2 — per-folder peer sets, built once and memoised.
+        //
+        //  INVALIDATION IS BY CONSTRUCTION, NOT BY HAND — this is the important part.
+        //  The cache is keyed on the DialogFilterBase OBJECT ITSELF via a ConditionalWeakTable, so an
+        //  entry can only ever be found again by the very object whose contents it summarises. Two facts
+        //  make that airtight, both verified before this was written:
+        //    (1) TelegramService.GetDialogFiltersAsync (:1930-1934) issues a FRESH Messages_GetDialogFilters
+        //        every call and returns the newly-deserialized array — it caches nothing and reuses no
+        //        instance. `_folders` is assigned in exactly ONE place (LoadFolders), wholesale.
+        //    (2) NOTHING mutates a folder's peer arrays in place — repo-wide there is no assignment to
+        //        IncludePeers / PinnedPeers / exclude_peers anywhere.
+        //  So every event that could invalidate a set REPLACES the key object and the stale entry simply
+        //  becomes unreachable:
+        //    · folder list refreshed        → LoadFolders → new objects
+        //    · account switched             → LoadDialogsAsync → LoadFolders → new objects
+        //    · folder edited on another device → only ever surfaces via LoadFolders → new objects
+        //  A ConditionalWeakTable also means entries die with their folder, so nothing accumulates
+        //  across account switches. There is deliberately NO manual Invalidate() to forget to call —
+        //  the trap with a hand-invalidated cache is that a missed hook turns a perf win into WRONG
+        //  filtering and WRONG badges, which is far worse than the allocation it saves.
+        // ─────────────────────────────────────────────────────────────────────────────────────────────
+
+        private sealed class FolderSets
+        {
+            public HashSet<long> Include;   // IncludePeers ∪ PinnedPeers
+            public HashSet<long> Exclude;   // exclude_peers (empty for a non-DialogFilter chatlist)
+        }
+
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<TL.DialogFilterBase, FolderSets> _folderSets
+            = new System.Runtime.CompilerServices.ConditionalWeakTable<TL.DialogFilterBase, FolderSets>();
+
+        /// <summary>The memoised peer sets for one folder. Built on first use per folder INSTANCE; see the
+        /// block above for why that is self-invalidating.</summary>
+        private static FolderSets FolderPeerSets(TL.DialogFilterBase folder)
+        {
+            FolderSets s;
+            if (_folderSets.TryGetValue(folder, out s)) return s;
+            s = new FolderSets
+            {
+                Include = PeerIdSet(folder.IncludePeers),
+                Exclude = PeerIdSet((folder as TL.DialogFilter)?.exclude_peers)
+            };
+            s.Include.UnionWith(PeerIdSet(folder.PinnedPeers));
+            // Add is a no-op-safe race loser: if another thread beat us, keep whichever landed.
+            try { _folderSets.Add(folder, s); } catch { }
+            return s;
         }
 
         private static long PeerIdOf(InputPeer p)
@@ -7129,7 +7267,7 @@ namespace TelegArm.UI
 
         private async void OnChatItemClick(object sender, EventArgs e)
         {
-            if (LogOn) System.Diagnostics.Debug.WriteLine("[OPEN] row click peer=" + ((ChatListItemControl)sender).Entry.PeerId);
+            if (LogOn) Logger.Diag("[OPEN] row click peer=" + ((ChatListItemControl)sender).Entry.PeerId);   // R7 (BATCH-TA-6/P1)
             await OpenChat(((ChatListItemControl)sender).Entry, 0);
         }
 
@@ -7145,12 +7283,12 @@ namespace TelegArm.UI
         {
             if (focusMessageId == 0 && entry.PeerId == _openLatchPeer && Environment.TickCount - _openLatchTick < 500)
             {
-                if (LogOn) System.Diagnostics.Debug.WriteLine("[OPEN] duplicate open suppressed peer=" + entry.PeerId);
+                if (LogOn) Logger.Diag("[OPEN] duplicate open suppressed peer=" + entry.PeerId);   // R7 (BATCH-TA-6/P1)
                 return;
             }
             _openLatchPeer = entry.PeerId; _openLatchTick = Environment.TickCount;
             if (_inChatSearchEntry != null) ExitInChatSearch();   // INCHAT-SEARCH: opening a (different) chat leaves in-chat search
-            if (LogOn) System.Diagnostics.Debug.WriteLine("[OPEN] OpenChat peer=" + entry.PeerId + " focus=" + focusMessageId);
+            if (LogOn) Logger.Diag("[OPEN] OpenChat peer=" + entry.PeerId + " focus=" + focusMessageId);   // R7 (BATCH-TA-6/P1)
             PersistDraftForCurrentChat();   // DRAFTS: save the chat we're LEAVING (its composer text → server draft) before switching
             ClearThreadMode();        // COMMENTS-NAV-FIX Bug 2: leaving ANY comment thread — clear _thread so the loaders,
                                       // composer, and send target the NEW chat (LoadHistoryAsync below then resets the panel).
@@ -10628,6 +10766,7 @@ namespace TelegArm.UI
             var _ = SafeReadHistory(_selectedChat.Peer, latest);
             FindChatItem(_selectedChat.PeerId)?.Invalidate();
             UpdateTrayTooltip();
+            RefreshFolderBadges();   // TA-6b/G1 (DOWN): THE TA-6 GATE FAILURE — reading a chat in TelegArm
         }
 
         private async System.Threading.Tasks.Task SafeReadHistory(InputPeer peer, int maxId)
@@ -10815,6 +10954,11 @@ namespace TelegArm.UI
                     ReturnAnchorId = 0
                 };
                 groupEntry.UnreadCount = 0;
+                // TA-6b/A+B: this site did NOT publish the change at all — no row repaint, no tray, no
+                // badges. Same shape as the other six read sites now.
+                FindChatItem(groupEntry.PeerId)?.Invalidate();
+                UpdateTrayTooltip();
+                RefreshFolderBadges();   // (DOWN): entering a thread from the group reads the group
                 _selectedChat = groupEntry;                 // paging / scroll / updates target the thread from here
                 await LoadHistoryAsync(groupEntry, focusMsgId);   // thread mode → GetReplies focused island
                 if (_thread == null) return;                // back hit while loading
