@@ -5862,7 +5862,22 @@ namespace TelegArm.UI
             var entry = (sender as ChatListItemControl)?.Entry;
             if (entry == null) return;
             var menu = new ThemedContextMenuStrip();
-            AddMenuItem(menu, IsPinnedInView(entry) ? "📌   Unpin" : "📌   Pin", () => TogglePin(entry));
+            // BATCH-TA-9b/S2 — folder-scoped pinning is UNIMPLEMENTED, so don't offer the action there.
+            // In a custom folder PinRankInView (:5721) reads _activeFolder.PinnedPeers and never the
+            // MainPinOrder/ArchivePinOrder fields, so IsPinnedInView is permanently false there. That made
+            // the old unguarded item actively harmful: the label always read "Pin" (never "Unpin", so there
+            // was no way to undo), Messages_ToggleDialogPin — which takes NO folder_id (TelegramService
+            // :2137) — pinned the chat in its HOME list instead, and TogglePin then shifted every OTHER
+            // main pin up by one, silently reordering All Chats from a view you weren't looking at. Repeat
+            // clicks kept inflating those ranks while the clicked row never moved.
+            // ARCHIVE IS NOT AFFECTED and is deliberately still offered: SetArchive() nulls _activeFolder
+            // (:7013) and SetActiveFolder() clears _showArchive (:7004), so the two are mutually exclusive;
+            // an archived chat is folder_id 1, so the server pins it in the archive — client and server
+            // agree there. Real folder pinning needs messages.updateDialogFilter plus a second writer for
+            // _folders — that is BATCH-TA-10, which will REPLACE this guard rather than keep it. Until
+            // then the action is withheld, not silently misapplied to another view.
+            if (_activeFolder == null)
+                AddMenuItem(menu, IsPinnedInView(entry) ? "📌   Unpin" : "📌   Pin", () => TogglePin(entry));
             AddMenuItem(menu, entry.Muted ? "🔔   Unmute" : "🔕   Mute", () => ToggleChatMute(entry));
             if (entry.UnreadCount > 0)
                 AddMenuItem(menu, "✓   Mark as read", () => MarkChatRead(entry));
@@ -6015,15 +6030,44 @@ namespace TelegArm.UI
             // Reflect in the ACTIVE view's pin rank; a new pin floats to the top of that view's pinned group.
             // (Custom-folder pinning needs updateDialogFilter — not wired here; ToggleDialogPinAsync pins in
             //  the chat's home folder, so the change shows in All/Archive.)
+            //
+            // BATCH-TA-9/A1 — SHIFT-UP, replacing a scheme that could never work.
+            // The old code was `MinPinRank(...) - 1`, i.e. "one better than the current best". But ranks are
+            // seeded from ZERO (BuildDialogEntries :5487-5488, server pin order), and MinPinRank's
+            // DefaultIfEmpty(0) also yields 0 when nothing is pinned — so the result was ALWAYS -1, which
+            // IsPinnedInView (:5732 `PinRankInView(e) >= 0`) reads as NOT PINNED. Pinning a chat inside
+            // TelegArm therefore appeared to do nothing at all. A negative "float above everything" sentinel
+            // is structurally incompatible with a `>= 0` pinned test — patching the arithmetic cannot fix it.
+            //
+            // Chosen scheme: the new pin takes rank 0 and every existing pinned row shifts up by one. That
+            // keeps the EXISTING data model intact (int rank, -1 = not pinned, lower floats higher), which is
+            // exactly what the server seeds and what CompareRowsInView:5740 `ra.CompareTo(rb)` already means.
+            // The alternative — an explicit bool alongside the rank — would have forced changes to
+            // PinRankInView, IsPinnedInView, CompareRowsInView, BuildDialogEntries and every consumer, for
+            // the same visible result. Shifting is O(pinned), which is a handful of rows.
+            // The shift runs BEFORE the assignment and is guarded on `>= 0`, so `entry` (still -1 here,
+            // because `pinning` means it was not pinned) is untouched by its own shift.
+            // Unpin leaves gaps in the remaining ranks (0,2,3…) — harmless, only relative order is compared.
             if (_showArchive)
-                entry.ArchivePinOrder = pinning ? MinPinRank(c => c.ArchivePinOrder) - 1 : -1;
+            {
+                if (pinning)
+                {
+                    foreach (var c in _allChats) if (c.ArchivePinOrder >= 0) c.ArchivePinOrder++;
+                    entry.ArchivePinOrder = 0;
+                }
+                else entry.ArchivePinOrder = -1;
+            }
             else
-                entry.MainPinOrder = pinning ? MinPinRank(c => c.MainPinOrder) - 1 : -1;
+            {
+                if (pinning)
+                {
+                    foreach (var c in _allChats) if (c.MainPinOrder >= 0) c.MainPinOrder++;
+                    entry.MainPinOrder = 0;
+                }
+                else entry.MainPinOrder = -1;
+            }
             RenderChatList(_searchBox.Text);
         }
-
-        private int MinPinRank(Func<ChatEntry, int> sel)
-            => _allChats.Where(c => sel(c) >= 0).Select(sel).DefaultIfEmpty(0).Min();
 
         private async void ToggleArchive(ChatEntry entry)
         {
