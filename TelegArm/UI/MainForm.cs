@@ -83,6 +83,25 @@ namespace TelegArm.UI
         private Button _hamburger;
         private Button _chatSearchBtn;   // INCHAT-SEARCH: magnifier in the chat header → search within the open chat
         private Button _chatMenuBtn;     // BATCH-TA-21/S1: the header ⋮ → the shared chat action menu
+
+        // ── BATCH-TA-23/D1 — the right-side dock (shell only; panes are placeholders) ──
+        /// <summary>Which pane the dock is showing. Emoji is only OFFERED where the composer accepts
+        /// input — see <see cref="UpdateDockSources"/>.</summary>
+        private enum DockPane { Info, Emoji }
+        /// <summary>⚠ WIDENED FROM 280 IN TA-24. The pane now hosts the REAL ProfileForm, whose rows were
+        /// designed against a 440-wide dialog; at 280 the content width fell to ~236 and long rows
+        /// ("+98 936 590 0925 · Mobile", "125 shared links") crowded. 340 keeps the chat column usable at
+        /// every width the app supports — measured: 960 → chat 319, 1366 → chat 725.</summary>
+        private const int DockWidth = 340;
+        private Panel _dock;                 // the Dock.Right strip inside _split.Panel2
+        private Panel _dockBody;             // pane content host (placeholder for now)
+        private Panel _dockTabs;
+        private Label _dockInfoTab, _dockEmojiTab;
+        private Button _dockBtn;             // header toggle
+        private DockPane _dockPane = DockPane.Info;
+        private EmojiPicker _dockEmoji;      // THE composer's panel, embedded — not a second grid
+        private ProfileForm _dockProfile;    // THE profile, embedded — the Info pane has no separate content
+        private long _dockProfilePeerId;     // which peer that profile is built for (0 = none)
         private MaterialTextBox2 _searchBox;
         private FlowLayoutPanel _chatListPanel;
         private MaterialLabel _chatTitle;
@@ -834,6 +853,25 @@ namespace TelegArm.UI
             _chatSearchBtn.Paint += (s, e) => DrawMagnifier(e.Graphics, _chatSearchBtn.ClientRectangle, _accent);
             _chatSearchBtn.Click += (s, e) => EnterInChatSearch();
             topBar.Controls.Add(_chatSearchBtn);
+            // BATCH-TA-23/D1c — the dock toggle. Added LAST of the right-docked group, so per the measured
+            // rule (first-added = leftmost) it lands OUTERMOST RIGHT — at the very edge the dock itself
+            // slides in from, which is the only placement that reads as "open the thing next to me".
+            // No existing Controls.Add moves.
+            // ⚠ Metrics copied from _chatMenuBtn exactly as that copied _chatSearchBtn: 44 px, Flat,
+            //   transparent, borderless, 40-alpha accent hover, drawn glyph, accent from ThemeHelper,
+            //   hidden until a chat is open. MaterialSkinManager's Accent slot is NEVER written (§2d).
+            _dockBtn = new Button
+            {
+                Dock = DockStyle.Right, Width = 44, FlatStyle = FlatStyle.Flat, Text = "",
+                BackColor = Color.Transparent, Cursor = Cursors.Hand, TabStop = false,
+                Visible = false
+            };
+            _dockBtn.FlatAppearance.BorderSize = 0;
+            _dockBtn.FlatAppearance.MouseOverBackColor = Color.FromArgb(40, _accent);
+            _dockBtn.Paint += (s, e) => DrawDockGlyph(e.Graphics, _dockBtn.ClientRectangle, _accent,
+                                                      _dock != null && _dock.Visible);
+            _dockBtn.Click += (s, e) => ToggleDock();
+            topBar.Controls.Add(_dockBtn);
             // Peer avatar before the name. Added LAST so its Dock.Left resolves outermost-left; titleStack (Fill,
             // added first) then occupies the space between the avatar and the right-docked transfers indicator.
             _headerAvatar = new Panel { Dock = DockStyle.Left, Width = 54, Margin = new Padding(0), Cursor = Cursors.Hand };
@@ -1111,6 +1149,7 @@ namespace TelegArm.UI
             _footerBar.ActionClicked += (s, e) => OnFooterAction();
             layout.Controls.Add(_footerBar, 0, 9);   // FORUM-TOPICS: +1
             _split.Panel2.Controls.Add(layout);
+            BuildDock();   // BATCH-TA-23/D1b — added AFTER the Fill layout; see BuildDock's remarks
 
             TouchScroller.Enable(_messagePanel, horizontal: false);
             // Touch pans set AutoScrollPosition directly (no Scroll event), so drive the SAME paging triggers
@@ -2401,14 +2440,30 @@ namespace TelegArm.UI
 
         /// <summary>INCHAT-SEARCH: draws a magnifier (lens circle + diagonal handle) as a FIXED GDI shape — same
         /// rationale as DrawHamburger (a font/emoji glyph renders inconsistently on RT).</summary>
+        /// <summary>BATCH-TA-24 — THE HEADER'S SHARED OPTICAL BOX.
+        /// The three header glyphs are drawn, not font characters, so nothing enforces a common size — and
+        /// nothing did: the magnifier's lens was 0.42·s PLUS a handle projecting a further d/3, giving it a
+        /// ~24 px optical extent at a 44 px button while the ⋮ was ~21 px and the panel icon ~18×14. It read
+        /// as the odd one out. Every glyph below now sizes itself against THIS box, so changing the header's
+        /// icon weight is one number rather than three guesses.</summary>
+        private const float HeaderGlyphScale = 0.45f;
+        private static int HeaderGlyphBox(Rectangle area)
+        {
+            return Math.Max(12, (int)(Math.Min(area.Width, area.Height) * HeaderGlyphScale));
+        }
+
         private static void DrawMagnifier(Graphics g, Rectangle area, Color color)
         {
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             int s = Math.Min(area.Width, area.Height);
-            int d = Math.Max(9, (int)(s * 0.42f));                    // lens diameter
+            int box = HeaderGlyphBox(area);
+            // The handle projects d/3 past the lens AND the stroke adds its own width on both sides, so the
+            // LENS has to be well under the box for the finished glyph to match the others. Measured at a
+            // 44 px button: 2/3 lands the ink at 19 px tall, against 19 for the dots and 18 for the panel.
+            int d = Math.Max(9, box * 2 / 3);
             int cx = area.X + area.Width / 2 - d / 6, cy = area.Y + area.Height / 2 - d / 6;
             var lens = new Rectangle(cx - d / 2, cy - d / 2, d, d);
-            using (var pen = new Pen(color, Math.Max(2f, s * 0.09f)))
+            using (var pen = new Pen(color, Math.Max(2f, s * 0.075f)))
             {
                 pen.StartCap = System.Drawing.Drawing2D.LineCap.Round;
                 pen.EndCap = System.Drawing.Drawing2D.LineCap.Round;
@@ -2423,13 +2478,275 @@ namespace TelegArm.UI
         private static void DrawKebab(Graphics g, Rectangle area, Color color)
         {
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            int s = Math.Min(area.Width, area.Height);
-            int d = Math.Max(3, (int)(s * 0.115f));               // dot diameter
-            int gap = Math.Max(d + 2, (int)(s * 0.19f));          // centre-to-centre spacing
+            int box = HeaderGlyphBox(area);
+            // Three dots spanning the shared box: 2·gap + d = box.
+            int d = Math.Max(3, box / 4);                         // dot diameter
+            int gap = Math.Max(d + 2, (box - d) / 2);             // centre-to-centre spacing
             int cx = area.X + area.Width / 2, cy = area.Y + area.Height / 2;
             using (var b = new SolidBrush(color))
                 for (int i = -1; i <= 1; i++)
                     g.FillEllipse(b, cx - d / 2f, cy + i * gap - d / 2f, d, d);
+        }
+
+        /// <summary>BATCH-TA-23/D1c — a panel glyph: an outlined box whose right column FILLS when the dock
+        /// is open. Drawn, not a font character, for the same reason the magnifier is. The fill is the
+        /// open/closed signal — a glyph that looks identical in both states is not a toggle.</summary>
+        private static void DrawDockGlyph(Graphics g, Rectangle area, Color color, bool open)
+        {
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            int s = Math.Min(area.Width, area.Height);
+            int side = HeaderGlyphBox(area);
+            // A panel reads as a landscape rectangle, so it fills the shared box horizontally and is ~3/4 of
+            // it vertically — same optical weight as the lens and the dots.
+            int w = side, h = Math.Max(11, side * 4 / 5);
+            var box = new Rectangle(area.X + (area.Width - w) / 2, area.Y + (area.Height - h) / 2, w, h);
+            int split = box.Right - Math.Max(5, w / 3);
+            if (open)
+                using (var b = new SolidBrush(color))
+                    g.FillRectangle(b, split, box.Top, box.Right - split, box.Height);
+            using (var pen = new Pen(color, Math.Max(1.5f, s * 0.045f)))
+            {
+                g.DrawRectangle(pen, box);
+                g.DrawLine(pen, split, box.Top, split, box.Bottom);
+            }
+        }
+
+        // ── BATCH-TA-23/D1 — THE RIGHT-SIDE DOCK (shell only) ────────────────────────────────────
+        /// <summary>Builds the dock as a Dock.Right strip INSIDE _split.Panel2.
+        ///
+        /// ⚠ WHY Panel2 AND NOT A NESTED SplitContainer. A nested splitter cannot open on a narrow
+        /// window: the outer mins are already Panel1MinSize 240 + Panel2MinSize 360, and an inner
+        /// Panel2MinSize for the dock would push the smallest workable width past this form's
+        /// MinimumSize of 720 — so on the RT device the dock could never open at all. A docked strip has
+        /// no nested min-size arithmetic.
+        /// ⚠ AND WHY IT IS ADDED AFTER THE FILL LAYOUT. Docking resolves LAST-ADDED FIRST (measured in
+        /// TA-21: three Dock.Right buttons land left-to-right in ADD order), so this strip claims its
+        /// width and the Fill layout takes the remainder. Nothing above it had to move.
+        /// ⚠ BOTH LAYOUT MODES ARE UNAFFECTED. sidebar-rail and folder-bar only ever build Panel1; a
+        /// Panel2-side dock is therefore ONE code path, not two. That is the whole reason for this shape.
+        /// ⚠ SplitterDistance IS NOT TOUCHED — it stays hardcoded at 300 (there is no persistence for it
+        /// today, and this batch adds none).</summary>
+        private void BuildDock()
+        {
+            Color bg = _dark ? Color.FromArgb(34, 34, 37) : Color.FromArgb(246, 246, 248);
+            Color line = _dark ? Color.FromArgb(58, 58, 62) : Color.FromArgb(222, 222, 228);
+
+            _dock = new Panel { Dock = DockStyle.Right, Width = DockWidth, Visible = false, BackColor = bg };
+            _dock.Paint += (s, e) =>
+            {
+                using (var p = new Pen(_dark ? Color.FromArgb(58, 58, 62) : Color.FromArgb(222, 222, 228)))
+                    e.Graphics.DrawLine(p, 0, 0, 0, _dock.Height);   // 1px seam so it reads as its own column
+            };
+
+            // The Info pane is an EMBEDDED ProfileForm and the Emoji pane an EMBEDDED EmojiPicker; both
+            // dock Fill into this body, so it owns no surface of its own.
+            _dockBody = new Panel { Dock = DockStyle.Fill, BackColor = bg };
+
+
+            _dockTabs = new Panel { Dock = DockStyle.Top, Height = 38, BackColor = bg };
+            _dockTabs.Paint += (s, e) =>
+            {
+                using (var p = new Pen(line)) e.Graphics.DrawLine(p, 0, _dockTabs.Height - 1, _dockTabs.Width, _dockTabs.Height - 1);
+            };
+            _dockInfoTab = MakeDockTab("Info", DockPane.Info);
+            _dockEmojiTab = MakeDockTab("Emoji", DockPane.Emoji);
+            _dockTabs.Controls.Add(_dockInfoTab);
+            _dockTabs.Controls.Add(_dockEmojiTab);
+            _dockTabs.Resize += (s, e) => LayoutDockTabs();
+
+            _dock.Controls.Add(_dockBody);   // Fill added first → takes the remainder
+            _dock.Controls.Add(_dockTabs);   // Top
+            _split.Panel2.Controls.Add(_dock);
+            LayoutDockTabs();
+            SetDockPane(DockPane.Info);
+        }
+
+        private Label MakeDockTab(string text, DockPane pane)
+        {
+            var l = new Label
+            {
+                Text = text, AutoSize = false, Height = 37, Cursor = Cursors.Hand,
+                TextAlign = ContentAlignment.MiddleCenter, Font = FontHelper.Ui(9.5f),
+                BackColor = Color.Transparent
+            };
+            l.Click += (s, e) => SetDockPane(pane);
+            l.Paint += (s, e) =>
+            {
+                if (_dockPane != pane) return;
+                using (var p = new Pen(_accent, 2f))
+                    e.Graphics.DrawLine(p, 6, l.Height - 2, l.Width - 6, l.Height - 2);   // accent underline
+            };
+            return l;
+        }
+
+        /// <summary>Lays the visible tabs out across the strip. A HIDDEN tab takes no space — the
+        /// remaining one fills — because an unavailable source is OMITTED, not greyed (TA-20/S0).</summary>
+        private void LayoutDockTabs()
+        {
+            if (_dockTabs == null) return;
+            var shown = new List<Label>();
+            if (_dockInfoTab != null && _dockInfoTab.Visible) shown.Add(_dockInfoTab);
+            if (_dockEmojiTab != null && _dockEmojiTab.Visible) shown.Add(_dockEmojiTab);
+            if (shown.Count == 0) return;
+            int w = _dockTabs.ClientSize.Width / shown.Count;
+            for (int i = 0; i < shown.Count; i++)
+            {
+                shown[i].Left = i * w;
+                shown[i].Width = i == shown.Count - 1 ? _dockTabs.ClientSize.Width - i * w : w;
+                shown[i].Top = 0;
+            }
+            _dockTabs.Invalidate();
+        }
+
+        /// <summary>BATCH-TA-23/D3 — builds the Emoji pane ON FIRST USE, and it is THE COMPOSER'S PANEL:
+        /// the same <see cref="EmojiPicker"/> type, with its Emoji / Stickers / GIFs tabs, its sticker-pack
+        /// bar, its lazy loading and its caches. Not a second grid — a second grid is two things to fix
+        /// every time either changes.
+        /// Built lazily because it costs a catalog layout and (on the sticker/GIF tabs) network work, none
+        /// of which should land in BuildUi's cold-start path.</summary>
+        private void EnsureDockEmoji()
+        {
+            if (_dockEmoji != null || _dockBody == null || _service == null) return;
+            var p = new EmojiPicker(_service, _dark, _accent, embedded: true)
+            {
+                TopLevel = false,                      // embed: it becomes an ordinary child control
+                FormBorderStyle = FormBorderStyle.None,
+                Dock = DockStyle.Fill
+            };
+            p.Picked += InsertEmoji;                   // the SAME handlers the popup uses
+            p.DocumentPicked += SendDocument;
+            _dockBody.Controls.Add(p);
+            p.Show();                                  // a non-top-level form still needs this to lay out
+            _dockEmoji = p;
+        }
+
+        private void SetDockPane(DockPane pane)
+        {
+            _dockPane = pane;
+            if (pane == DockPane.Emoji) EnsureDockEmoji();
+            if (_dockEmoji != null) _dockEmoji.Visible = pane == DockPane.Emoji;
+            if (pane == DockPane.Info) EnsureDockProfile();
+            if (_dockProfile != null) _dockProfile.Visible = pane == DockPane.Info;
+            if (_dockInfoTab != null)
+            {
+                _dockInfoTab.ForeColor = pane == DockPane.Info ? _accent
+                    : (_dark ? Color.FromArgb(170, 170, 176) : Color.FromArgb(105, 105, 112));
+                _dockInfoTab.Invalidate();
+            }
+            if (_dockEmojiTab != null)
+            {
+                _dockEmojiTab.ForeColor = pane == DockPane.Emoji ? _accent
+                    : (_dark ? Color.FromArgb(170, 170, 176) : Color.FromArgb(105, 105, 112));
+                _dockEmojiTab.Invalidate();
+            }
+        }
+
+        // ── BATCH-TA-24 — THE INFO PANE *IS* ProfileForm ──────────────────────────────────────────
+        /// <summary>Hosts the REAL ProfileForm in the dock, for the open chat.
+        ///
+        /// ⚠ THIS REPLACED A HAND-BUILT "compact info pane" AND THAT WAS THE RIGHT CALL. The compact
+        /// version showed an avatar, a name and a column of counts behind an "Open full profile" button —
+        /// side by side with the reference it read as a stub, and it had already grown its own row painter,
+        /// its own media-count fetch and its own phone/username rows. Every one of those was a second
+        /// implementation of something ProfileForm already did properly. Now there is one profile, shown
+        /// either as a modal or as a pane, and "Open full profile" is gone because there is nothing more to
+        /// open.
+        ///
+        /// Rebuilt per PEER, not per call: constructing it runs LoadDetails (network), so a re-entry for
+        /// the same chat is a no-op. Built only while the Info pane is actually visible.</summary>
+        private void EnsureDockProfile()
+        {
+            if (_dockBody == null || _service == null) return;
+            var entry = _selectedChat;
+            if (entry == null) { DropDockProfile(); return; }
+            if (_dockProfile != null && _dockProfilePeerId == entry.PeerId) return;
+
+            DropDockProfile();
+            // ⚠ contentWidth is the dock MINUS its own scrollbar strip: ProfileForm docks a ThemedScrollBar
+            //   Right inside itself, and handing it the full width would overflow the flow by that strip and
+            //   arm a horizontal scroll.
+            var pf = new ProfileForm(_service, entry, GetCachedAvatar(entry.PeerId), DockWidth - 12)
+            {
+                TopLevel = false,
+                FormBorderStyle = FormBorderStyle.None,
+                Dock = DockStyle.Fill
+            };
+            pf.Avatars = _avatars;                          // member rows use the shared store
+            pf.ForwardRequested += ForwardFromProfile;
+            pf.ShowInChatRequested += ShowInChatFromProfile;
+            pf.EmbeddedRoute += OnDockProfileRoute;         // instead of DialogResult + Close
+            _dockBody.Controls.Add(pf);
+            pf.Show();                                      // a non-top-level form still needs this to lay out
+            _dockProfile = pf;
+            _dockProfilePeerId = entry.PeerId;
+        }
+
+        private void DropDockProfile()
+        {
+            if (_dockProfile == null) return;
+            try { _dockBody.Controls.Remove(_dockProfile); _dockProfile.Dispose(); } catch { }
+            _dockProfile = null;
+            _dockProfilePeerId = 0;
+        }
+
+        /// <summary>The embedded profile tapped something the HOST owns — a link, a mention, a hashtag, its
+        /// personal-channel card, or it left the chat. Routed through the SAME RouteProfilePending the modal
+        /// uses after ShowDialog, so the two modes cannot diverge. The pane does not close: ProfileForm
+        /// clears its Pending* fields after this returns.</summary>
+        private void OnDockProfileRoute(ProfileForm pf)
+        {
+            if (pf == null) return;
+            RouteProfilePending(pf);
+        }
+
+        private void ToggleDock() { SetDockOpen(_dock == null || !_dock.Visible); }
+
+        private void SetDockOpen(bool open)
+        {
+            if (_dock == null || _dock.Visible == open) return;
+            _dock.Visible = open;
+            if (open)
+            {
+                UpdateDockSources();      // may flip Emoji→Info if this chat can't be posted to
+                // ⚠ THEN MATERIALISE THE PANE. This line is the fix for "a fresh run shows an empty Info
+                //   pane until you visit Emoji or switch chats".
+                //   UpdateDockSources only decides which TABS exist; it never builds pane CONTENT. And the
+                //   two places that do build it had both already declined:
+                //     · BuildDock ends with SetDockPane(Info), but at BuildUi time _selectedChat is null,
+                //       so EnsureDockProfile drops and returns;
+                //     · the chat-opened site only builds while the dock is VISIBLE, and on a fresh run it
+                //       isn't open yet.
+                //   So nothing had ever built the profile by the time the user first opened the dock.
+                //   Re-applying the current pane is idempotent — EnsureDockProfile returns early when the
+                //   peer is unchanged — and it routes through the one place that knows how to build either
+                //   pane, rather than duplicating that decision here.
+                SetDockPane(_dockPane);
+            }
+            if (_dockBtn != null) _dockBtn.Invalidate();   // the glyph carries the open/closed state
+            if (Logger.Enabled)
+                Logger.Diag("[DOCK] " + (open ? "opened" : "closed") + " w=" + _dock.Width
+                            + " panel2=" + _split.Panel2.ClientSize.Width
+                            + " chatArea=" + (_split.Panel2.ClientSize.Width - (open ? _dock.Width : 0)));
+        }
+
+        /// <summary>BATCH-TA-23/D1d — WHICH PANE SOURCES EXIST RIGHT NOW.
+        ///
+        /// ⚠ THIS SUBSCRIBES TO THE COMPOSER STATE, IT DOES NOT RECOMPUTE "can I post here".
+        /// Core/ComposerState.cs is already the pure resolver for that, with a documented precedence
+        /// (Blocked &gt; Join &gt; MuteUnmute &gt; BotStart &gt; Restricted), and <c>_footerKind</c> holds
+        /// its answer. Re-deriving the rule here is how two surfaces end up disagreeing — the exact bug
+        /// class TA-20/S0 exists to prevent.
+        /// ⚠ CALLED FROM BOTH PLACES THAT ASSIGN _footerKind, so it tracks a LIVE change — a mute, an
+        /// unblock, a slow-mode expiry — with no chat switch. Sampling it once at open would be wrong.
+        /// ⚠ AN UNAVAILABLE SOURCE IS OMITTED, NOT GREYED: the Emoji tab disappears and Info fills the
+        /// strip, matching AddMenuItem's convention and the Flip-button precedent in RoundRecorderForm.</summary>
+        private void UpdateDockSources()
+        {
+            if (_dockEmojiTab == null) return;
+            bool emojiOk = _selectedChat != null && _footerKind == ComposerKind.Compose;
+            if (_dockEmojiTab.Visible != emojiOk) _dockEmojiTab.Visible = emojiOk;
+            if (!emojiOk && _dockPane == DockPane.Emoji) SetDockPane(DockPane.Info);
+            LayoutDockTabs();
         }
 
         /// <summary>Pushes the current accent/dark state into the custom-painted controls.</summary>
@@ -2444,6 +2761,26 @@ namespace TelegArm.UI
                 _chatMenuBtn.FlatAppearance.MouseOverBackColor = Color.FromArgb(40, _accent);
                 _chatMenuBtn.Invalidate();
             }
+            if (_dockBtn != null)
+            {
+                // TA-23/D1c — same one-shot-property gap as _chatMenuBtn: re-assert the hover tint here,
+                // because unlike the drawn glyph it does not follow a live accent change by itself.
+                _dockBtn.FlatAppearance.MouseOverBackColor = Color.FromArgb(40, _accent);
+                _dockBtn.Invalidate();
+            }
+            if (_dockEmoji != null)
+            {
+                // ⚠ The embedded panel bakes _dark/_accent at CONSTRUCTION — the popup never had this
+                // problem because it is rebuilt on every open. Drop it so the next selection rebuilds it
+                // in the new theme, and rebuild NOW if it is the pane on screen, so a theme switch can
+                // never leave an empty dock.
+                try { _dockBody.Controls.Remove(_dockEmoji); _dockEmoji.Dispose(); } catch { }
+                _dockEmoji = null;
+            }
+            // Same reason for the profile: ProfileForm takes dark/accent at construction. (It also retint
+            // itself via ThemeHelper.ThemeChanged, but its ROWS were built with the old colours.)
+            DropDockProfile();
+            if (_dockTabs != null) { SetDockPane(_dockPane); _dockTabs.Invalidate(); }   // accent underline + labels
             if (_attachButton != null) _attachButton.Invalidate(); // self-themes from ThemeHelper
             if (_footerBar != null) { _footerBar.AccentColor = _accent; _footerBar.IsDark = _dark; _footerBar.Invalidate(); }
             if (_threadJoinBar != null) { _threadJoinBar.AccentColor = _accent; _threadJoinBar.IsDark = _dark; _threadJoinBar.Invalidate(); }
@@ -4442,6 +4779,8 @@ namespace TelegArm.UI
             _headerAvatarImg = null; _headerAvatarPeerId = 0; _headerAvatarTitle = null;
             if (_chatSearchBtn != null) _chatSearchBtn.Visible = false;   // INCHAT-SEARCH: no open chat → no header magnifier
             if (_chatMenuBtn != null) _chatMenuBtn.Visible = false;       // TA-21/S1a: …and no header ⋮ (it acts on the open chat)
+            if (_dockBtn != null) _dockBtn.Visible = false;               // TA-23/D1c: …nor the dock toggle
+            SetDockOpen(false);                                           // an open dock with no chat has nothing to show
             ClearMessagePanel();                         // disposes message bubbles + per-chat photo caches
             System.Diagnostics.Debug.WriteLine("[LOGOUT-TRACE] Reset: after ClearMessagePanel");
             _currentChatMessages.Clear();
@@ -6482,6 +6821,8 @@ namespace TelegArm.UI
                 _selectedChat = null; ClearMessagePanel(); _chatTitle.Text = "Select a chat"; SetHeaderAvatar(null);
                 if (_chatSearchBtn != null) _chatSearchBtn.Visible = false;   // INCHAT-SEARCH: chat closed → hide the magnifier
                 if (_chatMenuBtn != null) _chatMenuBtn.Visible = false;       // TA-21/S1a: …and the ⋮ with it
+                if (_dockBtn != null) _dockBtn.Visible = false;               // TA-23/D1c: …and the dock toggle
+                SetDockOpen(false);
             }
             RebuildFolders();
             UpdateTrayTooltip();
@@ -8171,6 +8512,11 @@ namespace TelegArm.UI
             _selectedChat = entry;
             if (_chatSearchBtn != null) _chatSearchBtn.Visible = true;   // INCHAT-SEARCH: the header magnifier appears with an open chat
             if (_chatMenuBtn != null) _chatMenuBtn.Visible = true;        // TA-21/S1a: the ⋮ appears with it
+            if (_dockBtn != null) _dockBtn.Visible = true;                // TA-23/D1c: …and the dock toggle
+            // TA-24: re-target the Info pane at the newly-opened chat, but only if it is actually on screen
+            // — building it runs ProfileForm.LoadDetails, i.e. network, and a closed dock must not pay that.
+            if (_dock != null && _dock.Visible && _dockPane == DockPane.Info) EnsureDockProfile();
+            else DropDockProfile();
             // FORUM-TOPICS: a forum group → show the topic bar + fetch its topics (async); any other chat → hide + clear.
             // Opening still loads the flat all-topics history below (FORUM-GROUPS-FIX preserved) — the bar is additive.
             if (entry.PeerInfo is Channel fch && (fch.flags & Channel.Flags.forum) != 0)
@@ -8224,6 +8570,7 @@ namespace TelegArm.UI
         private void ShowComposeFooter()
         {
             _footerKind = ComposerKind.Compose;
+            UpdateDockSources();   // TA-23/D1d — the dock follows the composer, live (no chat switch needed)
             if (_footerBar != null) _footerBar.Visible = false;
             if (_composerBar != null) { _composerBar.Visible = true; _composerBar.BringToFront(); }
             _messageInput.Enabled = true;
@@ -8237,7 +8584,8 @@ namespace TelegArm.UI
         private void ApplyComposerState(ComposerState st)
         {
             _footerKind = st.Kind;
-            if (st.Kind == ComposerKind.Compose) { ShowComposeFooter(); return; }
+            if (st.Kind == ComposerKind.Compose) { ShowComposeFooter(); return; }   // that path updates the dock
+            UpdateDockSources();   // TA-23/D1d — every non-compose state hides the Emoji source
 
             // Non-compose: hide + gate the composer, show the footer bar.
             if (_composerBar != null) _composerBar.Visible = false;
@@ -9914,7 +10262,17 @@ namespace TelegArm.UI
             bubble.SelectionToggled += OnBubbleSelectionToggled;
             bubble.ReplyQuoteClicked += JumpToReply;       // tap the reply quote → scroll to + flash the original
             bubble.ViewInChatClicked += OpenRepliesEntryThread;   // REPLIES-INBOX: "View in chat" row → open the source thread
-            if (entities != null && entities.Length > 0) bubble.SetEntities(entities);   // SEND-ENTITIES: render outgoing formatting on the optimistic echo
+            // ⚠ CALLED UNCONDITIONALLY — the guard that used to be here was
+            //       if (entities != null && entities.Length > 0) bubble.SetEntities(entities);
+            //   and it RE-DECIDED something SetEntities already owns, differently. SetEntities turns the
+            //   inline engine on when the text has entities OR merely CONTAINS EMOJI
+            //   (MessageBubbleControl.cs:741). An emoji-only message — "😂😂" — carries NO entities, so the
+            //   guard skipped the call, _useRich stayed false, and the optimistic bubble drew the text with
+            //   a plain font: tofu boxes. It only fixed itself when the server echo arrived and ran
+            //   ApplyEntities unconditionally, which is why it looked like "emoji need a refresh".
+            //   Passing null/empty is harmless: SetEntities resolves need = false and leaves the bubble in
+            //   exactly the state the old path left it in.
+            bubble.SetEntities(entities);   // SEND-ENTITIES: render outgoing formatting on the optimistic echo
             bubble.Measure();
             return bubble;
         }
