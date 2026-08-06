@@ -81,6 +81,22 @@ namespace TelegArm.UI
             try { BeginInvoke((Action)Close); } catch { Close(); }
         }
 
+        /// <summary>BATCH-TA-18 — a proxy link tapped in the shared-links gallery.
+        /// The gallery is the ONE link seam that shells out on its own (OpenEntry -> Process.Start) instead
+        /// of going through MainForm's router, so without this the proxy sheet would open from a message
+        /// body but not from the same link listed under shared media. Rather than give the gallery its own
+        /// copy of the sheet — which would also mean a second live-apply path, in a modal that does not own
+        /// the warm pool — it reuses the EXISTING PendingLink hand-off: the profile closes and MainForm
+        /// routes it into the same ResolveLinkAsync -> OpenExternalUrl interception everything else uses.
+        /// ⚠ ONLY proxy links come through here. Every other link still opens exactly as before.</summary>
+        private void RaiseProxyLink(string url)
+        {
+            if (string.IsNullOrEmpty(url)) return;
+            PendingLink = url;
+            DialogResult = DialogResult.OK;
+            try { BeginInvoke((Action)Close); } catch { Close(); }
+        }
+
         public ProfileForm(TelegramService service) : this(service, null, null, true) { }
         public ProfileForm(TelegramService service, ChatEntry entry, Image avatar) : this(service, entry, avatar, false) { }
 
@@ -1698,7 +1714,12 @@ namespace TelegArm.UI
             {
                 if (e.Type == "link")
                 {
-                    if (!string.IsNullOrEmpty(e.Url)) try { System.Diagnostics.Process.Start(e.Url); } catch { }
+                    if (string.IsNullOrEmpty(e.Url)) return;
+                    // BATCH-TA-18 — this Process.Start is the app's SECOND shell-out seam. Hand a proxy link
+                    // back to the owner so it reaches the same sheet a tap in the message body does; anything
+                    // else falls through to the browser unchanged.
+                    if (TelegArm.Core.ProxyUrl.IsProxyLink(e.Url)) { _owner.RaiseProxyLink(e.Url); Close(); return; }
+                    try { System.Diagnostics.Process.Start(e.Url); } catch { }
                     return;
                 }
                 if (e.Item == null) return;

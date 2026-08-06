@@ -155,8 +155,40 @@ namespace TelegArm.Core
             return port == null ? host : host + ":" + port;
         }
 
+        /// <summary>BATCH-TA-18 — is this URL a link to an MTProto PROXY, whatever form it arrived in?
+        /// SHAPE ONLY: it answers "should this be intercepted instead of shelled out to a browser", and
+        /// deliberately does NOT parse the settings. The moment the answer is yes, the WHOLE url goes to
+        /// <see cref="TryNormalize"/> — the same call the paste box makes — so there is exactly ONE parser
+        /// and a link that pastes fine can never behave differently when it is clicked.
+        ///
+        /// The three forms Telegram itself emits (tg://proxy, t.me/proxy, telegram.me/proxy) all mean the
+        /// same thing; telegram.dog is included because <c>MainForm.ParseTgLink</c> already treats it as a
+        /// Telegram host in the same reserved-segment list this mirrors.
+        /// ⚠ "socks" IS DELIBERATELY NOT HERE. t.me/socks?… is a SOCKS5 proxy, which this app cannot use —
+        /// WTC's <c>MTProxyUrl</c> is MTProto-only. Intercepting one would mean offering to connect through
+        /// something that cannot work, so socks links keep falling through to the browser unchanged.</summary>
+        public static bool IsProxyLink(string url)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return false;
+            string s = url.Trim();
+            if (s.StartsWith("tg://proxy", StringComparison.OrdinalIgnoreCase)) return true;
+
+            // Message links are often scheme-less ("t.me/proxy?…"), exactly as MainForm.NormalizeUrl handles.
+            bool hasScheme = System.Text.RegularExpressions.Regex.IsMatch(s, @"^[a-zA-Z][a-zA-Z0-9+.\-]*:");
+            Uri uri;
+            if (!Uri.TryCreate(hasScheme ? s : "https://" + s, UriKind.Absolute, out uri)) return false;
+            string host = uri.Host.ToLowerInvariant();
+            if (host != "t.me" && host != "telegram.me" && host != "telegram.dog") return false;
+            return uri.AbsolutePath.Trim('/').Equals("proxy", StringComparison.OrdinalIgnoreCase);
+        }
+
         /// <summary>Server host of a normalised link, or null.</summary>
         public static string HostOf(string url) { return Field(url, "server"); }
+
+        /// <summary>The raw secret of a link, or null. ⚠ FOR ON-SCREEN DISPLAY ONLY — the confirmation
+        /// sheet shows it so a user can compare it against the channel post they tapped. It must NEVER be
+        /// passed to a logger; see the rule in this class's remarks.</summary>
+        public static string SecretOf(string url) { return Field(url, "secret"); }
 
         /// <summary>Port of a normalised link as text, or null.</summary>
         public static string PortOf(string url) { return Field(url, "port"); }

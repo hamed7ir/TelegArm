@@ -237,6 +237,25 @@ namespace TelegArm.UI
             else _hint.Text = _list.Count + " saved · using " + ProxyUrl.SafeForLog(_list[_active]);
         }
 
+        /// <summary>BATCH-TA-18a — briefly show a confirmation on the hint line, then put it back.
+        /// Restoration is a plain <see cref="UpdateHint"/> call, which recomputes from state and is
+        /// idempotent — so a flash can never leave the line saying something stale.</summary>
+        private void FlashHint(string text, bool ok)
+        {
+            if (_hint == null || _hint.IsDisposed) return;
+            _hint.Text = text;
+            if (_hintTimer == null)
+            {
+                // ⚠ System.Windows.Forms.Timer explicitly — this file has `using System.Threading`, so a
+                //   bare `Timer` is ambiguous, and the threading one would fire OFF the UI thread.
+                _hintTimer = new System.Windows.Forms.Timer { Interval = 2000 };
+                _hintTimer.Tick += (s, e) => { _hintTimer.Stop(); if (!IsDisposed) UpdateHint(); };
+            }
+            _hintTimer.Stop();
+            _hintTimer.Start();
+        }
+        private System.Windows.Forms.Timer _hintTimer;
+
         private void OnChoose(int index)
         {
             if (index < 0 || index >= _list.Count) return;
@@ -424,6 +443,11 @@ namespace TelegArm.UI
             use.Click += (s, e) => BeginInvoke((Action)(() => OnChoose(index)));
             menu.Items.Add(use);
             menu.Items.Add(new ToolStripSeparator());
+            // BATCH-TA-18a — the SAME Share / Get QR Code the tapped-link sheet offers, on a saved proxy.
+            // ⚠ Acts on _list[index] — the row that was right-clicked — NOT on the active proxy. Sharing
+            //   the connected one instead would hand out a different credential than the row shows.
+            ProxyShare.AddMenuItems(menu, this, _list[index], FlashHint);
+            menu.Items.Add(new ToolStripSeparator());
             var del = new ToolStripMenuItem("Delete");
             del.Click += (s, e) => BeginInvoke((Action)(() => OnDelete(index)));
             menu.Items.Add(del);
@@ -433,7 +457,11 @@ namespace TelegArm.UI
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing) { try { if (_tests != null) { _tests.Cancel(); _tests.Dispose(); } } catch { } }
+            if (disposing)
+            {
+                try { if (_tests != null) { _tests.Cancel(); _tests.Dispose(); } } catch { }
+                try { if (_hintTimer != null) { _hintTimer.Stop(); _hintTimer.Dispose(); _hintTimer = null; } } catch { }
+            }
             base.Dispose(disposing);
         }
 

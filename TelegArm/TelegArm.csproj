@@ -165,6 +165,10 @@
     <Compile Include="UI\ProxyForm.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="UI\ProxyLinkForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="UI\ProxyShare.cs" />
     <Compile Include="UI\EditContactForm.cs" />
     <Compile Include="UI\ProfilePhotoViewer.cs" />
     <Compile Include="UI\ThemedContextMenuStrip.cs" />
