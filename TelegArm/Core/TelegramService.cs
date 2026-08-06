@@ -739,6 +739,20 @@ namespace TelegArm.Core
             WTelegram.Client c = null;
             try
             {
+                // ⚠ BUG 3b — GUARD #1: DO NOT OPEN THE SESSION IF THIS ACCOUNT IS ALREADY THE ACTIVE ONE.
+                // Warming is started fire-and-forget and can sit queued behind a stagger delay, so by the
+                // time this runs the user may have switched INTO this account. Constructing the client is
+                // exactly what opens accounts/{id}/session — a second handle on the file the active client
+                // already holds, which is the AUTH_KEY_DUPLICATED / mid-write corruption path. Until now
+                // this was only detected AFTER the fact (MainForm.WarmOneAsync disposed the loser), which
+                // shortened the overlap but never prevented it.
+                if (id == AccountContext.ActiveId)
+                {
+                    if (TelegArm.Helpers.Logger.Enabled)
+                        TelegArm.Helpers.Logger.Diag("[WARMCONN] warm ABORTED before open id=" + id + " — it is the ACTIVE account (Bug 3b guard #1)");
+                    return null;
+                }
+
                 c = new WTelegram.Client(w => WarmConfig(w, id));
                 c.MaxAutoReconnects = 1000;
                 var login = c.LoginUserIfNeeded();
@@ -752,6 +766,27 @@ namespace TelegArm.Core
                 }
                 var me = await login.ConfigureAwait(false);
                 if (me == null || c.User == null) { try { c.Dispose(); } catch { } return null; }
+
+                // ⚠ BUG 3b — GUARD #2: the resume above is the LONG await (a full handshake, up to
+                // timeoutMs), and a switch INTO this account during it is precisely the race. Re-check
+                // before handing the client back, and release the session the SAFE way — socket abort
+                // FIRST, then Dispose, AWAITED — so the file handle is gone before the active client
+                // opens the same path. A bare c.Dispose() here would be the very pattern
+                // DisposeWarmServiceAsync exists to avoid (ACCOUNT-RECOVERY-SAFETY Bug 1).
+                if (id == AccountContext.ActiveId)
+                {
+                    if (TelegArm.Helpers.Logger.Enabled)
+                        TelegArm.Helpers.Logger.Diag("[WARMCONN] warm ABORTED after resume id=" + id + " — became the ACTIVE account mid-warm (Bug 3b guard #2)");
+                    var drop = System.Threading.Tasks.Task.Run(async () =>
+                    {
+                        try { await c.ResetAsync(false, false); } catch { }   // abort the socket FIRST
+                        try { c.Dispose(); } catch { }                        // then flush + RELEASE the handle
+                    });
+                    var dropped = await System.Threading.Tasks.Task.WhenAny(drop, System.Threading.Tasks.Task.Delay(10000)).ConfigureAwait(false);
+                    if (dropped != drop) SwallowTaskFault(drop);
+                    return null;
+                }
+
                 System.Diagnostics.Debug.WriteLine("[WARMCONN] id=" + id + " connected user=" + me.id);
                 return new WarmClient { Id = id, Client = c, Me = me };
             }
