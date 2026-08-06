@@ -26,7 +26,16 @@ namespace TelegArm.Core
         public bool AnimateWebmStickers { get; set; } = true;
 
         // ── Notifications ─────────────────────────────────────────────────────
-        /// <summary>Master switch for desktop notifications (muted chats are always skipped).</summary>
+        /// <summary>Master switch for desktop notifications — the global "silence everything" (BATCH-TA-32/N4).
+        ///
+        /// ⚠ IT GATES THE **EMIT PATH ONLY**. Unread badges, the tray icon and tooltip, and the chat-list
+        /// preview all keep updating: this means "do not interrupt me", not "hide my messages". Do not widen
+        /// it — a user who silences notifications still expects to see what arrived when they look.
+        /// ★ IT WINS OVER EVERYTHING, MENTIONS INCLUDED. A mention breaks through a PER-CHAT mute ("not this
+        /// conversation"); the master switch says "nothing, from anywhere, right now", and an exception to
+        /// that would make it not a master switch. See MainForm.MaybeToast for the full rule.
+        /// Both delivery channels obey it — the notification window and the legacy tray balloon — because
+        /// it is checked before either is chosen.</summary>
         public bool EnableNotifications { get; set; } = true;
 
         /// <summary>BATCH-TA-27/W7 — ESCAPE HATCH: deliver notifications as the OLD tray balloon
