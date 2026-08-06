@@ -252,12 +252,37 @@ namespace TelegArm.UI.Controls
         private static long _mLastTs;
         private static Timer _mTimer;                    // ONE shared UI-thread timer, running only while coasting
 
+        // BATCH-TA-16d/D2 — FLOATING OVERLAYS MUST NOT EAT SCROLLING.
+        // SurfaceOf walks UP the parent chain, so it only ever finds a surface the hovered control is a
+        // DESCENDANT of. A floating chip (the proxy pill, and the jump-to-bottom button) is deliberately a
+        // child of the scroll HOST — i.e. a SIBLING of the scroll surface, never a descendant — precisely so
+        // it doesn't scroll away with the rows. The consequence is that the walk finds NOTHING above it, the
+        // wheel falls back to focus-based delivery, and the list simply stops scrolling wherever the chip
+        // happens to sit. Touch is worse: WM_TOUCH DOWN resolves through this same method (:308), so a pan
+        // that starts on the chip does nothing at all.
+        // This map restores the link explicitly: overlay → the surface it visually covers.
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Control, ScrollableControl> _overlayTargets
+            = new System.Runtime.CompilerServices.ConditionalWeakTable<Control, ScrollableControl>();
+
+        /// <summary>Declare that <paramref name="floating"/> visually covers <paramref name="surface"/>, so
+        /// wheel and touch that land on it are routed to the surface instead of dead-ending. Keyed weakly,
+        /// so the entry dies with the control and nothing has to be unregistered.</summary>
+        public static void MapOverlayTo(Control floating, ScrollableControl surface)
+        {
+            if (floating == null || surface == null) return;
+            try { _overlayTargets.Remove(floating); } catch { }
+            try { _overlayTargets.Add(floating, surface); } catch { }
+        }
+
         private static ScrollableControl SurfaceOf(IntPtr hwnd)
         {
             var c = Control.FromHandle(hwnd);
             while (c != null)
             {
                 foreach (var s in _surfaces) if (ReferenceEquals(s.Key, c)) return s.Key;
+                ScrollableControl overlay;
+                if (_overlayTargets.TryGetValue(c, out overlay) && overlay != null && !overlay.IsDisposed)
+                    return overlay;                       // a floating chip → the list underneath it
                 c = c.Parent;
             }
             return null;
