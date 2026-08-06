@@ -6200,6 +6200,78 @@ namespace TelegArm.UI
             var entry = (sender as ChatListItemControl)?.Entry;
             if (entry == null) return;
             var menu = new ThemedContextMenuStrip();
+            BuildChatActionMenu(menu, entry, ChatMenuSurface.ChatListRow);
+            menu.Closed += (s, e) => BeginInvoke((Action)menu.Dispose);
+            menu.Show(screenPt);
+        }
+
+        // ── BATCH-TA-20/S0 — ONE DEFINITION OF THE CHAT ACTION MENU ──────────────────────────────
+        /// <summary>Which surface is asking for the menu. The entry SET is shared; a surface may still
+        /// omit what does not belong to it.</summary>
+        private enum ChatMenuSurface
+        {
+            /// <summary>Right-click / long-press on a row in the chat list.</summary>
+            ChatListRow,
+            /// <summary>The ⋮ button in the open chat's header. No caller yet — the button is TA-19/S1.</summary>
+            ChatHeader
+        }
+
+        /// <summary>Everything the menu needs to decide what to offer, resolved ONCE and passed explicitly
+        /// rather than re-derived per entry. Kept as data so a surface cannot accidentally answer one of
+        /// these questions differently from the other.</summary>
+        private sealed class ChatMenuContext
+        {
+            public ChatEntry Entry;
+            /// <summary>SAVED MESSAGES — the chat with yourself. Every self-destructive action must be
+            /// omitted for it: you cannot leave, block or meaningfully "delete" your own chat.</summary>
+            public bool IsSelf;
+            public bool IsUser;          // InputPeerUser — includes bots AND self
+            public bool IsBot;
+            public bool IsBroadcast;     // channel
+            public bool IsMegagroup;     // supergroup
+            public bool IsBasicGroup;    // legacy InputPeerChat
+            /// <summary>TA-10's rule: Pin is offered in All, in Archive and in a real custom folder, but
+            /// never in a shared chatlist folder.</summary>
+            public bool PinAllowed;
+        }
+
+        private ChatMenuContext ChatMenuContextFor(ChatEntry entry)
+        {
+            var me = _service != null ? _service.Me : null;
+            var ch = entry.PeerInfo as Channel;
+            return new ChatMenuContext
+            {
+                Entry = entry,
+                IsSelf = me != null && entry.PeerId == me.id,
+                IsUser = entry.Peer is InputPeerUser,
+                IsBot = (entry.PeerInfo as User)?.IsBot == true,
+                IsBroadcast = ch != null && (ch.flags & Channel.Flags.broadcast) != 0,
+                IsMegagroup = ch != null && (ch.flags & Channel.Flags.megagroup) != 0,
+                IsBasicGroup = entry.Peer is InputPeerChat,
+                PinAllowed = _activeFolder == null || _activeFolder is TL.DialogFilter
+            };
+        }
+
+        /// <summary>THE SINGLE DEFINITION OF THE CHAT ACTION MENU — the chat-list row uses it today, and
+        /// the header ⋮ (TA-19/S1) will use the same one.
+        ///
+        /// ⚠ WHY THIS IS SHARED RATHER THAN COPIED: two builders over the same actions WILL drift, and we
+        /// have already paid for that once — TA-9/TA-9b was exactly one surface knowing a rule about
+        /// pinning that another did not. A second copy would re-open that class of bug on every entry here.
+        ///
+        /// ⚠ UNAVAILABLE ENTRIES ARE OMITTED, NEVER GREYED. <see cref="AddMenuItem"/> has no `enabled`
+        /// parameter, and that is deliberate — a greyed "Leave" teaches nothing. Same convention as the
+        /// TA-9b pin fix.
+        ///
+        /// <paramref name="surface"/> is DELIBERATELY UNUSED TODAY: both surfaces show the same set, so
+        /// nothing branches on it yet. Do not delete it — it is the hook the header ⋮ needs to drop
+        /// "Search in chat" (already its own header button) without the row menu losing anything, and
+        /// adding it later would mean touching every call site instead of one.</summary>
+        private void BuildChatActionMenu(ContextMenuStrip menu, ChatEntry entry, ChatMenuSurface surface)
+        {
+            if (menu == null || entry == null) return;
+            var c = ChatMenuContextFor(entry);
+
             // BATCH-TA-10 — the Pin item is offered in All, in Archive, and in a real custom folder.
             // Each of those three routes to a DIFFERENT write, and TogglePin picks by _activeFolder:
             //   All / Archive  → Messages_ToggleDialogPin (no folder_id; the server pins the dialog in
@@ -6209,20 +6281,28 @@ namespace TelegArm.UI
             // link, and writing one back is not the same operation as editing a folder you own. The
             // server's dialogFilterDefault also arrives as a NULL element, but it never becomes
             // _activeFolder (SetActiveFolder(null) means "All"), so null here is the All view.
-            if (_activeFolder == null || _activeFolder is TL.DialogFilter)
+            if (c.PinAllowed)
                 AddMenuItem(menu, IsPinnedInView(entry) ? "📌   Unpin" : "📌   Pin", () => TogglePin(entry));
+
             AddMenuItem(menu, entry.Muted ? "🔔   Unmute" : "🔕   Mute", () => ToggleChatMute(entry));
+
             if (entry.UnreadCount > 0)
                 AddMenuItem(menu, "✓   Mark as read", () => MarkChatRead(entry));
             else
                 AddMenuItem(menu, "●   Mark as unread", () => MarkChatUnread(entry));
+
             AddMenuItem(menu, entry.Archived ? "📂   Unarchive" : "🗄   Archive", () => ToggleArchive(entry));
+
             menu.Items.Add(new ToolStripSeparator());
             AddMenuItem(menu, "🧹   Clear history", () => ClearChatHistory(entry));
-            AddMenuItem(menu, "🗑   " + (entry.Peer is InputPeerUser ? "Delete chat" : LeaveLabelFor(entry)),
-                () => DeleteOrLeaveChat(entry));
-            menu.Closed += (s, e) => BeginInvoke((Action)menu.Dispose);
-            menu.Show(screenPt);
+
+            // ⚠ BATCH-TA-20/S0c — SAVED MESSAGES IS NOT A CHAT YOU CAN LEAVE OR DELETE.
+            // It is an InputPeerUser of YOURSELF, so without this guard it inherited the private-chat menu
+            // and offered "🗑 Delete chat" on your own saved notes. The same flag is what future entries
+            // (Block, TA-19/S3) must consult — the check belongs to the context, not to each entry.
+            if (!c.IsSelf)
+                AddMenuItem(menu, "🗑   " + (c.IsUser ? "Delete chat" : LeaveLabelFor(entry)),
+                    () => DeleteOrLeaveChat(entry));
         }
 
         private async void ToggleChatMute(ChatEntry entry)

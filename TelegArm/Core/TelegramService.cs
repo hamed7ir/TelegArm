@@ -2060,14 +2060,32 @@ namespace TelegArm.Core
         public Task<bool> TerminateOtherSessionsAsync()
             => Client.Auth_ResetAuthorizations();
 
-        /// <summary>Leaves a channel/supergroup (`channels.leaveChannel`) or a basic group (`messages.deleteChatUser` of self).</summary>
+        /// <summary>Leaves a channel/supergroup (`channels.leaveChannel`) or a basic group (`messages.deleteChatUser` of self).
+        ///
+        /// ⚠ BATCH-TA-20/S0b — THE ELSE BRANCH USED TO BE `return Task.CompletedTask`, A SILENT NO-OP.
+        /// Nothing was sent to the server, the call reported success, and both callers then ran their
+        /// success path: MainForm.DeleteOrLeaveChat REMOVED THE ROW from the chat list and ProfileForm
+        /// closed itself with LeftChat = true. So an unsupported peer type looked exactly like a completed
+        /// leave, and the chat silently reappeared on the next sync with no error anywhere. It now LOGS and
+        /// THROWS, which both call sites already handle — each catches, shows "Couldn't leave: …", and
+        /// returns BEFORE its success side effects, so the row survives and the user is told.
+        ///
+        /// R8 NOTE, verified against the shipped DLL (IL 292296): WTelegramClient ships
+        /// <c>Client.LeaveChat(InputPeer)</c> and its body is this dispatch line for line — same isinst
+        /// order, same two calls, throwing ArgumentException on anything else. We keep our own copy for ONE
+        /// reason: control of that last branch. WTC's exception text is surfaced straight to the user by
+        /// the callers above, and "Invalid peer" is not something a person can act on. If that ever stops
+        /// being true, switch to the helper.</summary>
         public Task LeaveChatAsync(InputPeer peer)
         {
             if (peer is InputPeerChannel ch)
                 return Client.Channels_LeaveChannel(new InputChannel(ch.channel_id, ch.access_hash));
             if (peer is InputPeerChat pc)
                 return Client.Messages_DeleteChatUser(pc.chat_id, InputUser.Self);
-            return Task.CompletedTask;
+
+            TelegArm.Helpers.Logger.Diag("[LEAVE] REFUSED — peer type " + (peer == null ? "null" : peer.GetType().Name)
+                                         + " cannot be left; nothing was sent to the server");
+            throw new NotSupportedException("This kind of chat can't be left.");
         }
 
         /// <summary>Marks a dialog as unread (unread=true) or clears the unread mark (unread=false).</summary>
