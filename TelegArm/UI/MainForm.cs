@@ -5257,12 +5257,26 @@ namespace TelegArm.UI
         /// tagged with the account name. Runs on a UM background thread → BeginInvoke for the toast.</summary>
         private void RaiseBackgroundNotify(TelegramService svc, Update u)
         {
-            if (svc == null || !AppSettings.Instance.EnableNotifications) return;
+            if (svc == null) return;
             Message m = u is UpdateNewMessage unm ? unm.message as Message
                       : u is UpdateNewChannelMessage ucm ? ucm.message as Message : null;
             if (m == null || (m.flags & Message.Flags.out_) != 0 || m.peer_id == null) return;   // no message / own outgoing
             long acctId = svc.AccountId;
             var peer = m.peer_id;
+
+            // ⚠ BATCH-TA-32/M3 — THE MASTER-MUTE CHECK MOVED DOWN HERE, AND THAT IS THE POINT OF IT.
+            //   It used to sit on the first line, BEFORE the message was even extracted and before the
+            //   BeginInvoke below — so with the master switch on, BackgroundToast was never invoked at all
+            //   and a suppression logged THERE could never fire for a background account. The switch would
+            //   have looked logged while being silent for half the accounts in the app, which is exactly
+            //   the "notifications stopped working" report this batch exists to make diagnosable.
+            //   Extracting the message first costs two type tests and two field reads; it does NOT cost the
+            //   marshal, because the return below still happens before BeginInvoke.
+            //   Safe off the UI thread: NotifyLog → Logger.Diag → Trace.WriteLine, and Logger.Enabled is
+            //   volatile and documented for any thread (Logger.cs:12).
+            if (!AppSettings.Instance.EnableNotifications)
+            { NotifyLog("suppressed(bg)", peer.ID, m.ID, "master"); return; }
+
             if (IsHandleCreated && !IsDisposed)
                 BeginInvoke((Action)(() => { try { BackgroundToast(svc, acctId, peer, m); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[NOTIFY-BG] toast EX: " + ex.Message); } }));
         }
@@ -5275,7 +5289,11 @@ namespace TelegArm.UI
             if (svc == null || peer == null || m == null) return;
             if (!CanDeliverNotification()) return;           // TA-27/W7: the tray guard, split
             if (acctId == AccountContext.ActiveId) return;   // became active mid-flight → its own path handles it (no double)
-            if (!AppSettings.Instance.EnableNotifications) return;
+            // TA-32/M2+M3 — the master switch, on this path too and LOGGED. Normally RaiseBackgroundNotify
+            // has already returned before we get here; this is the belt-and-braces copy for the case where
+            // the user flips the switch off between that check and this BeginInvoke landing.
+            if (!AppSettings.Instance.EnableNotifications)
+            { NotifyLog("suppressed(bg)", peer.ID, m.ID, "master"); return; }
             long peerId = peer.ID;
 
             // ⚠ BATCH-TA-26/B1 — THE SAME BACKLOG GATE AS THE ACTIVE PATH, AND IT MATTERS MORE HERE.
@@ -13942,7 +13960,34 @@ namespace TelegArm.UI
         {
             if (m == null) return;
             if (!CanDeliverNotification()) return;                                 // TA-27/W7: the tray guard, split
-            if (!AppSettings.Instance.EnableNotifications) return;                 // master switch off (user choice, not logged)
+
+            // ── BATCH-TA-32/N4 — THE MASTER MUTE ─────────────────────────────────────────────────
+            // ⚠ M1 — IT GATES THE **EMIT PATH ONLY**. The unread badge, the tray icon and tooltip, and
+            //   the chat-list preview are all updated by UpdateChatListForMessage / UpdateTrayTooltip
+            //   BEFORE this method is ever called, on a path that does not run through here at all. Master
+            //   mute means "do not INTERRUPT me", not "hide my messages" — the same distinction TA-26a
+            //   drew for Message.Flags.silent. DO NOT widen this to skip the badge, the tray or the list;
+            //   a user who silences notifications still expects to see what arrived when they look.
+            //
+            // ★ M4 — THE RULE, DECIDED: **MASTER MUTE WINS OVER EVERYTHING, MENTIONS INCLUDED.**
+            //   A mention breaks through a PER-CHAT mute because that mute says "not this conversation",
+            //   and being addressed by name is the documented exception to it (TA-26c). The master switch
+            //   is a different statement — "nothing, from anywhere, right now" — and an exception to it
+            //   would make it not a master switch. If the user wants mentions only, that is a quiet-hours
+            //   or per-category feature, not a hole in the global off.
+            //   This is also the EXISTING behaviour, preserved deliberately: the check sits ABOVE the
+            //   MentionsMe call below, so a mention has never broken through it. TA-32 documents and logs
+            //   that ordering rather than changing it.
+            //
+            // ⚠ M3 — AND IT IS LOGGED. It used to say "(user choice, not logged)" and return silently,
+            //   which is precisely how "notifications stopped working" becomes an unanswerable bug report:
+            //   every OTHER gate in this method records a reason, so a log with no [NOTIFY] line at all
+            //   looked like the update never arrived rather than like a switch being off.
+            //   Note it fires per invocation, and MaybeToast is invoked up to 7x per message (§2f), so a
+            //   muted run is chatty — acceptable, because it is Logger.Enabled-gated and off by default.
+            if (!AppSettings.Instance.EnableNotifications)
+            { NotifyLog("suppressed", peerId, m.ID, "master"); return; }
+
             if (outgoing) { NotifyLog("suppressed", peerId, m.ID, "own"); return; }
 
             // ⚠ BATCH-TA-26a/S1 — THE SENDER ASKED FOR NO PING. `silent` is Telegram's "send without

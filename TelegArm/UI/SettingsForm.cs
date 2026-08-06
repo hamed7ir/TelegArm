@@ -261,7 +261,10 @@ namespace TelegArm.UI
 
             y = SectionLabel(p, "NOTIFICATIONS", y);
             var notif = Card(p, y, 1); y += notif.Height + SecGap;
-            RowTitle(notif, 0, "Enable notifications", "Muted chats are always skipped");
+            // TA-32/N4: the subtitle states the master-mute rule, because the toggle's behaviour is not
+            // guessable from its label — off silences EVERYTHING including mentions, while unread badges
+            // keep counting. Both halves of that surprise people, so both are said here.
+            RowTitle(notif, 0, "Enable notifications", "Off silences everything, mentions included — unread badges still count");
             _notifications = RowSwitch(notif, 0, s.EnableNotifications);
             RowClickable(notif, 0, () => _notifications.Flip());   // UI-FIX-T1: whole row flips the switch (touch)
 
@@ -1275,7 +1278,13 @@ namespace TelegArm.UI
                     "TelegArm deletes old files from this folder, so it must not overlap where your account " +
                     "sessions are stored. Pick a dedicated folder (the default is a \"Cache\" folder).",
                     "TelegArm — cache folder", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;   // nothing saved; the dialog stays open on the offending value
+                // ⚠ "nothing saved" WAS WRONG AND IS CORRECTED HERE (TA-32, comment only — no behaviour
+                //   change, the bug below is out of this batch's scope). Nothing is written to DISK, but the
+                //   ten assignments above (lines 1255-1264) have ALREADY mutated AppSettings.Instance, which
+                //   is the live singleton every reader consults. So on this path a settings change — master
+                //   mute included — takes effect immediately and then silently REVERTS on the next launch.
+                //   Whoever fixes it: snapshot the singleton before assigning, or validate before mutating.
+                return;   // not persisted; the dialog stays open on the offending value
             }
 
             s.MediaCacheFolder = wantCache;
