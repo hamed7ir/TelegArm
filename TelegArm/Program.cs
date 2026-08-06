@@ -12,13 +12,27 @@ namespace TelegArm
 {
     static class Program
     {
-        /// <summary>BATCH-TA-13/W1: minimum WTelegramClient log severity teed into our log. WTC uses 1..5.
-        /// Levels 1-2 are PER-PACKET ("Sending/Receiving …") — measured on a quiet 40 s run, floor 1 emitted
-        /// 131 library lines and took the session log from 137 to 213 lines with no chat activity at all.
-        /// Level 3+ is the exceptional traffic we actually want: reactor faults, alt-DC disconnects, duplicate
-        /// /old msg_id (dedupe), server-salt changes, RpcErrors. Raising the volume distorts the [BOOT] and
-        /// [PERF] numbers read from this same file, so LOWERING THIS NEEDS A WRITTEN REASON.</summary>
-        private const int WtcLogSeverityFloor = 3;
+        /// <summary>Minimum WTelegramClient log severity teed into our log. WTC uses 1..5.
+        ///
+        /// BATCH-TA-13/W1 set this to 3. BATCH-TA-16b/F2 LOWERED IT TO 2, and the reason is written down
+        /// here because that comment demanded one. Measured on this box, all three points:
+        ///   · floor 1 — 131 library lines on a QUIET 40 s run, taking the session log 137 → 213 lines with
+        ///     no chat activity at all. Level 1 is per-packet ("Sending/Receiving …"). Far too loud; it
+        ///     distorts the [BOOT] and [PERF] numbers read from this same file.
+        ///   · floor 2 — 6 lines in 167 on the same quiet run. Cheap, and it is the level that carries the
+        ///     ONE line that matters most for diagnosing a proxy on the device:
+        ///         "Connecting to DC {n} via MTProxy {server}:{port}..."   (src/Client.cs:896, level 2)
+        ///     plus "Connecting to {endpoint}..." / "Connected to DC {n}..." for the direct path. At floor 3
+        ///     all of those are invisible, which is precisely the black box W1 existed to open.
+        ///   · floor 3 — 0 lines on a clean connect; only faults (4/5) ever appear.
+        ///
+        /// ⚠ CONFIRM ON THE DEVICE TRIP THAT THIS STAYS QUIET OVER A FLAKY LINK. The 6-line figure comes
+        /// from a HEALTHY connection. A real proxy run on 2026-08-04 showed the reactor dropping and
+        /// reconnecting roughly every 5-10 s ("[WTC:5] An exception occured in the reactor: Could not read
+        /// payload length : Connection shut down"), and at floor 2 EACH of those reconnects also emits its
+        /// own level-2 "Connecting to …" line. On a bad link the volume therefore scales with reconnect
+        /// churn, not with time. If the device log turns into a reconnect transcript, raise this back to 3.</summary>
+        private const int WtcLogSeverityFloor = 2;
 
         /// <summary>Application version (Major.Minor.Build), read from the assembly so AssemblyInfo is the ONE
         /// source of truth. Shown in the login title + About screen, and reported to Telegram as app_version.</summary>

@@ -69,6 +69,38 @@ namespace TelegArm.Core
         /// failure. Default TRUE; set this flag FALSE (persisted setting) to disable if it ever misbehaves on RT.</summary>
         public bool WarmConnections { get; set; } = true;
 
+        // ── Proxy (BATCH-TA-16) ──────────────────────────────────────────────
+        // Additive: absent in an existing settings.json = these defaults, so no migration.
+        /// <summary>MTProxy on/off. FALSE (default) = connect directly, exactly as before this existed.</summary>
+        public bool ProxyEnabled { get; set; } = false;
+
+        /// <summary>Saved MTProxy links, normalised to tg://proxy?server=..&amp;port=..&amp;secret=.. by
+        /// <see cref="ProxyUrl"/>. Order is the display order.
+        /// ⚠ THE SECRET IS STORED IN PLAIN TEXT HERE. That is a deliberate, stated decision (TA-15/X7):
+        /// it is what the official desktop clients do, and the session file sitting beside settings.json is
+        /// far more sensitive. It is ALSO why the secret must never reach a log — see <see cref="ProxyUrl"/>.</summary>
+        public System.Collections.Generic.List<string> ProxyList { get; set; } = new System.Collections.Generic.List<string>();
+
+        /// <summary>Index into <see cref="ProxyList"/> of the proxy in use; -1 = none selected.
+        /// Always bounds-checked on read — a hand-edited settings.json can point anywhere.</summary>
+        public int ProxyActive { get; set; } = -1;
+
+        /// <summary>The active proxy link, or null when proxying is off / nothing valid is selected.
+        /// This is the ONE place that decides whether we are proxied, so the bounds check lives here
+        /// rather than being repeated at every call site.</summary>
+        [JsonIgnore]
+        public string ActiveProxyUrl
+        {
+            get
+            {
+                if (!ProxyEnabled) return null;
+                var list = ProxyList;
+                if (list == null || ProxyActive < 0 || ProxyActive >= list.Count) return null;
+                string u = list[ProxyActive];
+                return string.IsNullOrWhiteSpace(u) ? null : u;
+            }
+        }
+
         // ── Appearance ───────────────────────────────────────────────────────
         /// <summary>Theme mode: "System" (default), "Light", or "Dark". Stored as text
         /// so the file stays human-readable; parsed into ThemeHelper.ThemeMode at startup.</summary>

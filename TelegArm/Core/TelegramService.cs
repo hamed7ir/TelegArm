@@ -238,7 +238,48 @@ namespace TelegArm.Core
             // Country-blocked Telegram reached only via a flaky VPN tunnel → keep retrying on socket
             // errors instead of giving up after a few tries (the watchdog handles the black-hole case).
             Client.MaxAutoReconnects = 1000;
+            ApplyProxyTo(Client, "EnsureClient");
             TearingDown = false;   // a fresh client ends the teardown window (TEARDOWN-HYGIENE 1.2)
+        }
+
+        /// <summary>BATCH-TA-16 — point a freshly-constructed client at the configured MTProxy, if any.
+        /// MTProxyUrl is a plain string property read ONLY inside WTC's DoConnectAsync (src/Client.cs:880),
+        /// so setting it at construction is enough for every client we create; changing it on a LIVE client
+        /// does nothing until that client reconnects. Null = connect directly, exactly as before.
+        /// WTC's clone ctor copies MTProxyUrl (src/Client.cs:141), so per-DC clients inherit it — which is
+        /// what makes media/file downloads on a secondary DC go through the proxy too.
+        /// ⚠ LOGS host:port ONLY, never the secret — see ProxyUrl's remarks.</summary>
+        private static void ApplyProxyTo(WTelegram.Client c, string why)
+        {
+            if (c == null) return;
+            string url = null;
+            try { url = AppSettings.Instance.ActiveProxyUrl; } catch { }
+            c.MTProxyUrl = url;                       // null is meaningful: it means "direct"
+            if (TelegArm.Helpers.Logger.Enabled)
+                TelegArm.Helpers.Logger.Diag("[PROXY] " + why + " → " + (url == null ? "DIRECT (no proxy)"
+                                                                                     : "via " + ProxyUrl.SafeForLog(url)));
+        }
+
+        /// <summary>BATCH-TA-17 — apply a CHANGED proxy (or a switch back to direct) to THIS live client,
+        /// immediately.
+        ///
+        /// WHY A RECONNECT IS UNAVOIDABLE: WTC reads MTProxyUrl ONLY inside DoConnectAsync
+        /// (src/Client.cs:880). Assigning it to a connected client changes nothing — which is exactly the
+        /// bug this fixes: picking a different proxy, or turning the proxy off, left the app happily
+        /// running on the OLD transport, so a proxy the user had just seen fail kept "working" and a
+        /// switch to direct silently didn't happen.
+        ///
+        /// It reuses the EXISTING ForceReconnectAsync rather than inventing a reconnect: that path already
+        /// does ResetAsync(false,false) — which keeps the user and the session — then ConnectAsync, and it
+        /// is the same path the liveness watchdog uses, so it is the one that has been exercised. Its
+        /// re-entrancy guard means a reconnect already in flight simply wins.
+        /// ⚠ THE WARM POOL IS THE CALLER'S PROBLEM, not this method's: warm clients were built with the
+        ///   OLD transport and must be torn down and re-warmed by MainForm (see ApplyProxyChangeAsync
+        ///   there). This method only owns the ACTIVE client.</summary>
+        public async Task ApplyProxyChangeAsync()
+        {
+            ApplyProxyTo(Client, "apply-live");   // takes effect on the reconnect below, not before
+            await ForceReconnectAsync().ConfigureAwait(false);
         }
 
         // ── TEARDOWN-HYGIENE: expected teardown races must not pollute crash.log ──
@@ -615,10 +656,23 @@ namespace TelegArm.Core
         /// <summary>Raised (true) when a forced reconnect starts and (false) when it finishes.</summary>
         public event Action<bool> ReconnectingChanged;
 
-        /// <summary>Marks "the server is alive": call on every received update and on probe/reconnect success.</summary>
+        /// <summary>Marks "the server is alive": call on every received update and on probe/reconnect success.
+        ///
+        /// BATCH-TA-16e/E3 — THIS IS ALSO WHERE THE PROXY PILL LEARNS IT IS CONNECTED AGAIN, and it has to
+        /// be here rather than in our connect loop. ConnectResilientlyAsync only runs for OUR reconnects;
+        /// WTC's reactor re-establishes the socket entirely on its own (src/Client.cs:388-397, a fixed 5 s
+        /// retry that only surfaces every MaxAutoReconnects'th time), so on a proxy that drops every few
+        /// seconds the pill would latch at "Connecting…" forever with nothing to clear it — exactly the
+        /// stuck state reported from the device.
+        /// NoteActivity is the ONE place every "the server just answered" path already funnels through:
+        /// received updates (MainForm.OnManagerUpdate), a successful liveness probe, and a completed forced
+        /// reconnect. Any of those is proof the transport is up, whoever re-established it.
+        /// Cheap: ProxyStatus only raises its event when the state actually CHANGES, so the common case
+        /// (already Connected, another update arrives) is a lock and two comparisons.</summary>
         public void NoteActivity()
         {
             Interlocked.Exchange(ref _lastActivityTicks, DateTime.UtcNow.Ticks);
+            ProxyStatus.NoteAuthorized();
         }
 
         /// <summary>Starts the periodic liveness watchdog. Safe to call once after login.</summary>
@@ -755,6 +809,10 @@ namespace TelegArm.Core
 
                 c = new WTelegram.Client(w => WarmConfig(w, id));
                 c.MaxAutoReconnects = 1000;
+                // A warm client must use the SAME transport as the active one, or switching accounts would
+                // silently move the user between proxied and direct. (Changing the proxy while warm clients
+                // are already live is the separate, gated problem — BATCH-TA-16/P5.)
+                ApplyProxyTo(c, "warm id=" + id);
                 var login = c.LoginUserIfNeeded();
                 var winner = await System.Threading.Tasks.Task.WhenAny(login, System.Threading.Tasks.Task.Delay(timeoutMs)).ConfigureAwait(false);
                 if (winner != login)
