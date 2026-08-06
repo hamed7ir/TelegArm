@@ -78,6 +78,8 @@ namespace TelegArm.UI
             if (_entry?.Peer == null) return;
             ShowInChatRequested?.Invoke(_entry.Peer, messageId);
             // Close the profile (the gallery closes itself) so the conversation becomes the visible view.
+            // Embedded there is nothing to close — the pane stays and the chat scrolls behind it.
+            if (_embedded) return;
             try { BeginInvoke((Action)Close); } catch { Close(); }
         }
 
@@ -93,14 +95,30 @@ namespace TelegArm.UI
         {
             if (string.IsNullOrEmpty(url)) return;
             PendingLink = url;
-            DialogResult = DialogResult.OK;
-            try { BeginInvoke((Action)Close); } catch { Close(); }
+            FinishOrRoute();
         }
 
         public ProfileForm(TelegramService service) : this(service, null, null, true) { }
         public ProfileForm(TelegramService service, ChatEntry entry, Image avatar) : this(service, entry, avatar, false) { }
 
-        private ProfileForm(TelegramService service, ChatEntry entry, Image avatar, bool editable)
+        /// <summary>BATCH-TA-24 — the SAME profile, hosted inside the right-side dock instead of shown as a
+        /// modal. The dock's Info pane IS this form; there is no second, thinner "info panel" to keep in
+        /// sync, and nothing has to be re-implemented to make the pane look complete.
+        ///
+        /// ⚠ TWO THINGS MAKE IT EMBEDDABLE, AND BOTH WERE MEASURED RATHER THAN GUESSED:
+        ///  1. WIDTH. Every row was built at a hardcoded ContentW = 392 with a hardcoded _flow.Width = 424.
+        ///     Those are now DERIVED from <paramref name="contentWidth"/>, so the identical layout code
+        ///     serves a 440-wide dialog and a ~300-wide dock.
+        ///  2. CHROME. MaterialForm reserves a caption strip — measured: STATUS_BAR_HEIGHT_DEFAULT = 24,
+        ///     and the form's Dock=Fill child sits at Top = 24 because Padding.Top holds that band. Clearing
+        ///     Padding when embedded lets the opaque content cover it.
+        /// The caller does: `new ProfileForm(svc, entry, avatar, width) { TopLevel = false, Dock = Fill }`,
+        /// adds it, calls Show(), and handles <see cref="EmbeddedRoute"/> instead of a DialogResult.</summary>
+        public ProfileForm(TelegramService service, ChatEntry entry, Image avatar, int contentWidth)
+            : this(service, entry, avatar, false, contentWidth) { }
+
+        private ProfileForm(TelegramService service, ChatEntry entry, Image avatar, bool editable,
+                            int contentWidth = 0)
         {
             _service = service;
             _entry = entry;
@@ -108,6 +126,8 @@ namespace TelegArm.UI
             _editable = editable;
             _ownsAvatar = editable;
             _muted = entry?.Muted ?? false;
+            _embedded = contentWidth > 0;
+            if (_embedded) ContentW = Math.Max(180, contentWidth - 32);   // 16px margin each side, as before
 
             var skin = MaterialSkinManager.Instance;
             skin.AddFormToManage(this);
@@ -239,11 +259,52 @@ namespace TelegArm.UI
         }
 
         // ── View mode (others) — Telegram-style scrollable layout ────────────
-        private const int ContentW = 392;   // inner content width (within the 16px side margins)
+        /// <summary>Inner content width (within the 16px side margins). WAS a const 392; it is now
+        /// per-instance so the SAME layout code can serve the 440-wide dialog and the narrower dock pane
+        /// (BATCH-TA-24). Every one of its ~19 uses is a read at build time, so setting it in the ctor
+        /// before Build*Mode() runs is sufficient.</summary>
+        private readonly int ContentW = 392;
+        private readonly bool _embedded;
+
+        /// <summary>Embedded only: raised INSTEAD of closing, when something the host must handle was
+        /// tapped (a link, a mention, "show in chat", a leave). The modal path sets DialogResult and closes;
+        /// a docked pane has no DialogResult and must not vanish, so the host reads the same Pending*
+        /// properties and routes them.</summary>
+        public event Action<ProfileForm> EmbeddedRoute;
+
+        /// <summary>Closes (modal) or notifies the host (embedded). EVERY view-mode exit goes through here,
+        /// so the two modes cannot drift — link, mention, hashtag, personal-channel card and leave.
+        /// ⚠ The one remaining `DialogResult = OK; Close();` in this file is the EDIT-mode save, and it is
+        ///   correct there: edit mode is only ever reached through the `ProfileForm(service)` ctor, which
+        ///   cannot be embedded (the embedded ctor passes editable: false).</summary>
+        private void FinishOrRoute()
+        {
+            if (_embedded)
+            {
+                var h = EmbeddedRoute;
+                if (h != null) h(this);
+                // ⚠ CLEAR THE PENDING FIELDS. The modal path never needs this because the form dies right
+                //   after the host reads them; a docked pane LIVES ON, and RouteProfilePending checks
+                //   PendingLink FIRST — so a stale link would swallow the next mention or hashtag tap.
+                PendingLink = null; PendingMentionUser = null; PendingMentionId = 0;
+                PendingHashtag = null; PendingOpenChannel = null;
+                return;
+            }
+            DialogResult = DialogResult.OK;
+            try { BeginInvoke((Action)Close); } catch { Close(); }
+        }
 
         private void BuildViewMode()
         {
-            ClientSize = new Size(440, 620);
+            if (_embedded)
+            {
+                // ⚠ MEASURED: MaterialForm reserves a caption strip via Padding — its Dock=Fill child sits
+                //   at Top = 24 (STATUS_BAR_HEIGHT_DEFAULT). Clearing Padding lets the opaque content cover
+                //   the band, which is what makes this look like a pane instead of a windowless dialog.
+                Padding = new Padding(0);
+                Sizable = false;
+            }
+            else ClientSize = new Size(440, 620);
 
             var outer = new Panel { Dock = DockStyle.Fill, BackColor = BackColor };
             var host = new Controls.NoNativeScrollPanel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = BackColor };
@@ -253,7 +314,7 @@ namespace TelegArm.UI
                 WrapContents = false,
                 AutoSize = true,
                 AutoSizeMode = AutoSizeMode.GrowAndShrink,
-                Width = 424,
+                Width = ContentW + 32,   // was a second hardcoded 424; 392 + 32 == 424, so the dialog is unchanged
                 BackColor = BackColor,
                 Padding = new Padding(0, 0, 0, 16)
             };
@@ -297,7 +358,12 @@ namespace TelegArm.UI
             _actionsPanel = actions;   // PROFILE-CHANNEL: personal-channel card inserts directly after this
             bool isUser = OtherUser != null;
             var tiles = new List<ActionTile>();
-            if (isUser)
+            // ⚠ EMBEDDED, "Message" IS OMITTED, NOT SHOWN-AND-IGNORED. The dock's profile is built for the
+            //   chat that is ALREADY OPEN behind it, so the tile would ask to open the conversation the user
+            //   is looking at. Its handler is also the modal exit (DialogResult + Close), which on a
+            //   TopLevel=false form disposes the pane and leaves the dock blank. Omitting an unavailable
+            //   action rather than grey-out is this app's convention (TA-20/S0, and the dock's own Emoji tab).
+            if (isUser && !_embedded)
             {
                 var msg = NewTile("✉", "Message", 0);
                 msg.Clicked += () => { SendMessageRequested = true; DialogResult = DialogResult.OK; Close(); };
@@ -330,9 +396,9 @@ namespace TelegArm.UI
                 Width = ContentW,
                 Margin = new Padding(16, 2, 16, 0)
             };
-            _details.LinkClicked += url => { PendingLink = url; DialogResult = DialogResult.OK; Close(); };
-            _details.MentionClicked += (un, uid) => { PendingMentionUser = un; PendingMentionId = uid; DialogResult = DialogResult.OK; Close(); };
-            _details.HashtagClicked += tag => { PendingHashtag = tag; DialogResult = DialogResult.OK; Close(); };
+            _details.LinkClicked += url => { PendingLink = url; FinishOrRoute(); };
+            _details.MentionClicked += (un, uid) => { PendingMentionUser = un; PendingMentionId = uid; FinishOrRoute(); };
+            _details.HashtagClicked += tag => { PendingHashtag = tag; FinishOrRoute(); };
             _flow.Controls.Add(_details);
 
             // Secondary, selectable ID line (every peer type).
@@ -363,7 +429,7 @@ namespace TelegArm.UI
                 string sub = "Channel" + (val.subs > 0 ? " • " + val.subs.ToString("N0") + " subscriber" + (val.subs == 1 ? "" : "s") : "");
                 var card = new ProfileChannelCard(ch.title, sub, ChannelMsgPreview(val.latest), _dark, _accentColor)
                 { Width = ContentW, Margin = new Padding(16, 8, 16, 0) };
-                card.Clicked += () => { PendingOpenChannel = ch; DialogResult = DialogResult.OK; Close(); };
+                card.Clicked += () => { PendingOpenChannel = ch; FinishOrRoute(); };
                 _flow.Controls.Add(card);
                 int ai = _flow.Controls.GetChildIndex(_actionsPanel);   // slot the card directly after the action row
                 if (ai >= 0) _flow.Controls.SetChildIndex(card, ai + 1);
@@ -838,8 +904,7 @@ namespace TelegArm.UI
             try { await _service.LeaveChatAsync(_entry.Peer); }
             catch (Exception ex) { ThemedDialog.Show(this, "Leave", "Couldn't leave: " + ex.Message, "OK"); return; }
             LeftChat = true;
-            DialogResult = DialogResult.OK;
-            Close();   // close the profile after leaving
+            FinishOrRoute();   // close the profile after leaving (embedded: tell the host, stay put)
         }
 
         private void AddActionRow(string glyph, string label, bool danger, Action action)
