@@ -271,6 +271,12 @@ namespace TelegArm
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
+            // BATCH-TA-33 — set the AUMID and probe Action Center / tile support ONCE, before any window.
+            // It must run early: the AUMID also decides taskbar grouping, and Windows reads it when the
+            // first window is created. Logs exactly one line saying which branch was taken, because on RT
+            // 8.1 and Windows 7 this whole feature correctly does nothing and "nothing" needs a reason.
+            TelegArm.Helpers.ShellNotify.Init();
+
             // Pop the on-screen keyboard when a text field is tapped by touch on a keyboard-less tablet.
             Application.AddMessageFilter(new TouchKeyboard.Filter());
 

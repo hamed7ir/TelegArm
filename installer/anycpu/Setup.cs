@@ -235,9 +235,80 @@ namespace TelegArmSetup
                 if (!string.IsNullOrEmpty(workDir)) link.SetWorkingDirectory(workDir);
                 if (!string.IsNullOrEmpty(iconPath)) link.SetIconLocation(iconPath, 0);
                 if (!string.IsNullOrEmpty(desc)) link.SetDescription(desc);
+
+                // ══ BATCH-TA-33/A6 — STAMP THE AppUserModelID ONTO THE SHORTCUT ═════════════════
+                // ⚠ WITHOUT THIS, TELEGARM'S ACTION CENTER ENTRIES AND START TILE SILENTLY DO NOTHING.
+                //   Windows resolves a desktop app's notification identity by finding a Start-Menu .lnk
+                //   carrying this exact string. With no such shortcut the app's own calls still SUCCEED —
+                //   CreateToastNotifier(aumid) returns an object for any string at all — and delivery just
+                //   never happens. Measured this session: reading ToastNotifier.Setting is the only thing
+                //   that reports it, throwing 0x80070490. So a missing AUMID here is invisible until
+                //   someone wonders why the Action Center is empty.
+                // ⚠ IT MUST BE SET **BEFORE** IPersistFile.Save — the property store is written as part of
+                //   saving the link, so stamping it afterwards writes into an object nobody persists.
+                // ⚠ THE STRING MUST MATCH TelegArm's ShellNotify.Aumid EXACTLY. Two copies of one
+                //   identifier — this installer and the app — and they must not drift.
+                //   (There is no third copy: the Inno .iss installer was dropped in TA-33. THE PORTABLE
+                //   PACKAGE CREATES NO SHORTCUT AT ALL, so a portable copy has no AUMID registration and
+                //   correctly gets no Action Center entry and no tile — the app logs exactly that at
+                //   startup rather than appearing broken.)
+                //
+                // ⚠⚠ TO WHOEVER REWRITES THIS INSTALLER FOR THE .NET 4.7 PREREQUISITE CHECK: Setup.exe is
+                //    itself a managed .NET 4.7 binary, so a real prerequisite check cannot run inside it —
+                //    the likely fix is a native bootstrapper, which would delete this whole Shortcut class
+                //    and take the AUMID with it. **DO NOT DROP IT.** Notifications regress to
+                //    window-only with no error anywhere.
+                try
+                {
+                    var store = (IPropertyStore)link;
+                    var pv = new PROPVARIANT();
+                    pv.vt = 31;                                        // VT_LPWSTR
+                    pv.pointerValue = Marshal.StringToCoTaskMemUni(Aumid);
+                    var key = PKEY_AppUserModel_ID;
+                    store.SetValue(ref key, ref pv);
+                    store.Commit();
+                    Marshal.FreeCoTaskMem(pv.pointerValue);
+                }
+                catch { /* pre-Win7 shell, or no IPropertyStore — the shortcut is still valid without it */ }
+
                 ((IPersistFile)link).Save(lnkPath, true);
             }
             catch { /* shortcut is best-effort */ }
+        }
+
+        /// <summary>Must equal TelegArm.Helpers.ShellNotify.Aumid. This installer is the ONLY thing that
+        /// registers it — the portable package deliberately does not.</summary>
+        internal const string Aumid = "hamed7ir.TelegArm";
+
+        // System.AppUserModel.ID — {9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3}, PID 5.
+        private static PROPERTYKEY PKEY_AppUserModel_ID = new PROPERTYKEY
+        {
+            fmtid = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"),
+            pid = 5
+        };
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct PROPERTYKEY { public Guid fmtid; public int pid; }
+
+        // Only the VT_LPWSTR shape is needed. The union is padded to the full PROPVARIANT size so the
+        // shell reads a correctly-sized structure rather than running off the end of ours.
+        [StructLayout(LayoutKind.Sequential)]
+        private struct PROPVARIANT
+        {
+            public ushort vt;
+            public ushort r1, r2, r3;
+            public IntPtr pointerValue;
+            public IntPtr padding;
+        }
+
+        [ComImport, InterfaceType(ComInterfaceType.InterfaceIsIUnknown), Guid("886d8eeb-8cf2-4446-8d02-cdba1dbdcf99")]
+        private interface IPropertyStore
+        {
+            void GetCount(out uint cProps);
+            void GetAt(uint iProp, out PROPERTYKEY pkey);
+            void GetValue(ref PROPERTYKEY key, out PROPVARIANT pv);
+            void SetValue(ref PROPERTYKEY key, ref PROPVARIANT pv);
+            void Commit();
         }
 
         [ComImport, Guid("00021401-0000-0000-C000-000000000046")]

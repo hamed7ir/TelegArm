@@ -5684,6 +5684,11 @@ namespace TelegArm.UI
             if (maxId > entry.ReadInboxMaxId) entry.ReadInboxMaxId = maxId;
             entry.UnreadCount = Math.Max(0, stillUnread);
             FindChatItem(peerId)?.Invalidate();
+            // TA-33/A4 — read on ANOTHER device retires this chat's Action Center entries too. Reusing the
+            // read signals that already exist rather than inventing a second notion of "read" is the point;
+            // this is the one that fires when you read on your phone, which is when a stale desktop entry
+            // is most annoying. RemoveGroup, not per-message Remove: the signal is a peer + a watermark.
+            if (entry.UnreadCount == 0) ShellNotify.RemoveGroup(peerId);
             UpdateTrayTooltip();
             RefreshFolderBadges();   // TA-6b/G1 (DOWN): read on ANOTHER device — the fix that matters most
         }
@@ -12134,6 +12139,8 @@ namespace TelegArm.UI
             _selectedChat.UnreadCount = 0;
             var _ = SafeReadHistory(_selectedChat.Peer, latest);
             FindChatItem(_selectedChat.PeerId)?.Invalidate();
+            // TA-33/A4 — the user reached the bottom of this chat, so its Action Center entries are stale.
+            ShellNotify.RemoveGroup(_selectedChat.PeerId);
             UpdateTrayTooltip();
             RefreshFolderBadges();   // TA-6b/G1 (DOWN): THE TA-6 GATE FAILURE — reading a chat in TelegArm
         }
@@ -13810,17 +13817,73 @@ namespace TelegArm.UI
             }
         }
 
-        /// <summary>Updates the tray tooltip with the total unread count.</summary>
+        /// <summary>Updates the tray tooltip with the total unread count — and, since TA-33, the taskbar
+        /// icon badge and the Start tile, which are the same fact shown in two more places.</summary>
         private void UpdateTrayTooltip()
         {
-            if (_notifyIcon == null) return;
+            // ⚠ THE TRAY GUARD MOVED DOWN (TA-33). It used to be the first line, which would have made the
+            //   TASKBAR badge depend on a tray icon it has nothing to do with — the same shape of mistake
+            //   TA-27 fixed in the notify gate. The unread total is computed unconditionally now, and only
+            //   the tray-specific lines stay behind the guard.
             int unread = 0;
             foreach (var c in _allChats) unread += Math.Max(0, c.UnreadCount);
+
+            // ── TA-33 — THE BADGE ON THE ICON ───────────────────────────────────────────────────
+            // ⚠ DRIVEN FROM THE UNREAD TOTAL, **NOT** FROM THE NOTIFY EMIT PATH, AND THAT IS DELIBERATE.
+            //   A badge is AMBIENT — it states what is unread, which stays true whether or not a
+            //   notification was allowed to interrupt. Hanging it off the emit point would mean master
+            //   mute, a muted chat, a `silent` message or a suppressed backlog all silently desynced the
+            //   badge from reality, and the user would find a count that disagrees with the chat list.
+            //   This is the same "do not interrupt me" vs "do not tell me" line N4 draws.
+            ShellNotify.SetTaskbarBadge(this, unread);   // works on RT 8.1, Win7 and Win11 — no AUMID needed
+            ShellNotify.SetTileBadge(unread);            // Start tile only; no-op without a shortcut
+            UpdateStartTile(unread);
+
+            if (_notifyIcon == null) return;
             _notifyIcon.Text = unread > 0 ? "TelegArm — " + unread + " unread" : "TelegArm";
             // Swap the tray icon on the 0↔nonzero boundary (unread → unread icon; none → normal). Only assign
             // when it changes (avoids redundant handle churn). Falls back gracefully if an icon is missing.
             var want = unread > 0 ? (_trayIconUnread ?? _trayIconNormal) : _trayIconNormal;
             if (want != null && !ReferenceEquals(_notifyIcon.Icon, want)) _notifyIcon.Icon = want;
+        }
+
+        /// <summary>BATCH-TA-33/N6 — the Start tile: up to 5 unread chats, cycled by Windows.
+        ///
+        /// ★ L5, THE RULE: **MASTER MUTE DOES NOT CLEAR OR FREEZE THE TILE.** A tile is AMBIENT — you go
+        ///   and look at it — where a notification is an INTERRUPTION that comes to you. Silencing
+        ///   interruptions is not a request to be denied information you deliberately went to check.
+        /// ⚠ THIS IS WHY THE TILE IS DRIVEN FROM THE UNREAD RECOMPUTE RATHER THAN FROM THE EMIT POINT, AS
+        ///   N6/L4 SUGGESTED. The emit point sits DOWNSTREAM of master mute (N4), so hanging the tile there
+        ///   would have frozen it for the entire time the user was muted — which is precisely the "yes" to
+        ///   L5 that L5 asked me not to give. Same source as the badge, one notion of "what is unread".
+        /// ⚠ L4 IS STILL HONOURED WHERE IT MATTERS: a muted chat contributes nothing, because
+        ///   ComputeEffectiveMuted is the same resolver the row bell uses.
+        /// ⚠ L6 PRIVACY: with previews off, the tile shows senders only. It reuses
+        ///   <see cref="AppSettings.NotificationPreviews"/> — the notification setting — rather than adding a
+        ///   second switch, because "who may read my messages over my shoulder" is one question, and two
+        ///   toggles that answer it differently is a privacy bug waiting to happen.</summary>
+        private void UpdateStartTile(int unread)
+        {
+            if (!ShellNotify.Available) return;   // no tile surface / no shortcut → nothing to do
+            try
+            {
+                if (unread <= 0) { ShellNotify.ClearTile(); return; }
+                bool previews = AppSettings.Instance.NotificationPreviews;
+                var items = new List<Tuple<string, string>>();
+                foreach (var c in _allChats)
+                {
+                    if (items.Count >= 5) break;
+                    if (c.UnreadCount <= 0) continue;
+                    if (ComputeEffectiveMuted(c)) continue;             // L4: muted chats contribute nothing
+                    string who = c.Title ?? "Chat";
+                    string what = previews
+                        ? (c.Preview ?? "")
+                        : (c.UnreadCount == 1 ? "1 new message" : c.UnreadCount + " new messages");
+                    items.Add(Tuple.Create(who, what));
+                }
+                if (items.Count == 0) ShellNotify.ClearTile(); else ShellNotify.PushTile(items);
+            }
+            catch { /* the tile is decoration; it never breaks the app */ }
         }
 
         /// <summary>Loads an .ico from beside the exe (RT-safe: null if missing/unreadable, never throws).</summary>
@@ -14083,7 +14146,13 @@ namespace TelegArm.UI
         {
             if (string.IsNullOrEmpty(chatTitle)) chatTitle = "TelegArm";
             if (mentioned) chatTitle = "@ " + chatTitle;          // distinguish a mention
-            string text = GetDisplayText(m);
+            // ⚠ TA-33/L6 — PRIVACY IS APPLIED **HERE**, at the one construction point, so the window, the
+            //   Action Center entry and the legacy balloon cannot disagree about it. Applying it per
+            //   surface is how one of them ends up leaking the body after the user turned previews off.
+            //   (The tile reads the same flag from its own source — see UpdateStartTile.)
+            string text = AppSettings.Instance.NotificationPreviews
+                ? GetDisplayText(m)
+                : "New message";
             if (string.IsNullOrEmpty(text)) text = "New message";
             if (text.Length > 160) text = text.Substring(0, 160) + "…";
             return new NotifyInfo
@@ -14109,6 +14178,23 @@ namespace TelegArm.UI
         private void EmitNotification(NotifyInfo info)
         {
             if (info == null) return;
+
+            // ── BATCH-TA-33/A1 — THE ACTION CENTER ENTRY HANGS OFF *THIS* POINT, NOT A PATH OF ITS OWN ──
+            // ⚠ AND IT MUST SIT **HERE**, ABOVE THE LegacyTrayBalloon BRANCH. That branch RETURNS (twice),
+            //   so the same call appended at the end of this method would be silently skipped for every
+            //   user who flipped the escape hatch on — the sort of half-working that only shows up on the
+            //   one machine you cannot debug. This line is the last point both channels share.
+            // ⚠ EVERY GATE HAS ALREADY RUN by the time we are here: master mute, own, silent, backlog, dup,
+            //   focused, per-chat mute and the mention break-through are all upstream in MaybeToast /
+            //   BackgroundToast. That is what makes this additive rather than a second surface — and it is
+            //   why A7 needs no code: master mute returns long before this.
+            //   (One honest exception: the fullscreen/user-busy gate lives DOWNSTREAM in
+            //   NotificationStack.Show, so a game covering the screen suppresses the WINDOW but still gets
+            //   an Action Center entry. That is the right way round — the entry is the quiet record you
+            //   read afterwards, which is exactly what you want after being left alone.)
+            ShellNotify.PushToast(info.Title, info.Text,
+                                  info.MessageId.ToString(), info.PeerId.ToString());
+
             if (AppSettings.Instance.LegacyTrayBalloon)
             {
                 if (_notifyIcon == null) return;                  // see CanDeliverNotification

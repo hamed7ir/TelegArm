@@ -4,14 +4,32 @@ How the v1.0.0 release installers were produced, and how to rebuild them for the
 version. Everything here runs on the dev box (x64 Windows); the outputs land in
 `installer/Output/`.
 
-## Why there are TWO installers
+> ## ⚠ THE INNO (`.iss`) INSTALLER WAS DROPPED — 2026-08-06, BATCH-TA-33
+> `installer/TelegArm.iss` is **deleted**. We ship exactly two things now:
+> **the AnyCPU/MSIL installer** and **one portable package**.
+> Every Inno / ISCC / `.iss` instruction below is therefore **obsolete** — the sections are left in
+> place only because this file has not had a full rewrite yet. **Ignore §"Inno desktop installer",
+> the ISCC prerequisite, and the `.iss` version-bump step.** Rebuilding this doc properly belongs to
+> the packaging batch that is also adding the .NET 4.7 prerequisite check.
+>
+> **⚠ THAT BATCH MUST NOT DROP THE AppUserModelID** now stamped on the Start-Menu shortcut by
+> `installer/anycpu/Setup.cs` (`Shortcut.Aumid` = `hamed7ir.TelegArm`, set via `IPropertyStore`
+> **before** `IPersistFile.Save`). It must stay equal to `TelegArm.Helpers.ShellNotify.Aumid`. Without
+> it, Action Center entries and the Start tile silently stop working — the app's own calls still
+> succeed and simply deliver nothing. `Setup.exe` is itself managed .NET 4.7, so a real prerequisite
+> check probably means a native bootstrapper, which would delete the whole `Shortcut` class and take
+> the AUMID with it.
+>
+> **The portable package deliberately registers no shortcut**, so it has no AUMID and correctly gets
+> no Action Center entry and no tile. The app logs that reason once at startup (`[SHELL] Action
+> Center OFF — no Start-Menu shortcut carries AUMID …`) rather than looking broken.
 
-| Installer | File | Target | Notes |
+## What we ship
+
+| Package | File | Target | Notes |
 |---|---|---|---|
-| **Inno Setup** (native x86 wizard) | `TelegArm-Setup-<ver>.exe` | Desktop Windows **x86 / x64** | Branded wizard, installs to Program Files (admin), Start-menu + optional desktop shortcut. |
-| **AnyCPU .NET** (MSIL) | `TelegArm-<ver>-Setup-AnyCPU.zip` | **Windows RT (ARM)** + x86/x64 | Inno's loader is native x86 and **cannot run on RT**, so this one is compiled AnyCPU/MSIL like the app. Per-user install to `%LocalAppData%\Programs\TelegArm` (no admin). |
-
-Ship **both**: the `.exe` for desktop users, the `.zip` for the RT device (and as a no-admin option anywhere).
+| **AnyCPU .NET** (MSIL) | `TelegArm-<ver>-Setup-AnyCPU.zip` | **Windows RT (ARM)** + x86/x64 | Compiled AnyCPU/MSIL like the app, so it runs on RT. Per-user install to `%LocalAppData%\Programs\TelegArm` (no admin). **Registers the Start-Menu shortcut + AUMID.** |
+| **Portable** | zip of `bin\Release` | anywhere | No install, no shortcut, no AUMID → notification window works, Action Center/tile do not. |
 
 ## Prerequisites (all present on the dev box)
 
