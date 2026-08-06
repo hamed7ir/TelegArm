@@ -97,7 +97,33 @@ namespace TelegArm.UI
         /// switches accounts if needed and opens the chat.</summary>
         public static event Action<long, long, int> Clicked;
 
-        private const int EdgeGap = 12, StackGap = 8;
+        // ── G1 — THE GAPS SCALE, LIKE THE BOX THEY SEPARATE ──────────────────────────────────────
+        /// <summary>Design-pixel gaps at 96 dpi: from the working-area edge, and between stacked windows.
+        /// ⚠ THESE ARE SCALED AT USE (see ScaledGap). They were raw pixels until TA-30, which left a 200%
+        /// display with a 12 px margin around a 720x168 window — the window doubled and the breathing room
+        /// did not, so the stack looked pinched against the corner. Anything measured in pixels next to a
+        /// scaled box has to scale with it.</summary>
+        private const int DesignEdgeGap = 12, DesignStackGap = 8;
+
+        /// <summary>The system-DPI factor the app actually renders at. Read from the anchor rather than
+        /// cached at startup, so it is correct after a display change; falls back to 1.0 if there is no
+        /// anchor yet. Matches how NotificationWindow derives its own scale (Graphics.DpiX / 96).</summary>
+        private static float Scale()
+        {
+            try
+            {
+                var src = _anchor != null && !_anchor.IsDisposed && _anchor.IsHandleCreated
+                    ? (Control)_anchor : null;
+                if (src == null) return 1f;
+                using (var g = src.CreateGraphics()) return g.DpiX / 96f;
+            }
+            catch { return 1f; }
+        }
+
+        private static int ScaledGap(int designPx)
+        {
+            return (int)Math.Round(designPx * Scale());
+        }
 
         public static void Show(Form anchor, NotifyInfo info, bool dark, Color accent)
         {
@@ -196,18 +222,21 @@ namespace TelegArm.UI
         ///
         /// ⚠ WorkingArea, NOT Bounds — Bounds includes the taskbar band, so a notification anchored to it
         /// would sit UNDER the taskbar wherever the taskbar is. WorkingArea also tracks the taskbar being
-        /// moved to another edge or set to auto-hide, with no special case for either. Measured on the dev
-        /// box: bounds 1536x864, working area 1536x816, i.e. a 48px band this must stay clear of.
+        /// moved to another edge or set to auto-hide, with no special case for either. Measured DPI-AWARE
+        /// on the dev box: bounds 1920x1080, working area 1920x1020, i.e. a 60px band to stay clear of.
+        /// (An earlier note here said 1536x864/48px — that was a DPI-UNAWARE probe reading a virtualized
+        /// desktop that does not exist. Measure at the awareness the app actually runs at.)
         /// ⚠ Read FRESH on every show and every relayout, so moving the main window to another monitor —
         /// or a resolution change — re-anchors the whole stack rather than leaving it on the old screen.</summary>
         private static Point SlotFor(int index, Size size)
         {
             Rectangle wa = WorkArea();
-            int x = wa.Right - size.Width - EdgeGap;
-            int y = wa.Bottom - size.Height - EdgeGap - index * (size.Height + StackGap);
+            int edge = ScaledGap(DesignEdgeGap), stack = ScaledGap(DesignStackGap);
+            int x = wa.Right - size.Width - edge;
+            int y = wa.Bottom - size.Height - edge - index * (size.Height + stack);
             // Never climb off the top of the working area — on a short screen the stack simply stops
             // growing upward and the newest windows overlap the oldest rather than escaping the monitor.
-            if (y < wa.Top + EdgeGap) y = wa.Top + EdgeGap;
+            if (y < wa.Top + edge) y = wa.Top + edge;
             return new Point(x, y);
         }
 
