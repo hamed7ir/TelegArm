@@ -28,6 +28,8 @@ namespace TelegArm.UI
         private readonly Color _accent, _fg, _sub, _field, _bg, _link;
 
         private Panel _header, _countryRow, _phoneRow;
+        private ProxyStatusPill _proxyPill;          // BATCH-TA-16/P3 — bottom-left floating proxy pill
+        private RoundedButton _settingsBtn;          // bottom-right — Settings is otherwise unreachable pre-login
         private Label _backBtn, _closeBtn, _bigTitle, _subtitle, _flagLabel, _countryName, _statusLabel, _qrSteps;
         private Label _qrToggleLink, _phoneToggleLink, _resendLink, _dpiRescueLink;
         private PictureBox _flagPic;
@@ -128,6 +130,37 @@ namespace TelegArm.UI
             _header.Controls.Add(_closeBtn);
             Controls.Add(_header);
 
+            // BATCH-TA-16/P3 — the floating proxy pill, bottom-left. This lives on the LOGIN screen
+            // specifically: a user whose network blocks Telegram can never reach MainForm's settings, so
+            // this is the only place the proxy can be configured when it is actually needed.
+            // ⚠ LoginForm ONLY this release (TA-16/Amendment 3). MainForm already shows a "Connecting…"
+            //   overlay and a second indicator beside it would read as a bug; the connected case is served
+            //   by the Settings row instead.
+            _proxyPill = new ProxyStatusPill { IsDark = _dark, AccentColor = _accent };
+            _proxyPill.Left = 14;
+            _proxyPill.Top = ClientSize.Height - _proxyPill.Height - 14;
+            _proxyPill.Anchor = AnchorStyles.Left | AnchorStyles.Bottom;
+            _proxyPill.Click += (s, e) => OpenProxySettings();
+            Controls.Add(_proxyPill);
+            _proxyPill.BringToFront();
+
+            // Settings, bottom-RIGHT, opposite the proxy pill. The login screen is a dead end otherwise:
+            // Settings is only reachable from MainForm's drawer, so anyone who cannot get past sign-in
+            // could not change the theme, the DPI mode, diagnostic logging — or reach the connection card.
+            // Same instance the drawer opens; it takes the service and works before authentication.
+            _settingsBtn = new RoundedButton
+            {
+                Text = "Settings", Width = 104, Height = 34,
+                Kind = RoundedButtonKind.Secondary, Font = FontHelper.Ui(9f)
+            };
+            _settingsBtn.Left = ClientSize.Width - _settingsBtn.Width - 14;
+            _settingsBtn.Top = ClientSize.Height - _settingsBtn.Height - 14;
+            _settingsBtn.Anchor = AnchorStyles.Right | AnchorStyles.Bottom;
+            _settingsBtn.Click += (s, e) => OpenSettings();
+            Controls.Add(_settingsBtn);
+            _settingsBtn.BringToFront();
+            RefreshProxyPill();
+
             // ── Shared title / subtitle ──
             _bigTitle = new Label { Width = 440, Height = 36, ForeColor = _fg, Font = FontHelper.Ui(16.5f, FontStyle.Bold), TextAlign = ContentAlignment.MiddleCenter };
             _subtitle = new Label { Width = 400, Height = 44, ForeColor = _sub, Font = FontHelper.Ui(10f), TextAlign = ContentAlignment.TopCenter };
@@ -194,7 +227,15 @@ namespace TelegArm.UI
             Controls.Add(_submitButton); Controls.Add(_statusLabel);
 
             // Hide everything but the header until Shown → ShowView(Qr) lays out the active view.
-            foreach (Control c in Controls) if (c != _header) c.Visible = false;
+            // ⚠ BATCH-TA-16f/F1 — THE PROXY PILL MUST BE EXEMPT, and this line is why nobody could see it.
+            // The pill is added at :143 and BringToFront()'d, but this blanket hide runs at the END of
+            // BuildUi and switches off EVERY control except the header — including the pill. ShowView then
+            // re-shows only the controls belonging to the active view (:355-357 hides an explicit list and
+            // the switch below re-shows per view); the pill is in NO view, so nothing ever turns it back on.
+            // It was therefore invisible on every sign-in surface: first run, post-logout, and add-account.
+            // That is the one place a blocked user MUST be able to reach proxy settings, so it is exempt
+            // here exactly like _header, and ShowView never touches it.
+            foreach (Control c in Controls) if (c != _header && c != _proxyPill && c != _settingsBtn) c.Visible = false;
         }
 
         private Image IconBitmap() { try { return Icon != null ? Icon.ToBitmap() : null; } catch { return null; } }
@@ -249,6 +290,73 @@ namespace TelegArm.UI
 
         /// <summary>Centers a control horizontally and sets its Top (form coordinates).</summary>
         private void Center(Control c, int top) { c.Left = (ClientSize.Width - c.Width) / 2; c.Top = top; }
+
+        /// <summary>BATCH-TA-16/P3 — opens the shared proxy form, then re-reads the pill.
+        /// The form persists on close; because LoginForm has not built a client yet, the new setting is
+        /// picked up by TelegramService.EnsureClient on the next connect attempt. Applying a change to an
+        /// ALREADY-CONNECTED client (and the warm pool) is the separate, gated problem — TA-16/P5.</summary>
+        /// <summary>Opens the SAME SettingsForm the drawer opens. It takes the service and does not
+        /// require an authorised connection; its Devices page fetches lazily only when selected.</summary>
+        private void OpenSettings()
+        {
+            try { using (var dlg = new SettingsForm(_service)) dlg.ShowDialog(this); }
+            catch (Exception ex) { Logger.Diag("[LOGIN] settings form failed: " + ex.Message); }
+            // The theme may have changed under us, and the proxy may have been edited from its card.
+            RefreshProxyPill();
+        }
+
+        private async void OpenProxySettings()
+        {
+            bool changed = false;
+            try
+            {
+                using (var dlg = new ProxyForm(_service)) { dlg.ShowDialog(this); changed = dlg.ConnectionSettingsChanged; }
+            }
+            catch (Exception ex)
+            {
+                Logger.Diag("[PROXY] settings form failed: " + ex.Message);   // never echoes a link
+            }
+            RefreshProxyPill();
+            if (changed) await ApplyProxyChangeAsync();
+        }
+
+        /// <summary>BATCH-TA-17 — apply a proxy change immediately on the LOGIN screen, so adding a proxy
+        /// and connecting happen in one step instead of needing a restart.
+        ///
+        /// Simpler and safer than MainForm's equivalent: there is NO warm pool here and nothing is
+        /// authorised yet, so there is no session to protect and no half-proxied account state possible.
+        /// The client is DISCARDED rather than reconnected — the next attempt rebuilds it through
+        /// EnsureClient, which applies the new transport. Then the in-flight sign-in is restarted, because
+        /// a QR poll or a pending code request is bound to the connection we just dropped.</summary>
+        private async System.Threading.Tasks.Task ApplyProxyChangeAsync()
+        {
+            string via = "(direct)";
+            try { var u = AppSettings.Instance.ActiveProxyUrl; via = u == null ? "(direct)" : ProxyUrl.SafeForLog(u); } catch { }
+            Logger.Diag("[PROXY] APPLY-LIVE (login) → " + via);
+
+            ProxyStatus.NoteAttempt();      // pill says "Connecting…" across the swap
+            _loginGen++;                    // invalidate any in-flight login continuation
+            StopQr();
+            try { AuthManager.SubmitCode(null); } catch { }   // release a waiter blocked on the old connection
+
+            try { if (_service != null) await _service.DiscardFaultedClientAsync(); }
+            catch (Exception ex) { Logger.Diag("[PROXY] APPLY-LIVE (login) discard failed: " + ex.Message); }
+
+            if (IsDisposed) return;
+            AuthManager.Reset();
+            ShowView(View.Qr);              // restarts the QR poll on a FRESH client via EnsureClient
+        }
+
+        /// <summary>BATCH-TA-16b/B1 — the pill follows ProxyStatus by itself, so this only has to restart
+        /// the wall clock for a possibly-changed proxy and re-anchor the control (its height tracks the
+        /// caption). It must NOT set a state directly: the pill may only ever claim what the connect loop
+        /// has actually observed.</summary>
+        private void RefreshProxyPill()
+        {
+            if (_proxyPill == null) return;
+            ProxyStatus.Reset();                                            // new proxy → fresh grace period
+            _proxyPill.Top = ClientSize.Height - _proxyPill.Height - 14;
+        }
 
         // ── Country ↔ dial-code two-way sync ──
         private void OpenCountryPicker()
@@ -363,7 +471,34 @@ namespace TelegArm.UI
             // the bottom, clear of the toggle links above.
             bool showRescue = DpiRescueApplicable() && (v == View.Qr || v == View.Phone);
             _dpiRescueLink.Visible = showRescue;
-            if (showRescue) Center(_dpiRescueLink, 560);
+            if (showRescue)
+            {
+                // BATCH-TA-16f/F1 — this link used to be centred across the full 480px at y=560, which now
+                // COLLIDES with the proxy pill: the pill sits at (14, 552) and is ~174x34, so it covers the
+                // link's leading ~110px AND, being in front, swallows clicks there. Un-hiding the pill is
+                // what exposed this. Inset past the pill instead of centring, so both stay usable.
+                // Narrow blast radius: DpiRescueApplicable() is false in AddMode and false below 125% scale,
+                // so this only ever runs on a high-DPI first-launch desktop — never on the RT device.
+                int x = (_proxyPill != null && _proxyPill.Visible ? _proxyPill.Right : 8) + 10;
+                _dpiRescueLink.SetBounds(x, 560, Math.Max(120, ClientSize.Width - x - 12), _dpiRescueLink.Height);
+            }
+
+            // The pill is view-independent chrome: re-assert it on EVERY view switch so no future view
+            // branch can strand it again the way the BuildUi sweep did, and so its Top follows the caption
+            // height when ProxyStatus flips it to "Connecting via proxy…" / "Proxy not working".
+            if (_proxyPill != null)
+            {
+                _proxyPill.Visible = true;
+                _proxyPill.Top = ClientSize.Height - _proxyPill.Height - 14;
+                _proxyPill.BringToFront();
+            }
+            if (_settingsBtn != null)
+            {
+                _settingsBtn.Visible = true;
+                _settingsBtn.Left = ClientSize.Width - _settingsBtn.Width - 14;
+                _settingsBtn.Top = ClientSize.Height - _settingsBtn.Height - 14;
+                _settingsBtn.BringToFront();
+            }
         }
 
         /// <summary>The DPI-rescue affordance applies only on a FIRST-LAUNCH login (not add-account), while the
@@ -433,6 +568,7 @@ namespace TelegArm.UI
             SetBusy("Connecting to Telegram…");
             System.Diagnostics.Debug.WriteLine("[LOGIN] code requested for " + full);
             int gen = ++_loginGen;
+            ProxyStatus.NoteAttempt();   // TA-16b/B1 — starts the wall clock on the first attempt
             var task = _service.LoginAsync();
             task.ContinueWith(t => OnLoginCompleted(t, gen), TaskScheduler.FromCurrentSynchronizationContext());
         }
@@ -481,10 +617,19 @@ namespace TelegArm.UI
                 else if (msg.IndexOf("PASSWORD_HASH_INVALID", StringComparison.OrdinalIgnoreCase) >= 0) { ShowView(View.Password); _statusLabel.Text = "Incorrect password. Try again."; }
                 else if (msg.IndexOf("PHONE_NUMBER_INVALID", StringComparison.OrdinalIgnoreCase) >= 0) { ShowView(View.Phone); _statusLabel.Text = "That phone number isn't valid."; }
                 else if (msg.IndexOf("PHONE_NUMBER_UNOCCUPIED", StringComparison.OrdinalIgnoreCase) >= 0) { ShowView(View.Phone); _statusLabel.Text = "This number isn't registered. Sign-up isn't supported here yet — register on your phone first."; }
-                else { _statusLabel.Text = "Couldn't reach Telegram — make sure your VPN is on, then tap again.\n(" + msg + ")"; }
+                else
+                {
+                    _statusLabel.Text = "Couldn't reach Telegram — make sure your VPN is on, then tap again.\n(" + msg + ")";
+                    // TA-16b/B1 — ONLY this branch is a transport failure. The four cases above (bad code,
+                    // bad password, bad/unregistered number) all mean we REACHED Telegram and it answered,
+                    // which is positive evidence the proxy works — counting them would eventually accuse a
+                    // perfectly good proxy because the user mistyped a code.
+                    ProxyStatus.NoteAttemptFailed();
+                }
                 System.Diagnostics.Debug.WriteLine("[LOGIN] faulted: " + msg);
                 return;
             }
+            ProxyStatus.NoteAuthorized();
             EnterApp(task.Result);
         }
 

@@ -324,10 +324,50 @@ namespace TelegArm.UI
             catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[STARTUP] set " + (on ? "on" : "off") + " FAIL: " + ex.Message); return false; }
         }
 
-        // ── Advanced (stickers · camera / round video) ───────────────────────
+        /// <summary>Raised when the user changed the proxy from the Settings connection row. MainForm
+        /// subscribes and runs the live-apply (warm-pool teardown → reconnect → re-warm); SettingsForm
+        /// deliberately does NOT do that itself, because the warm pool is MainForm's to own.</summary>
+        public event Action ProxyChangeApplied;
+
+        /// <summary>Secret-free one-line summary of the proxy setting for the Settings row.</summary>
+        private static string ProxySubtitle()
+        {
+            var s = AppSettings.Instance;
+            string active = null;
+            try { active = s.ActiveProxyUrl; } catch { }
+            int n = s.ProxyList != null ? s.ProxyList.Count : 0;
+            if (active != null) return "Using " + TelegArm.Core.ProxyUrl.SafeForLog(active);
+            if (n > 0) return "Off · " + n + " saved";
+            return "Off — set one up if Telegram is blocked on your network";
+        }
+
+        // ── Advanced (connection · stickers · camera / round video) ──────────
         private void BuildAdvancedPage(Panel p, AppSettings s)
         {
             int y = 12;
+
+            // ── CONNECTION (BATCH-TA-16b/B3) ─────────────────────────────────────────────────────
+            // The SECOND door to the same ProxyForm. The first is the pill on the login screen, which is
+            // the one that matters when the network is blocked — but once connected, Settings is where a
+            // user looks. Both open the identical form; it takes an optional service and works either way.
+            y = SectionLabel(p, "CONNECTION", y);
+            var conn = Card(p, y, 1); y += conn.Height + SecGap;
+            RowTitle(conn, 0, "Proxy", ProxySubtitle());
+            Chevron(conn, 0);
+            RowClickable(conn, 0, () =>
+            {
+                bool changed = false;
+                using (var dlg = new ProxyForm(_service)) { dlg.ShowDialog(this); changed = dlg.ConnectionSettingsChanged; }
+                TelegArm.Core.ProxyStatus.Reset();
+                BuildAdvancedPage(p, AppSettings.Instance);
+                // ⚠ THIS DOOR MUST APPLY THE CHANGE TOO. Caught from a device log: a proxy switched from
+                // HERE wrote "[PROXY] saved … active=…" with NO "[PROXY] APPLY-LIVE" after it, so the app
+                // kept running on the previous transport while the UI said otherwise — the exact bug
+                // live-apply exists to kill, surviving in the one entry point that hadn't been wired.
+                // ProxyForm is opened from three places (login pill, connecting-overlay button, this row);
+                // every one of them owns applying what it just persisted.
+                if (changed) ProxyChangeApplied?.Invoke();
+            });
 
             y = SectionLabel(p, "STICKERS", y);
             var stick = Card(p, y, 2); y += stick.Height + SecGap;

@@ -116,6 +116,8 @@ namespace TelegArm.UI
         private ComposerFooterBar _footerBar;           // swapped-in footer for non-compose states
         private ComposerKind _footerKind = ComposerKind.Compose;
         private Panel _msgHost;                     // WrapWithScrollbar host (float parent for the jump button)
+        private Panel _chatListHost;                // WrapWithScrollbar host for the chat list (float parent for the proxy pill)
+        private ProxyStatusPill _proxyPill;         // BATCH-TA-16d — floating proxy chip over the chat list
         private DateFlyoutPill _dateFlyout;         // BUBBLE-DATETIME (C): floating day pill shown while scrolling
         private System.Windows.Forms.Timer _dateFlyoutTimer;
         private int _dateFlyoutScrollTick, _dateFlyoutCalcTick, _dateFlyoutTopSig = int.MinValue;   // TopSig = topmost-visible-bubble Y; a CHANGE = a genuine scroll (vs the 200ms _scrollWatch idle tick)
@@ -239,6 +241,7 @@ namespace TelegArm.UI
         private Label _connectingTitle;
         private Label _connectingDetail;
         private MaterialButton _retryButton;
+        private MaterialButton _proxyOverlayButton;   // BATCH-TA-16f/F1 — proxy route on the connecting overlay
         private MaterialButton _switchCancelButton;            // abort an in-flight account switch (restore the active account)
         private System.Threading.CancellationTokenSource _abortConnect;
         private bool _switchInProgress, _switchAborted;
@@ -642,7 +645,8 @@ namespace TelegArm.UI
                 right.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
                 right.Controls.Add(searchRow, 0, 0);
                 right.Controls.Add(_storyTrayBar, 0, 1);
-                right.Controls.Add(WrapWithScrollbar(_chatListPanel), 0, 2);
+                _chatListHost = WrapWithScrollbar(_chatListPanel);
+                right.Controls.Add(_chatListHost, 0, 2);
                 _storyTrayLayout = right;
 
                 var outer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = new Padding(0) };
@@ -676,7 +680,8 @@ namespace TelegArm.UI
                 layout.Controls.Add(searchRow, 0, 0);
                 layout.Controls.Add(_storyTrayBar, 0, 1);
                 layout.Controls.Add(WrapWithHScrollbar(_folderBar), 0, 2);
-                layout.Controls.Add(WrapWithScrollbar(_chatListPanel), 0, 3);
+                _chatListHost = WrapWithScrollbar(_chatListPanel);
+                layout.Controls.Add(_chatListHost, 0, 3);
                 _split.Panel1.Controls.Add(layout);
                 _storyTrayLayout = layout;
 
@@ -685,6 +690,35 @@ namespace TelegArm.UI
 
             TouchScroller.Enable(_chatListPanel, horizontal: false);
             if (_storyTrayBar != null) TouchScroller.Enable(_storyTrayBar, horizontal: true);   // STORIES: horizontal drag-scroll
+
+            // ── BATCH-TA-16d — the floating proxy pill over the chat list ────────────────────────────
+            // D1 PARENT: _chatListHost, the Panel that WrapWithScrollbar returns — NOT _chatListPanel.
+            // This is the same choice the jump-to-bottom button already makes (":983 _msgHost … a child of
+            // the host, not the scrolling panel"): a child of the FlowLayoutPanel would scroll away with the
+            // rows and be clipped by its client area. The host also excludes the ThemedScrollBar strip
+            // (docked Right), so anchoring Left keeps the pill clear of the bar in both layout modes —
+            // sidebar-rail and folder-bar — because both wrap the SAME host.
+            // Anchored Bottom|Left so the splitter and form resizes leave it where it belongs.
+            if (_chatListHost != null)
+            {
+                _proxyPill = new ProxyStatusPill { IsDark = _dark, AccentColor = _accent, Visible = false };
+                _proxyPill.Click += (s, e) => OpenProxySettings();
+                _chatListHost.Controls.Add(_proxyPill);
+                _proxyPill.BringToFront();
+                _proxyPill.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+                // D2: the pill is a SIBLING of the scroll surface, so TouchScroller's parent-walk would find
+                // nothing above it and the list would stop scrolling under the chip — for the wheel AND for
+                // a touch pan. Declare what it covers so both pass through.
+                TouchScroller.MapOverlayTo(_proxyPill, _chatListPanel);
+                // VISIBILITY (not just caption) depends on the shared state now that Connecting/Failed
+                // show even without a proxy, so MainForm must re-evaluate on every transition — the pill's
+                // own subscription only updates what it PAINTS, never whether it is shown.
+                ProxyStatus.Changed += OnProxyStatusChangedForVisibility;
+                HandleDestroyed += (s, e) => { try { ProxyStatus.Changed -= OnProxyStatusChangedForVisibility; } catch { } };
+                _chatListHost.Resize += (s, e) => PositionProxyPill();
+                PositionProxyPill();
+                RefreshProxyPill();
+            }
 
             // Chat-list paging (DPI-REVERT addendum): the initial fetch is ONE server page (limit 0 →
             // server default ~100 dialogs) — chats beyond it exist but never render. Page them in near
@@ -1154,10 +1188,144 @@ namespace TelegArm.UI
                 _jumpBtn.AccentColor = _accent;
                 _jumpBtn.Invalidate();
             }
+
+            // BATCH-TA-16d/D5 — recolor the proxy pill on the SAME live path. The jump button shipped a bug
+            // where it was themed at CONSTRUCTION ONLY, so a theme flip left it stale; that is exactly why
+            // this belongs here and not in BuildLeftPanel.
+            if (_proxyPill != null)
+            {
+                _proxyPill.IsDark = _dark;
+                _proxyPill.AccentColor = _accent;   // ThemeHelper/ApplyTheme accent — never MaterialSkinManager's Accent slot
+                _proxyPill.Invalidate();
+            }
             // Chat header uses the theme background (accent reverted); repaint the avatar on theme/accent change.
             if (_headerAvatar != null) _headerAvatar.Invalidate();
             // BUBBLE-DATETIME: the floating date pill is accent-driven — refresh its accent live.
             if (_dateFlyout != null) { _dateFlyout.Accent = _accent; _dateFlyout.IsDark = _dark; _dateFlyout.Invalidate(); }
+        }
+
+        /// <summary>ProxyStatus is static and can be raised from a background continuation — marshal.</summary>
+        private void OnProxyStatusChangedForVisibility()
+        {
+            if (IsDisposed || !IsHandleCreated) return;
+            try { BeginInvoke((Action)RefreshProxyPill); } catch { /* handle gone */ }
+        }
+
+        /// <summary>BATCH-TA-16d/D1 — bottom-LEFT of the chat-list host, clear of the themed scrollbar
+        /// (docked Right) and of the paging trigger zone at the very bottom.</summary>
+        private void PositionProxyPill()
+        {
+            if (_proxyPill == null || _chatListHost == null) return;
+            _proxyPill.Left = 12;
+            _proxyPill.Top = Math.Max(0, _chatListHost.ClientSize.Height - _proxyPill.Height - 12);
+        }
+
+        /// <summary>BATCH-TA-16d/D3+D4 — decides whether the pill is on screen at all.
+        ///
+        /// D4 VISIBILITY: on MainForm it appears ONLY when a proxy is configured. Permanent chrome over the
+        /// chat list would be clutter for the majority who never use one. (LoginForm is the opposite: there
+        /// it is ALWAYS shown, because someone who cannot connect has no other way to reach the setting.)
+        ///
+        /// D3 COEXISTENCE — the pill DEFERS to the existing "Connecting…" overlay. MainForm already has one
+        /// connection indicator, and two of them disagreeing is worse than either alone: the overlay would
+        /// say "Waiting for network" while the pill still said "Proxy connected" from the previous session.
+        /// So while the overlay is up it owns connection state entirely and the pill hides; once the overlay
+        /// goes away, the pill reports the PROXY dimension only — which the overlay never covered.
+        /// The two can therefore never contradict each other, because they are never both on screen.</summary>
+        private void RefreshProxyPill()
+        {
+            if (_proxyPill == null) return;
+            bool proxied = false;
+            try { proxied = AppSettings.Instance.ActiveProxyUrl != null; } catch { }
+            var st = ProxyStatus.State;
+            bool overlayUp = _connectingPanel != null && !_connectingPanel.IsDisposed && _connectingPanel.Visible;
+
+            // The pill is a CONNECTION indicator, not merely a proxy badge (revised after field feedback):
+            //   · Connecting / Failed → ALWAYS show, proxy or not. A mid-session drop on a DIRECT
+            //     connection previously produced no visible signal at all except a window-title change,
+            //     so the user just saw a chat list that had quietly stopped updating.
+            //   · Connected VIA A PROXY → show (worth stating).
+            //   · Connected directly (state Off) → hide. That is the healthy default and permanent chrome
+            //     over the chat list would be clutter for the majority who never use a proxy.
+            bool show = (st == ProxyConnectState.Connecting || st == ProxyConnectState.Failed || proxied)
+                        && !overlayUp;
+            if (_proxyPill.Visible != show) _proxyPill.Visible = show;
+            if (show) { PositionProxyPill(); _proxyPill.BringToFront(); }
+        }
+
+        /// <summary>Opens the shared ProxyForm — the SAME form the login screen's pill opens (TA-15/X7:
+        /// one form, two doors). Applying a change to the already-connected client and the warm pool is
+        /// deliberately NOT done here; that is TA-16c.</summary>
+        private async void OpenProxySettings()
+        {
+            bool changed = false;
+            try
+            {
+                using (var dlg = new ProxyForm(_service)) { dlg.ShowDialog(this); changed = dlg.ConnectionSettingsChanged; }
+            }
+            catch (Exception ex) { Logger.Diag("[PROXY] settings form failed: " + ex.Message); }   // never echoes a link
+
+            ProxyStatus.Reset();     // new proxy → fresh grace period for the failure clock
+            RefreshProxyPill();
+            if (changed) await ApplyProxyChangeAsync();
+        }
+
+        /// <summary>BATCH-TA-17 — make a proxy change take effect NOW, on the running app.
+        ///
+        /// Previously the setting only reached the NEXT client, so switching proxies (or switching to
+        /// direct) left the app connected through the old one — a proxy the user had just watched fail
+        /// stayed in use, which is the opposite of what the UI implied.
+        ///
+        /// ORDER MATTERS AND IS DELIBERATE:
+        ///   1. WARM POOL FIRST, AWAITED. Warm clients were built with the OLD transport. Leaving them
+        ///      would mean a later account switch silently moves the user between proxied and direct —
+        ///      the "half-proxied state" this design has warned about since TA-15/X7. The AWAITED
+        ///      DisposeWarmServiceAsync is used, never the sync DisposeWarmService: the sync one does not
+        ///      wait for the socket abort or the session-handle release, and dropping a warm client whose
+        ///      handle is still releasing is the documented account-loss race (ACCOUNT-RECOVERY-SAFETY
+        ///      Bug 1). Tear them down BEFORE the active client reconnects so the two can't overlap.
+        ///   2. Then the ACTIVE client, via the existing ForceReconnectAsync.
+        ///   3. Then re-warm. WarmOthersAsync is idempotent and skips active/already-warm, and the
+        ///      rebuilt clients pick up the new transport through ApplyProxyTo in CreateWarmClientAsync.
+        ///
+        /// ⚠ THIS IS THE DANGER ZONE (HANDOFF §5.10/§5.11). A proxy change is now a deliberate way to
+        ///   enter the warm-teardown-then-rebuild window — the same window as Bug 3b. It is INSTRUMENTED,
+        ///   not fixed: the [SESSPATH] probes already log every client-open with its path, so a
+        ///   same-path double-open with no teardown between is visible in the log. Verify on the device
+        ///   that no [RECOVERY] or [ACCT] DELETE line appears and both account dirs survive.</summary>
+        private async System.Threading.Tasks.Task ApplyProxyChangeAsync()
+        {
+            string via = "(direct)";
+            try { var u = AppSettings.Instance.ActiveProxyUrl; via = u == null ? "(direct)" : ProxyUrl.SafeForLog(u); } catch { }
+            Logger.Diag("[PROXY] APPLY-LIVE start → " + via + "  warm=" + _warm.Count);
+
+            ProxyStatus.NoteAttempt();   // the pill says "Connecting…" for the whole swap
+            RefreshProxyPill();
+
+            try
+            {
+                // 1 — warm pool, awaited, before anything reconnects.
+                var warm = _warm.Values.ToList();
+                _warm.Clear();
+                foreach (var svc in warm)
+                {
+                    try { await svc.DisposeWarmServiceAsync(); }
+                    catch (Exception ex) { Logger.Diag("[PROXY] APPLY-LIVE warm teardown failed: " + ex.Message); }
+                }
+                Logger.Diag("[PROXY] APPLY-LIVE warm pool torn down (" + warm.Count + ")");
+
+                // 2 — the active client.
+                if (_service != null) await _service.ApplyProxyChangeAsync();
+                Logger.Diag("[PROXY] APPLY-LIVE active client reconnected → " + via);
+            }
+            catch (Exception ex)
+            {
+                Logger.Diag("[PROXY] APPLY-LIVE FAILED: " + ex.Message);   // never echoes a link
+            }
+
+            // 3 — re-warm with the new transport (fire-and-forget, as at startup).
+            try { var _ = WarmOthersAsync(); } catch { }
+            RefreshProxyPill();
         }
 
         private void OnSystemThemeChanged()
@@ -3789,6 +3957,11 @@ namespace TelegArm.UI
 
                 ShowConnecting(attempt == 1 ? firstMsg : "Waiting for network — make sure your VPN is on.");
                 Logger.Diag("[CONN] connect attempt " + attempt);
+                // TA-16b/B1+B2 — report into the shared proxy state. This loop is UNBOUNDED by design, so
+                // ProxyStatus decides "failed" on WALL CLOCK, not on this attempt counter (see its remarks:
+                // one visible attempt can hide a minute of invisible WTC retries). Nothing here changes the
+                // retry behaviour — FAILED is display only.
+                ProxyStatus.NoteAttempt();
 
                 var loginTask = _service.LoginAsync(silentResume: true);   // silent: stored phone, no code/password block; MAY hang
                 var waiter = System.Threading.Tasks.Task.Delay(TelegramService.ConnectAttemptTimeoutMs, token);
@@ -3800,7 +3973,12 @@ namespace TelegArm.UI
                 {
                     Exception failure = null;
                     try { await loginTask; } catch (Exception ex) { failure = ex; }   // observe success/exception
-                    if (_service.IsAuthorized) { PerfLog.Boot("LoginAsync returned AUTHORIZED (attempt " + attempt + ")"); return true; }   // connected + authorized
+                    if (_service.IsAuthorized)
+                    {
+                        PerfLog.Boot("LoginAsync returned AUTHORIZED (attempt " + attempt + ")");
+                        ProxyStatus.NoteAuthorized();   // the ONLY evidence a proxy actually works (TA-15/X4)
+                        return true;
+                    }   // connected + authorized
 
                     if (failure != null)
                     {
@@ -3812,6 +3990,11 @@ namespace TelegArm.UI
                                : "  [hard failure " + (hardFailures + 1) + "/" + maxHardFailures + "]"));
                         if (corrupt) { _connectCorrupt = true; return false; }        // caller deletes the dead session + recovers
                         if (needsLogin) return false;                                 // no session/phone → LoginForm / next account (NOT retried)
+
+                        // A transport-level failure. Corrupt-session and needs-login are deliberately NOT
+                        // counted above: both mean we got far enough to learn something about the ACCOUNT,
+                        // which says nothing about the proxy.
+                        ProxyStatus.NoteAttemptFailed();
 
                         // A non-network failure (e.g. the session file is locked by a lingering handle): the SAME
                         // client keeps failing, so DISCARD it (release the file → fresh client next attempt) and CAP
@@ -3837,6 +4020,11 @@ namespace TelegArm.UI
                         : " timed out after " + (TelegramService.ConnectAttemptTimeoutMs / 1000) + "s → tearing down hung attempt"));
                     await _service.TeardownHungConnectAsync();
                     SwallowFault(loginTask);   // it will fault once the socket is reset; don't let it surface
+                    // A hung attempt is the CLASSIC dead-proxy signature: the TCP connect to the proxy
+                    // succeeds (or stalls) and nothing ever comes back, so this branch — not the faulted
+                    // one — is what a wrong secret usually looks like. A user-requested retry is not a
+                    // failure and must not count toward the threshold.
+                    if (!userRetry) ProxyStatus.NoteAttemptFailed();
                     if (userRetry) continue;   // Retry-now → immediate fresh attempt (skip backoff)
                 }
 
@@ -4252,6 +4440,14 @@ namespace TelegArm.UI
                 {
                     if (reconnecting) { if (Text != ReconnectingTitle) { _titleBeforeReconnect = Text; Text = ReconnectingTitle; } }
                     else if (_titleBeforeReconnect != null) { Text = _titleBeforeReconnect; _titleBeforeReconnect = null; }
+
+                    // A MID-SESSION DROP had no visible signal beyond this window title — easy to miss,
+                    // and on a direct connection the pill was hidden entirely. Drive the shared state so
+                    // the pill appears and says "Connecting…" while the link is being re-established.
+                    // (Recovery is reported by NoteActivity when traffic resumes — whoever re-established
+                    // it, including WTC's own reactor, which never routes through our connect loop.)
+                    if (reconnecting) ProxyStatus.NoteAttempt();
+                    RefreshProxyPill();
                 }));
             }
             catch { /* form went away */ }
@@ -4326,6 +4522,27 @@ namespace TelegArm.UI
             if (_switchAvatar != null) { try { _switchAvatar.Dispose(); } catch { } _switchAvatar = null; }
         }
 
+        /// <summary>BATCH-TA-16f/F1 — lays out the connecting overlay's action row. There are THREE possible
+        /// buttons and room for two, so this is the one place that decides which pair is showing.
+        ///
+        /// DURING A SWITCH: Retry + Cancel. Cancel wins the second slot because the user is NOT stranded —
+        /// aborting restores the account that was already working, which is the more urgent escape hatch.
+        /// OTHERWISE (the ordinary blocked-network resume): Retry + Proxy. THIS is the stranded case F1 is
+        /// about — no chat list, no pill (D3 hides it under this overlay), and previously no way to reach
+        /// proxy settings at all.
+        /// Called from both construction and ShowConnecting, so the two can never disagree.</summary>
+        private void LayoutConnectingButtons()
+        {
+            if (_connectingPanel == null || _retryButton == null) return;
+            bool switching = _switchInProgress;
+            if (_switchCancelButton != null) _switchCancelButton.Visible = switching;
+            if (_proxyOverlayButton != null) _proxyOverlayButton.Visible = !switching;
+
+            _retryButton.Location = new Point(_connectingPanel.Width / 2 - _retryButton.Width - 6, 118);
+            var second = switching ? _switchCancelButton : _proxyOverlayButton;
+            if (second != null) second.Location = new Point(_connectingPanel.Width / 2 + 6, 118);
+        }
+
         private void EnsureConnectingUi()
         {
             if (_connectingPanel != null) return;
@@ -4366,12 +4583,28 @@ namespace TelegArm.UI
                 UseAccentColor = false,
                 AutoSize = false, Size = new Size(170, 40)
             };
-            _retryButton.Location = new Point((_connectingPanel.Width - _retryButton.Width) / 2, 118);
+            // BATCH-TA-16f/F1 — the two buttons share the row, so Retry no longer centres alone.
+            _retryButton.Location = new Point(_connectingPanel.Width / 2 - _retryButton.Width - 6, 118);
             _retryButton.Click += (s, e) =>
             {
                 var c = _retryNowCts;   // cut the backoff wait → retry immediately
                 if (c != null) { try { c.Cancel(); } catch { } }
             };
+
+            // ⚠ BATCH-TA-16f/F1 — THE SECOND STRANDED SURFACE. This overlay is what a user stares at when
+            // the network is blocking Telegram ("Waiting for network — make sure your VPN is on"), and it
+            // covers the chat list, so the floating proxy pill is deliberately hidden underneath it
+            // (TA-16d/D3: two connection indicators disagreeing reads as a bug). The consequence, missed
+            // until now, is that this screen offered ONLY "Retry now" and "Cancel" — retrying forever on a
+            // network that will never work, with the one setting that could fix it unreachable. A proxy is
+            // needed EXACTLY here. Opens the same ProxyForm as the login pill and the Settings row.
+            _proxyOverlayButton = new MaterialButton
+            {
+                Text = "Proxy", Type = MaterialButton.MaterialButtonType.Outlined,
+                UseAccentColor = false, AutoSize = false, Size = new Size(120, 40)
+            };
+            _proxyOverlayButton.Location = new Point(_connectingPanel.Width / 2 + 6, 118);
+            _proxyOverlayButton.Click += (s, e) => OpenProxySettings();
 
             _switchCancelButton = new MaterialButton
             {
@@ -4389,9 +4622,11 @@ namespace TelegArm.UI
             _connectingPanel.Controls.Add(_connectingTitle);
             _connectingPanel.Controls.Add(_connectingDetail);
             _connectingPanel.Controls.Add(_retryButton);
+            _connectingPanel.Controls.Add(_proxyOverlayButton);
             _connectingPanel.Controls.Add(_switchCancelButton);
             Controls.Add(_connectingPanel);
             _connectingPanel.BringToFront();
+            LayoutConnectingButtons();   // F1: one owner of the action-row layout
 
             _connectingDots = new System.Windows.Forms.Timer { Interval = 450 };
             _connectingDots.Tick += (s, e) =>
@@ -4428,19 +4663,10 @@ namespace TelegArm.UI
             EnsureConnectingUi();
             _chatTitle.Text = "Connecting…";
             if (_connectingDetail != null) _connectingDetail.Text = detail;
-            // During a switch, offer Cancel (abort → restore the active account) beside Retry now.
-            if (_switchCancelButton != null)
-            {
-                _switchCancelButton.Visible = _switchInProgress;
-                if (_switchInProgress)
-                {
-                    _retryButton.Location = new Point(_connectingPanel.Width / 2 - _retryButton.Width - 6, 118);
-                    _switchCancelButton.Location = new Point(_connectingPanel.Width / 2 + 6, 118);
-                }
-                else _retryButton.Location = new Point((_connectingPanel.Width - _retryButton.Width) / 2, 118);
-            }
+            LayoutConnectingButtons();
             if (!_connectingPanel.Visible) _connectingPanel.Visible = true;
             _connectingPanel.BringToFront();
+            RefreshProxyPill();   // D3: the overlay owns connection state while it is up → pill hides
             CenterConnectingPanel();
             if (_connectingDots != null && !_connectingDots.Enabled) _connectingDots.Start();
         }
@@ -4449,6 +4675,7 @@ namespace TelegArm.UI
         {
             if (_connectingDots != null) _connectingDots.Stop();
             if (_connectingPanel != null) _connectingPanel.Visible = false;
+            RefreshProxyPill();   // D3: overlay gone → the pill may report the proxy dimension again
             if (_retryNowCts != null) { try { _retryNowCts.Cancel(); } catch { } }
         }
 
@@ -12794,8 +13021,16 @@ namespace TelegArm.UI
         private void OpenSettings()
         {
             // SettingsForm edits and persists AppSettings.Instance directly on OK; the service powers Devices.
+            bool proxyChanged = false;
             using (var dlg = new SettingsForm(_service))
+            {
+                dlg.ProxyChangeApplied += () => proxyChanged = true;
                 dlg.ShowDialog(this);
+            }
+            // A proxy switched from Settings must take effect like one switched from the pill — the
+            // device log caught this door persisting a change with no APPLY-LIVE behind it. Deferred
+            // until the dialog is CLOSED so the teardown/reconnect can't race a modal still on screen.
+            if (proxyChanged) { RefreshProxyPill(); var _ = ApplyProxyChangeAsync(); }
         }
 
         // ── Tray icon + notifications ────────────────────────────────────────────
