@@ -82,6 +82,7 @@ namespace TelegArm.UI
         private SplitContainer _split;
         private Button _hamburger;
         private Button _chatSearchBtn;   // INCHAT-SEARCH: magnifier in the chat header → search within the open chat
+        private Button _chatMenuBtn;     // BATCH-TA-21/S1: the header ⋮ → the shared chat action menu
         private MaterialTextBox2 _searchBox;
         private FlowLayoutPanel _chatListPanel;
         private MaterialLabel _chatTitle;
@@ -795,6 +796,31 @@ namespace TelegArm.UI
             _dlIndicator = new DownloadIndicator(_service) { Dock = DockStyle.Right };
             _dlIndicator.Click += (s, e) => OpenDownloadsPanel();
             topBar.Controls.Add(_dlIndicator);
+            // BATCH-TA-21/S1a — the header ⋮, beside the magnifier. Added BETWEEN the transfers indicator and
+            // the magnifier, so no existing line has to move.
+            // ⚠ Dock.Right RESOLVES FIRST-ADDED = LEFTMOST (measured: three Dock.Right buttons in a 400 px
+            //   panel land at Left 268 / 312 / 356 in ADD order). So the resolved left-to-right order here is
+            //   [transfers] [⋮] [🔍] — the magnifier stays outermost right, and the ⋮ sits immediately to its
+            //   LEFT. If the ⋮ should ever be outermost right instead, move this Controls.Add to AFTER
+            //   _chatSearchBtn's; nothing else changes.
+            // ⚠ EVERY METRIC AND STYLE IS COPIED FROM _chatSearchBtn BELOW rather than invented — same 44 px
+            //   width, same Flat/transparent/borderless treatment, same 40-alpha accent hover, same
+            //   drawn-not-font glyph (":799 — for crisp/consistent rendering on RT"), same "hidden until a
+            //   chat is open". Two adjacent header buttons that disagree by two pixels look like a bug.
+            // ⚠ ACCENT COMES FROM ThemeHelper VIA _accent. MaterialSkinManager's Accent slot is NEVER
+            //   written — it is one app-wide singleton and writing it re-poisons every other form
+            //   (§2d / LESSONS_LEARNED.md:163).
+            _chatMenuBtn = new Button
+            {
+                Dock = DockStyle.Right, Width = 44, FlatStyle = FlatStyle.Flat, Text = "",
+                BackColor = Color.Transparent, Cursor = Cursors.Hand, TabStop = false,
+                Visible = false   // shown only while a chat is open — toggled beside _chatSearchBtn
+            };
+            _chatMenuBtn.FlatAppearance.BorderSize = 0;
+            _chatMenuBtn.FlatAppearance.MouseOverBackColor = Color.FromArgb(40, _accent);
+            _chatMenuBtn.Paint += (s, e) => DrawKebab(e.Graphics, _chatMenuBtn.ClientRectangle, _accent);
+            _chatMenuBtn.Click += (s, e) => ShowChatHeaderMenu();
+            topBar.Controls.Add(_chatMenuBtn);
             // INCHAT-SEARCH: a magnifier in the chat header → enter in-chat search (the left panel becomes scoped
             // results for the open chat). Drawn (GDI), not a font glyph, for crisp/consistent rendering on RT.
             _chatSearchBtn = new Button
@@ -2391,11 +2417,33 @@ namespace TelegArm.UI
             }
         }
 
+        /// <summary>BATCH-TA-21/S1a — the ⋮ glyph, DRAWN rather than a font character, for the same reason
+        /// the magnifier is (:799): a font glyph renders inconsistently on RT. Three dots on the vertical
+        /// centre line, sized off the button so it matches the magnifier's visual weight.</summary>
+        private static void DrawKebab(Graphics g, Rectangle area, Color color)
+        {
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            int s = Math.Min(area.Width, area.Height);
+            int d = Math.Max(3, (int)(s * 0.115f));               // dot diameter
+            int gap = Math.Max(d + 2, (int)(s * 0.19f));          // centre-to-centre spacing
+            int cx = area.X + area.Width / 2, cy = area.Y + area.Height / 2;
+            using (var b = new SolidBrush(color))
+                for (int i = -1; i <= 1; i++)
+                    g.FillEllipse(b, cx - d / 2f, cy + i * gap - d / 2f, d, d);
+        }
+
         /// <summary>Pushes the current accent/dark state into the custom-painted controls.</summary>
         private void RefreshThemedControls()
         {
             if (_hamburger != null) { _hamburger.ForeColor = _accent; _hamburger.Invalidate(); }   // repaint the drawn icon with the current accent
             if (_chatSearchBtn != null) _chatSearchBtn.Invalidate();   // INCHAT-SEARCH: repaint the drawn magnifier with the current accent
+            if (_chatMenuBtn != null)
+            {
+                // The hover tint is a one-shot property, so unlike the drawn glyph it does NOT follow a live
+                // accent change on its own — re-assert it here, where every other themed control is refreshed.
+                _chatMenuBtn.FlatAppearance.MouseOverBackColor = Color.FromArgb(40, _accent);
+                _chatMenuBtn.Invalidate();
+            }
             if (_attachButton != null) _attachButton.Invalidate(); // self-themes from ThemeHelper
             if (_footerBar != null) { _footerBar.AccentColor = _accent; _footerBar.IsDark = _dark; _footerBar.Invalidate(); }
             if (_threadJoinBar != null) { _threadJoinBar.AccentColor = _accent; _threadJoinBar.IsDark = _dark; _threadJoinBar.Invalidate(); }
@@ -4393,6 +4441,7 @@ namespace TelegArm.UI
             // paint shows the initials circle; SetHeaderAvatar reloads a fresh one when a chat opens.
             _headerAvatarImg = null; _headerAvatarPeerId = 0; _headerAvatarTitle = null;
             if (_chatSearchBtn != null) _chatSearchBtn.Visible = false;   // INCHAT-SEARCH: no open chat → no header magnifier
+            if (_chatMenuBtn != null) _chatMenuBtn.Visible = false;       // TA-21/S1a: …and no header ⋮ (it acts on the open chat)
             ClearMessagePanel();                         // disposes message bubbles + per-chat photo caches
             System.Diagnostics.Debug.WriteLine("[LOGOUT-TRACE] Reset: after ClearMessagePanel");
             _currentChatMessages.Clear();
@@ -6272,6 +6321,14 @@ namespace TelegArm.UI
             if (menu == null || entry == null) return;
             var c = ChatMenuContextFor(entry);
 
+            // BATCH-TA-21/S1b — HEADER ONLY, and this is the first real use of `surface`.
+            // The row menu deliberately does NOT gain this entry: clicking a row already opens that chat,
+            // and adding it there would change a surface this batch is required to leave byte-identical.
+            // On the header it earns its place — the profile IS reachable today by clicking the title or
+            // the avatar (:815-819), but nothing advertises that, so it is effectively undiscoverable.
+            if (surface == ChatMenuSurface.ChatHeader)
+                AddMenuItem(menu, "ℹ   " + InfoLabelFor(c), OpenSelectedProfile);
+
             // BATCH-TA-10 — the Pin item is offered in All, in Archive, and in a real custom folder.
             // Each of those three routes to a DIFFERENT write, and TogglePin picks by _activeFolder:
             //   All / Archive  → Messages_ToggleDialogPin (no folder_id; the server pins the dialog in
@@ -6303,6 +6360,31 @@ namespace TelegArm.UI
             if (!c.IsSelf)
                 AddMenuItem(menu, "🗑   " + (c.IsUser ? "Delete chat" : LeaveLabelFor(entry)),
                     () => DeleteOrLeaveChat(entry));
+        }
+
+        /// <summary>Names the "view info" entry after what the chat actually is, the way LeaveLabelFor does
+        /// for leaving. Bot is checked after the channel cases because a bot is always an InputPeerUser.</summary>
+        private static string InfoLabelFor(ChatMenuContext c)
+        {
+            if (c.IsBroadcast) return "View channel info";
+            if (c.IsMegagroup || c.IsBasicGroup) return "View group info";
+            if (c.IsBot) return "View bot info";
+            return "View profile";
+        }
+
+        /// <summary>BATCH-TA-21/S1b — the header ⋮ opens the SAME builder the chat-list row opens, with
+        /// surface = ChatHeader. There is no second entry list here by design: one definition is the whole
+        /// point of TA-20/S0, and a header that quietly grew its own copy is exactly the drift that fix
+        /// exists to prevent.</summary>
+        private void ShowChatHeaderMenu()
+        {
+            var entry = _selectedChat;
+            if (entry == null || _chatMenuBtn == null || _chatMenuBtn.IsDisposed) return;
+            var menu = new ThemedContextMenuStrip();
+            BuildChatActionMenu(menu, entry, ChatMenuSurface.ChatHeader);
+            menu.Closed += (s, e) => BeginInvoke((Action)menu.Dispose);
+            // Hang it under the button — same gesture as the proxy sheet's ⋮ and every other menu here.
+            menu.Show(_chatMenuBtn.PointToScreen(new Point(0, _chatMenuBtn.Height)));
         }
 
         private async void ToggleChatMute(ChatEntry entry)
@@ -6399,6 +6481,7 @@ namespace TelegArm.UI
                 if (_thread != null) ClearThreadMode();   // we were reading this group's comments — leave thread mode
                 _selectedChat = null; ClearMessagePanel(); _chatTitle.Text = "Select a chat"; SetHeaderAvatar(null);
                 if (_chatSearchBtn != null) _chatSearchBtn.Visible = false;   // INCHAT-SEARCH: chat closed → hide the magnifier
+                if (_chatMenuBtn != null) _chatMenuBtn.Visible = false;       // TA-21/S1a: …and the ⋮ with it
             }
             RebuildFolders();
             UpdateTrayTooltip();
@@ -8087,6 +8170,7 @@ namespace TelegArm.UI
                                       // composer, and send target the NEW chat (LoadHistoryAsync below then resets the panel).
             _selectedChat = entry;
             if (_chatSearchBtn != null) _chatSearchBtn.Visible = true;   // INCHAT-SEARCH: the header magnifier appears with an open chat
+            if (_chatMenuBtn != null) _chatMenuBtn.Visible = true;        // TA-21/S1a: the ⋮ appears with it
             // FORUM-TOPICS: a forum group → show the topic bar + fetch its topics (async); any other chat → hide + clear.
             // Opening still loads the flat all-topics history below (FORUM-GROUPS-FIX preserved) — the bar is additive.
             if (entry.PeerInfo is Channel fch && (fch.flags & Channel.Flags.forum) != 0)
