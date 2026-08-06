@@ -104,7 +104,7 @@ namespace TelegArm.UI
         private string _title, _text;
         private Image _avatar;
         private long _avatarPeerId;
-        private int _count = 1;
+        private int _count;
 
         private readonly Timer _timer;
         private int _remainingMs = DismissMs;
@@ -112,6 +112,12 @@ namespace TelegArm.UI
         private Rectangle _closeRect;
 
         public NotificationWindow(NotifyInfo info, bool dark, Color accent)
+            : this(info, dark, accent, 1) { }
+
+        /// <summary>N3c — <paramref name="initialCount"/> is how many messages this chat has already
+        /// accumulated. A window created directly starts at 1; a window PROMOTED OUT OF THE QUEUE starts at
+        /// whatever piled up while it was waiting. See NotificationStack's N3c note for why.</summary>
+        public NotificationWindow(NotifyInfo info, bool dark, Color accent, int initialCount)
         {
             AccountId = info.AccountId;
             PeerId = info.PeerId;
@@ -121,6 +127,7 @@ namespace TelegArm.UI
             _avatar = info.Avatar;
             _avatarPeerId = info.AvatarPeerId;
 
+            _count = Math.Max(1, initialCount);
             _dark = dark;
             _accent = accent;
             // Same two-branch palette the dock uses (MainForm.BuildDock) rather than a third set of
