@@ -38,6 +38,19 @@ namespace TelegArm.Core
         /// it is checked before either is chosen.</summary>
         public bool EnableNotifications { get; set; } = true;
 
+        /// <summary>BATCH-TA-33/L6 — show MESSAGE TEXT in notifications and on the Start tile, or only who
+        /// sent it. Off means the notification window, the Action Center entry and the tile all read
+        /// "Alice Morgan · 3 new messages" instead of the message body.
+        ///
+        /// ⚠ ONE SETTING FOR ALL THREE SURFACES, ON PURPOSE. "Who may read my messages over my shoulder"
+        /// is a single question; two toggles that answer it differently is not a preference, it is a
+        /// privacy bug — the user turns off previews, sees the notification obey, and never learns the
+        /// tile is still publishing the text to a pinned Start menu. Any future surface that displays
+        /// message content outside the app reads THIS flag; do not add a second one.
+        /// Default ON: it is what the app did before this setting existed, and silently making everyone's
+        /// notifications less useful is not a safe default to spring on an upgrade.</summary>
+        public bool NotificationPreviews { get; set; } = true;
+
         /// <summary>BATCH-TA-27/W7 — ESCAPE HATCH: deliver notifications as the OLD tray balloon
         /// (<c>NotifyIcon.ShowBalloonTip</c>) instead of TelegArm's own notification window.
         ///

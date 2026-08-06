@@ -173,6 +173,7 @@
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="UI\NotificationStack.cs" />
+    <Compile Include="Helpers\ShellNotify.cs" />
     <Compile Include="UI\EditContactForm.cs" />
     <Compile Include="UI\ProfilePhotoViewer.cs" />
     <Compile Include="UI\ThemedContextMenuStrip.cs" />
