@@ -67,13 +67,31 @@ namespace TelegArm.UI.Controls
             base.Dispose(disposing);
         }
 
+        /// <summary>⚠ DERIVED FROM THE TARGET'S ACTUAL GEOMETRY, NOT FROM ScrollProperties.
+        /// This used to read <c>sp.Maximum / sp.LargeChange / sp.Value</c>. Those go STALE when the content
+        /// SHRINKS: after a rebuild that removes rows, WinForms leaves the old Maximum in place until
+        /// something re-runs the scrollbar calculation, so this bar kept reporting the OLD content size —
+        /// <see cref="Active"/> stayed true and a full-height thumb was painted over a list that no longer
+        /// scrolls at all. Measured: content really 300 px while Metrics still said 680, and it did NOT
+        /// self-heal on PerformLayout() or a host resize.
+        /// DisplayRectangle (the content box) and ClientRectangle (the viewport) are recomputed by the
+        /// framework itself and cannot drift from what is on screen; AutoScrollPosition is likewise the
+        /// live value rather than a cached one. When content fits, DisplayRectangle == ClientRectangle, so
+        /// total == view and the bar correctly reports itself inactive.
+        /// NOTE this control is SHARED — the chat list and message panel use it too — so the change is
+        /// deliberately equivalence-preserving in the healthy case and only differs where the old values
+        /// were wrong.</summary>
         private void Metrics(out int total, out int view, out int value, out int maxVal)
         {
-            var sp = _horz ? (ScrollProperties)_target.HorizontalScroll : _target.VerticalScroll;
-            total = sp.Maximum + 1;
-            view = sp.LargeChange;
-            value = sp.Value;
-            maxVal = Math.Max(1, sp.Maximum - sp.LargeChange + 1);
+            var disp = _target.DisplayRectangle;
+            var cli = _target.ClientRectangle;
+            total = _horz ? disp.Width : disp.Height;
+            view = _horz ? cli.Width : cli.Height;
+            // AutoScrollPosition READS negative and is assigned positive — the asymmetry this file has
+            // always handled at the ScrollTo end; negate here so `value` is a plain positive offset.
+            value = _horz ? -_target.AutoScrollPosition.X : -_target.AutoScrollPosition.Y;
+            maxVal = Math.Max(1, total - view);
+            if (value < 0) value = 0; else if (value > maxVal) value = maxVal;
         }
 
         private bool Active
