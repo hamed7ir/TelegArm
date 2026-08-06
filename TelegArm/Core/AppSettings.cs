@@ -29,6 +29,20 @@ namespace TelegArm.Core
         /// <summary>Master switch for desktop notifications (muted chats are always skipped).</summary>
         public bool EnableNotifications { get; set; } = true;
 
+        /// <summary>BATCH-TA-27/W7 — ESCAPE HATCH: deliver notifications as the OLD tray balloon
+        /// (<c>NotifyIcon.ShowBalloonTip</c>) instead of TelegArm's own notification window.
+        ///
+        /// ⚠ WHY THIS EXISTS AT ALL, GIVEN THE WINDOW IS THE POINT. The window is written and measured on
+        /// an x64 Windows 11 dev box, and the device it has to work on is a Windows RT 8.1 ARM32 Surface
+        /// that is not iterated on per batch. A window that misbehaves there — mispainted, mispositioned,
+        /// or worst of all stealing focus — must not leave the user with NO notifications at all. Flipping
+        /// this to true restores the previous behaviour exactly, with no rebuild.
+        /// ⚠ It is EXCLUSIVE, not additive: true ⇒ balloon only, false ⇒ window only. Both at once would
+        /// double every notification.
+        /// ⚠ REMOVE THIS ONCE THE WINDOW IS DEVICE-PROVEN. It is a temporary safety net, not a feature —
+        /// leaving it forever means maintaining two delivery channels for one notification.</summary>
+        public bool LegacyTrayBalloon { get; set; } = false;
+
         // ── Diagnostics ──────────────────────────────────────────────────────
         /// <summary>Diagnostic logging to Documents\TelegArm\telegarm.log (the Settings→Advanced toggle).
         /// Default OFF — with it off no log-purpose string formatting executes on hot paths (Logger.Enabled
