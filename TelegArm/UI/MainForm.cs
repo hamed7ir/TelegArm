@@ -379,6 +379,10 @@ namespace TelegArm.UI
             AvatarStore.SetActive(_service.Avatars);   // MULTI-ACCOUNT: the active account's store is the ambient .Current
             _avatars.AvatarLoaded += OnAvatarLoaded;    // (_avatars ⇒ _service.Avatars — the active service's store)
             PeerTitleChanged += OnPeerTitleChanged;     // RELEASE-FIXES-V11 (H1): live row/header refresh on a rename
+            // TA-27/W5: a clicked notification window routes here. Subscribed in the CTOR, not in the tray
+            // setup, because the window channel deliberately does not depend on the tray existing. Static
+            // event ⇒ it is unsubscribed in the shutdown path, same discipline as PeerTitleChanged above.
+            NotificationStack.Clicked += OnNotificationActivated;
 
             // BATCH-TA-0.1: the sub-stamps proved BuildUi is only ~120 ms — the bulk of the pre-network cold
             // start is HERE, between ctor entry and BuildUi. MaterialSkinManager.Instance is the singleton's
@@ -461,6 +465,10 @@ namespace TelegArm.UI
                 try { _service?.Dispose(); } catch { }
                 if (_notifyIcon != null) { _notifyIcon.Visible = false; _notifyIcon.Dispose(); _notifyIcon = null; }
                 if (_trayMenu != null) { _trayMenu.Dispose(); _trayMenu = null; }
+                // TA-27: close any live notification windows and drop the static-event handler. A topmost
+                // window outliving the app would be an orphan the user cannot get rid of.
+                NotificationStack.Clicked -= OnNotificationActivated;
+                try { NotificationStack.CloseAll(); } catch { }
                 AudioPlayer.Shutdown();
                 try { _recorder?.Dispose(); } catch { }
                 _avatars.AvatarLoaded -= OnAvatarLoaded;
@@ -5264,7 +5272,8 @@ namespace TelegArm.UI
         /// Stores (account, peer) so a click switches to that account + opens the chat.</summary>
         private void BackgroundToast(TelegramService svc, long acctId, Peer peer, Message m)
         {
-            if (_notifyIcon == null || svc == null || peer == null || m == null) return;
+            if (svc == null || peer == null || m == null) return;
+            if (!CanDeliverNotification()) return;           // TA-27/W7: the tray guard, split
             if (acctId == AccountContext.ActiveId) return;   // became active mid-flight → its own path handles it (no double)
             if (!AppSettings.Instance.EnableNotifications) return;
             long peerId = peer.ID;
@@ -5293,18 +5302,14 @@ namespace TelegArm.UI
             if (!mentioned && svc.IsPeerEffectivelyMuted(peer))
             { NotifyLog("suppressed(bg)", peerId, m.ID, "muted" + (m.reply_to != null ? " reply=1" : "")); return; }
 
-            string chatTitle = BgPeerTitle(svc, peer) ?? "Chat";
-            if (mentioned) chatTitle = "@ " + chatTitle;
-            string acctName = svc.Me != null ? DisplayName(svc.Me) : ("Account " + acctId);
-            string text = GetDisplayText(m);
-            if (string.IsNullOrEmpty(text)) text = "New message";
-            if (text.Length > 160) text = text.Substring(0, 160) + "…";
-
-            _lastNotifiedAccountId = acctId; _lastNotifiedPeerId = peerId;
             // TA-26b/D4 — same deciding factor as the active path (see MaybeToast's emit line).
             Logger.Diag("[NOTIFY-BG] toast acct=" + acctId + " peer=" + peerId + " msg=" + m.ID
                         + " reason=" + (mentioned ? "mention:" + mentionHow : "not-muted"));
-            try { _notifyIcon.ShowBalloonTip(4000, acctName + " · " + chatTitle, text, ToolTipIcon.None); } catch { /* tray gone */ }
+            // TA-27/W6 — the SAME builder and the SAME emitter as the active path. The account name is
+            // what distinguishes a background notification, and it is the only difference left.
+            EmitNotification(BuildNotification(acctId, peerId, m, BgPeerTitle(svc, peer) ?? "Chat",
+                                               svc.Me != null ? DisplayName(svc.Me) : ("Account " + acctId),
+                                               mentioned));
         }
 
         private string BgPeerTitle(TelegramService svc, Peer peer)
@@ -13935,7 +13940,8 @@ namespace TelegArm.UI
         /// can never notify twice in a process lifetime (NOTIFY-FIX).</summary>
         private void MaybeToast(long peerId, Message m, bool outgoing)
         {
-            if (m == null || _notifyIcon == null) return;
+            if (m == null) return;
+            if (!CanDeliverNotification()) return;                                 // TA-27/W7: the tray guard, split
             if (!AppSettings.Instance.EnableNotifications) return;                 // master switch off (user choice, not logged)
             if (outgoing) { NotifyLog("suppressed", peerId, m.ID, "own"); return; }
 
@@ -14009,13 +14015,7 @@ namespace TelegArm.UI
             // `_allChats` is still consulted for the TITLE — that is presentation, and being wrong there
             // costs a generic caption, not a wrongly-delivered notification.
             var entry = _allChats.FirstOrDefault(c => c.PeerId == peerId);
-            string title = entry?.Title ?? "TelegArm";
-            if (mentioned) title = "@ " + title;   // distinguish a mention toast
-            string text = GetDisplayText(m);
-            if (string.IsNullOrEmpty(text)) text = "New message";
-            if (text.Length > 160) text = text.Substring(0, 160) + "…";
 
-            _lastNotifiedPeerId = peerId; _lastNotifiedAccountId = AccountContext.ActiveId;   // NOTIFY-BACKGROUND: active toast → click opens, no switch
             // ⚠ BATCH-TA-26b/D4 — RECORD *WHY* IT NOTIFIED, not just that it did.
             //   The gate logged every SUPPRESSION with a reason but emitted anonymously, so "why did this
             //   notify?" was unanswerable from a log — the exact mirror of the bug that started this whole
@@ -14024,16 +14024,94 @@ namespace TelegArm.UI
             //   output otherwise, and telling them apart is what settles whether `mentioned` is set for
             //   replies (TA-26b/D3 could not answer that from the previous logs).
             NotifyLog("emit", peerId, m.ID, mentioned ? "mention:" + mentionHow : "not-muted");
-            try { _notifyIcon.ShowBalloonTip(4000, title, text, ToolTipIcon.None); } catch { /* tray gone */ }
+            EmitNotification(BuildNotification(AccountContext.ActiveId, peerId, m,
+                                               entry?.Title ?? "TelegArm", null, mentioned));
         }
 
-        private async void OnBalloonClicked(object sender, EventArgs e)
+        // ── BATCH-TA-27 — ONE CONSTRUCTION, ONE EMITTER, TWO CHANNELS ────────────────────────────
+        /// <summary>W6 — composes the notification BOTH channels show. Previously the active and
+        /// background paths each built their own caption and each carried their own copy of the
+        /// "empty ⇒ 'New message', over 160 ⇒ truncate" rules; the window would have made that three.
+        /// The ONLY difference between the two callers is <paramref name="accountName"/>.</summary>
+        private NotifyInfo BuildNotification(long acctId, long peerId, Message m,
+                                             string chatTitle, string accountName, bool mentioned)
         {
-            RestoreFromTray();
-            if (_lastNotifiedPeerId == 0) return;
-            long peerId = _lastNotifiedPeerId, acctId = _lastNotifiedAccountId;
-            // NOTIFY-BACKGROUND: a BACKGROUND account's toast → SWITCH to that account first (fast warm rebind), THEN open
-            // the chat in the now-active account. An active-account toast (acctId == active, or 0) just opens the chat.
+            if (string.IsNullOrEmpty(chatTitle)) chatTitle = "TelegArm";
+            if (mentioned) chatTitle = "@ " + chatTitle;          // distinguish a mention
+            string text = GetDisplayText(m);
+            if (string.IsNullOrEmpty(text)) text = "New message";
+            if (text.Length > 160) text = text.Substring(0, 160) + "…";
+            return new NotifyInfo
+            {
+                AccountId = acctId,
+                PeerId = peerId,
+                MessageId = m.ID,
+                Title = accountName != null ? accountName + " · " + chatTitle : chatTitle,
+                Text = text,
+                // ⚠ CACHE ONLY — GetCachedAvatar is `_avatars.GetCached`, a pure lookup. The notification
+                //   path must never fetch: it would make an already-late notification later, and fire
+                //   network work from a path that can run while the app is otherwise idle. A miss just
+                //   draws the initials circle, which is what the chat list does too.
+                Avatar = GetCachedAvatar(peerId),
+                AvatarPeerId = peerId
+            };
+        }
+
+        /// <summary>W7 — deliver it. The window is the channel; the tray balloon is an EXCLUSIVE fallback
+        /// behind <see cref="AppSettings.LegacyTrayBalloon"/> (default off) so a window that misbehaves on
+        /// the RT device cannot leave notifications dead. Remove the balloon branch once the window is
+        /// device-proven.</summary>
+        private void EmitNotification(NotifyInfo info)
+        {
+            if (info == null) return;
+            if (AppSettings.Instance.LegacyTrayBalloon)
+            {
+                if (_notifyIcon == null) return;                  // see CanDeliverNotification
+                // ⚠ `_lastNotified*` IS THE BALLOON'S LIMITATION, NOT A SHARED MECHANISM. One tray icon can
+                //   show one balloon, so one slot is all it can address. The window path deliberately does
+                //   NOT touch these fields — each window carries its own (account, peer, message).
+                _lastNotifiedPeerId = info.PeerId; _lastNotifiedAccountId = info.AccountId;
+                try { _notifyIcon.ShowBalloonTip(4000, info.Title, info.Text, ToolTipIcon.None); }
+                catch { /* tray gone */ }
+                return;
+            }
+            NotificationStack.Show(this, info, _dark, _accent);
+        }
+
+        /// <summary>⚠ THE TRAY GUARD **SPLITS**, IT DOES NOT MOVE. Both notify paths used to open with
+        /// `if (_notifyIcon == null) return;`, which is right for a balloon and wrong for a window — the
+        /// window needs no tray at all, and leaving the guard in place would have made a missing tray
+        /// silently disable the new channel. But simply LIFTING it is also wrong: the legacy balloon path
+        /// would then dereference a null NotifyIcon. So the requirement becomes "is the channel we are
+        /// actually going to use available?", which is this.</summary>
+        private bool CanDeliverNotification()
+        {
+            return !AppSettings.Instance.LegacyTrayBalloon || _notifyIcon != null;
+        }
+
+        private void OnBalloonClicked(object sender, EventArgs e)
+        {
+            // The balloon can only ever be about the most recent notification — hence the shared slot.
+            OpenNotifiedChat(_lastNotifiedAccountId, _lastNotifiedPeerId);
+        }
+
+        /// <summary>TA-27/W5 — a notification WINDOW was clicked. Same destination as a balloon click, but
+        /// the identity comes from the window that was actually clicked rather than from a shared slot, so
+        /// clicking the second of three notifications opens the second chat.</summary>
+        private void OnNotificationActivated(long acctId, long peerId, int msgId)
+        {
+            OpenNotifiedChat(acctId, peerId);
+        }
+
+        /// <summary>The one implementation behind both click paths: restore the window, switch accounts if
+        /// the notification belonged to a BACKGROUND account, then open the chat.</summary>
+        private async void OpenNotifiedChat(long acctId, long peerId)
+        {
+            RestoreFromTray();          // the INTENTIONAL activation — see NotificationWindow's W1 block
+            if (peerId == 0) return;
+            // NOTIFY-BACKGROUND: a BACKGROUND account's notification → SWITCH to that account first (fast warm
+            // rebind), THEN open the chat in the now-active account. An active-account one (acctId == active,
+            // or 0) just opens the chat.
             if (acctId != 0 && acctId != AccountContext.ActiveId)
             {
                 var acc = AccountStore.ListAccounts().FirstOrDefault(a => a.Id == acctId);
@@ -14058,6 +14136,12 @@ namespace TelegArm.UI
             _fellBack = true;
 
             if (_notifyIcon != null) _notifyIcon.Visible = false; // no tray while on the login screen
+            // TA-27: and no notification windows either — clicking one after a logout would try to open a
+            // chat in an account that is gone. ⚠ Deliberately NOT done in SwitchAccountAsync: a window for
+            // a still-logged-in account stays VALID across a switch, and OpenNotifiedChat already switches
+            // back for it. Touching the switch path for a cosmetic tidy-up is not worth entering that code
+            // (CLAUDE.md danger zone / HANDOFF §5.10-5.11).
+            try { NotificationStack.CloseAll(); } catch { }
 
             // ACCOUNT-SESSION-PATH-FIX: a fresh login must NOT inherit a prior account's id, or Config("session_pathname")
             // resolves to accounts/{staleId}/session instead of _pending (the same collision as the add-account bug). Every
