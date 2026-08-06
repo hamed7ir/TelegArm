@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using TelegArm.Helpers;
@@ -67,8 +68,30 @@ namespace TelegArm.UI
         /// <summary>Creation order — index 0 is the OLDEST and sits at the bottom. See Relayout.</summary>
         private static readonly List<NotificationWindow> _live = new List<NotificationWindow>();
 
+        // ── N3 — THE CAP AND THE QUEUE ───────────────────────────────────────────────────────────
+        /// <summary>How many notifications may be on screen at once. Beyond this, chats QUEUE.
+        /// Three is a judgement, not a measurement: it is the most that fits above a taskbar on the
+        /// shortest screen this app targets while each stays readable, and past three a stack stops being
+        /// glanceable and becomes a list — which is what the chat list already is, better.</summary>
+        private const int MaxVisible = 3;
+
+        /// <summary>A chat waiting for a slot. It holds the NEWEST message and how many have arrived —
+        /// NOT a list of messages, because W2's rule ("the window is the chat, not the message") has to
+        /// hold in the queue too or a burst would enqueue forty entries and outlive itself.</summary>
+        private sealed class Pending
+        {
+            public NotifyInfo Info;      // always the newest
+            public int Count;            // how many have arrived for this chat
+        }
+
+        /// <summary>FIFO — oldest waiting chat is promoted first. A List rather than a Queue because a
+        /// pending entry is UPDATED IN PLACE when its chat sends again, which needs a lookup.</summary>
+        private static readonly List<Pending> _queue = new List<Pending>();
+
         private static Form _anchor;
         private static bool _hooked;
+        private static bool _lastDark;
+        private static Color _lastAccent = Color.DodgerBlue;
 
         /// <summary>Raised when a notification is CLICKED: (accountId, peerId, messageId). MainForm
         /// switches accounts if needed and opens the chat.</summary>
@@ -80,6 +103,7 @@ namespace TelegArm.UI
         {
             if (info == null) return;
             if (anchor != null && !anchor.IsDisposed) _anchor = anchor;
+            _lastDark = dark; _lastAccent = accent;   // N3b: a promoted window is built later, from these
             HookDisplayChanges();
 
             string why;
@@ -102,15 +126,69 @@ namespace TelegArm.UI
                 return;
             }
 
-            w = new NotificationWindow(info, dark, accent);
+            // N3a — ALREADY WAITING? Update the pending entry IN PLACE. This is W2's one-per-chat rule
+            // applied to the queue: without it a chat that sends five times while queued would take five
+            // slots and then open five identical windows one after another as slots freed.
+            var pending = _queue.FirstOrDefault(p => p.Info.AccountId == info.AccountId
+                                                  && p.Info.PeerId == info.PeerId);
+            if (pending != null)
+            {
+                pending.Info = info;                  // newest message wins
+                pending.Count++;
+                Logger.Diag("[NOTIFY-WIN] queued-update acct=" + info.AccountId + " peer=" + info.PeerId
+                            + " msg=" + info.MessageId + " count=" + pending.Count
+                            + " queue=" + _queue.Count);
+                return;
+            }
+
+            // N3a — at the cap, so this chat waits rather than pushing something off the screen.
+            if (_live.Count >= MaxVisible)
+            {
+                _queue.Add(new Pending { Info = info, Count = 1 });
+                Logger.Diag("[NOTIFY-WIN] queued acct=" + info.AccountId + " peer=" + info.PeerId
+                            + " msg=" + info.MessageId + " live=" + _live.Count
+                            + " queue=" + _queue.Count);
+                return;
+            }
+
+            Spawn(info, dark, accent, 1);
+        }
+
+        /// <summary>Creates and shows a window for a chat that has a slot. The one place a
+        /// NotificationWindow is constructed, so N3b's promotion and an ordinary arrival cannot drift.</summary>
+        private static void Spawn(NotifyInfo info, bool dark, Color accent, int initialCount)
+        {
+            var w = new NotificationWindow(info, dark, accent, initialCount);
             w.Clicked += OnClicked;
             w.Dismissed += OnDismissed;
-            _byChat[key] = w;
+            _byChat[(info.AccountId, info.PeerId)] = w;
             _live.Add(w);
             w.ShowNoActivate(SlotFor(_live.Count - 1, w.Size));
             Logger.Diag("[NOTIFY-WIN] show acct=" + info.AccountId + " peer=" + info.PeerId
-                        + " msg=" + info.MessageId + " live=" + _live.Count + " at=" + w.Location);
+                        + " msg=" + info.MessageId + " count=" + initialCount
+                        + " live=" + _live.Count + " queue=" + _queue.Count + " at=" + w.Location);
             Relayout();
+        }
+
+        /// <summary>N3b — a slot freed up: promote the OLDEST waiting chat into it and reflow.
+        ///
+        /// ★ N3c — THE RULE, DECIDED AND WRITTEN DOWN: **A PROMOTED CHAT SHOWS ITS ACCUMULATED COUNT**,
+        /// exactly as a visible window would have. The count means "how many messages this chat has sent
+        /// since its notification appeared", and that sentence must not change meaning depending on whether
+        /// the chat happened to win a slot immediately. Showing only the latest would silently understate a
+        /// chat that sent nine times while third in line — and would make the same "+N more" badge mean two
+        /// different things. One rule: the count is per CHAT, not per SLOT.</summary>
+        private static void PromoteFromQueue()
+        {
+            while (_live.Count < MaxVisible && _queue.Count > 0)
+            {
+                var p = _queue[0];
+                _queue.RemoveAt(0);                   // FIFO — oldest waiting chat first
+                Logger.Diag("[NOTIFY-WIN] promote acct=" + p.Info.AccountId + " peer=" + p.Info.PeerId
+                            + " msg=" + p.Info.MessageId + " count=" + p.Count
+                            + " queue=" + _queue.Count);
+                Spawn(p.Info, _lastDark, _lastAccent, p.Count);
+            }
         }
 
         /// <summary>W4 — bottom-right of the WORKING AREA (not the screen bounds) of the monitor holding
@@ -180,21 +258,29 @@ namespace TelegArm.UI
             NotificationWindow cur;
             if (_byChat.TryGetValue(key, out cur) && ReferenceEquals(cur, w)) _byChat.Remove(key);
             Relayout();
+            PromoteFromQueue();   // N3b — the freed slot goes to the oldest waiting chat
         }
 
         /// <summary>Every live window closed — logout, account switch, or shutdown. A notification for an
         /// account you just left is worse than no notification: clicking it would switch you back.</summary>
         public static void CloseAll()
         {
+            // ⚠ THE QUEUE IS DRAINED FIRST, AND ON PURPOSE. Dismiss() fires OnDismissed, which promotes
+            //   from the queue — so closing the windows while entries remain would spawn replacements for
+            //   an account that is going away, faster than the loop closes them.
+            _queue.Clear();
             var copy = _live.ToArray();
             foreach (var w in copy) { try { w.Dismiss(); } catch { } }
             _live.Clear();
             _byChat.Clear();
         }
 
-        /// <summary>Closes the windows belonging to one account (used when that account goes away).</summary>
+        /// <summary>Closes the windows belonging to one account (used when that account goes away), and
+        /// drops anything it had waiting — same reason as CloseAll: a queued entry would otherwise be
+        /// promoted into the slot its own window just vacated.</summary>
         public static void CloseForAccount(long accountId)
         {
+            _queue.RemoveAll(p => p.Info.AccountId == accountId);
             var copy = _live.ToArray();
             foreach (var w in copy)
                 if (w != null && w.AccountId == accountId) { try { w.Dismiss(); } catch { } }
