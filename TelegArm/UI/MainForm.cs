@@ -3631,7 +3631,13 @@ namespace TelegArm.UI
         private void ShowProfile()
         {
             using (var dlg = new ProfileForm(_service))   // editable self-profile
+            {
                 dlg.ShowDialog(this);
+                // BATCH-TA-18 — this was MISSING: only OpenSelectedProfile routed pending links, so a link
+                // tapped in your OWN profile (bio, or the shared-links gallery) was silently dropped. It has
+                // to be here or the proxy-link interception has a hole exactly where the router doesn't run.
+                RouteProfilePending(dlg);
+            }
         }
 
         /// <summary>Opens the read-only profile of the currently selected chat (header click).</summary>
@@ -9125,6 +9131,13 @@ namespace TelegArm.UI
         private void OpenExternalUrl(string url)
         {
             if (string.IsNullOrEmpty(url)) return;
+            // BATCH-TA-18 — a proxy link is OURS to handle; it must never reach a browser. This is the one
+            // funnel every link seam ends at (message text, link-preview card, inline KeyboardButtonUrl,
+            // UrlAuth, callback answers, sponsored ads, profile bio, the search box), which is why the
+            // interception sits HERE rather than at each caller.
+            // ⚠ Note what it fixes: t.me/proxy matches IsTelegramDomain below, so before this the link
+            //   skipped even the confirm dialog and went straight to Process.Start.
+            if (TryHandleProxyLink(url)) return;
             if (!IsTelegramDomain(url))
             {
                 int c = ThemedDialog.Show(this, "Open link", "Open this link?\n\n" + url, "Open", "Cancel");
@@ -9134,6 +9147,86 @@ namespace TelegArm.UI
                 if (c != 0) return;
             }
             try { System.Diagnostics.Process.Start(NormalizeUrl(url)); } catch { }   // scheme-less ("site.com") needs https://
+        }
+
+        /// <summary>BATCH-TA-18 — is this an MTProxy link, and if so, deal with it instead of shelling out?
+        /// Returns TRUE for "handled, do not open a browser" — INCLUDING the malformed case, because a link
+        /// that is unmistakably a proxy link but broken should say why, not silently become a web page.
+        ///
+        /// ⚠ ONE PARSER. The shape test is <see cref="ProxyUrl.IsProxyLink"/>; the actual parse is
+        /// <see cref="ProxyUrl.TryNormalize"/> — the identical call the paste box in ProxyForm makes, so the
+        /// 17-case harness covers this path too and a link cannot be accepted by one and rejected by the
+        /// other. Writing a second parser here is exactly the divergence that harness exists to prevent.</summary>
+        private bool TryHandleProxyLink(string url)
+        {
+            if (!ProxyUrl.IsProxyLink(url)) return false;
+
+            string norm, err;
+            if (!ProxyUrl.TryNormalize(url, out norm, out err))
+            {
+                Logger.Diag("[PROXYLINK] rejected " + ProxyUrl.SafeForLog(url));   // host:port only, never the secret
+                ThemedDialog.Show(this, "Can't use that proxy link", err, "OK");   // err never quotes the secret
+                try { ActiveControl = null; } catch { }
+                return true;
+            }
+
+            ShowProxyLinkSheet(norm);
+            return true;
+        }
+
+        /// <summary>BATCH-TA-18 — the confirmation sheet, then whatever the user chose.
+        /// NEVER auto-connects: the link came from a channel, and silently moving every byte this app sends
+        /// onto a stranger's server because a finger landed on a button is not acceptable (TA-18/L3).
+        /// Dedupe is by exact normalised link: an already-saved proxy is SELECTED, never duplicated.</summary>
+        private async void ShowProxyLinkSheet(string norm)
+        {
+            try
+            {
+                var s = AppSettings.Instance;
+                if (s.ProxyList == null) s.ProxyList = new List<string>();
+                int existing = s.ProxyList.FindIndex(u => string.Equals(u, norm, StringComparison.OrdinalIgnoreCase));
+                Logger.Diag("[PROXYLINK] tapped " + ProxyUrl.SafeForLog(norm) + (existing >= 0 ? " (already saved)" : " (new)"));
+
+                ProxyLinkAction action;
+                using (var dlg = new ProxyLinkForm(norm, existing >= 0))
+                {
+                    dlg.ShowDialog(this);
+                    action = dlg.Action;
+                }
+                // Same reason as OpenExternalUrl's confirm: don't let focus fall through to the search box.
+                try { ActiveControl = null; } catch { }
+
+                if (action == ProxyLinkAction.Cancel) { Logger.Diag("[PROXYLINK] dismissed"); return; }
+
+                int idx = existing;
+                if (idx < 0) { s.ProxyList.Add(norm); idx = s.ProxyList.Count - 1; }
+
+                if (action == ProxyLinkAction.AddOnly)
+                {
+                    // Deliberately does NOT touch ProxyEnabled/ProxyActive: "collect now, test later" must
+                    // not move the user off a connection that is currently working.
+                    try { s.Save(); } catch { }
+                    Logger.Diag("[PROXYLINK] added " + ProxyUrl.SafeForLog(norm) + " without switching ("
+                                + s.ProxyList.Count + " total)");
+                    ShowToast("Proxy added to your list");
+                    return;
+                }
+
+                s.ProxyActive = idx;
+                s.ProxyEnabled = true;
+                try { s.Save(); } catch { }
+                Logger.Diag("[PROXYLINK] connect → " + ProxyUrl.SafeForLog(norm) + " (index " + idx + ")");
+
+                // EVERY DOOR MUST APPLY WHAT IT PERSISTED (§2d — the settings-door bug the device log caught).
+                // This is a fourth door into the proxy setting, so it applies live like the other three:
+                // warm pool down and awaited, active client reconnected, pool re-warmed. No restart.
+                RefreshProxyPill();
+                await ApplyProxyChangeAsync();
+            }
+            catch (Exception ex)
+            {
+                Logger.Diag("[PROXYLINK] failed: " + ex.Message);   // never echoes a link
+            }
         }
 
         /// <summary>Adds an https:// scheme to a scheme-less link so Uri parsing + Process.Start work.</summary>
