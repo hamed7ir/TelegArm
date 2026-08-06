@@ -889,6 +889,7 @@ namespace TelegArm.Core
                 svc.StartUpdateManager(u => router(svc, u));                 // routed: keyed by THIS service (its id → active/background)
                 await svc.SeedUpdateManagerAsync().ConfigureAwait(false);    // baseline pts → getDifference keeps it current
                 await svc.LoadNotifyDefaultsAsync().ConfigureAwait(false);   // NOTIFY-BACKGROUND: its own category mute defaults
+                await svc.SeedNotifyExceptionsAsync().ConfigureAwait(false); // TA-26/B3: the per-peer exceptions, one round-trip
             }
             catch (Exception ex)
             {
@@ -1097,12 +1098,21 @@ namespace TelegArm.Core
             else if (peer is NotifyBroadcasts) MuteDefBroadcasts = MuteUntilOf(ns);
         }
 
-        /// <summary>NOTIFY-BACKGROUND: is <paramref name="peer"/> effectively muted for THIS account? Explicit per-dialog
-        /// mute (from the warm dialog snapshot) overrides; else this account's category default by peer-kind. Mirrors the
-        /// active account's ComputeEffectiveMuted against THIS account's own state. Never throws (fail-open = not muted).</summary>
+        /// <summary>Is <paramref name="peer"/> effectively muted for THIS account? Live per-peer override →
+        /// warm dialog snapshot → this account's category default by peer-kind. Never throws.
+        ///
+        /// ⚠ BATCH-TA-26/B2 — IT NOW FAILS **CLOSED**: a peer we cannot answer for is reported MUTED, so the
+        /// caller stays SILENT. It used to fail open (return false = not muted), and the same "if we don't
+        /// know, notify anyway" assumption is exactly what let a muted chat notify from the active path for
+        /// so long. For a notification gate the asymmetry is not close: a missed notification is an
+        /// inconvenience the unread badge still records, while notifying a chat the user explicitly silenced
+        /// is the app ignoring an instruction. Unknown means SILENT.
+        /// The only inputs that can be missing are a null peer or a genuine exception; the category default
+        /// is always available once LoadNotifyDefaultsAsync has run, and TA-26/B3 seeds the per-peer map
+        /// from account.getNotifyExceptions so "not in our dialog snapshot" is no longer an unknown.</summary>
         public bool IsPeerEffectivelyMuted(Peer peer)
         {
-            if (peer == null) return false;
+            if (peer == null) return true;   // cannot answer → SILENT (see remarks)
             try
             {
                 // NOTIFY-BG-MUTE-FIX: a LIVE per-peer override (from UpdateNotifySettings after warm-up) beats the frozen
@@ -1121,7 +1131,39 @@ namespace TelegArm.Core
                         + " categoryDefault=" + (cat > DateTime.UtcNow) + " effectiveMuted=" + muted);
                 return muted;
             }
-            catch { return false; }
+            catch { return true; }   // ⚠ fail CLOSED — see remarks
+        }
+
+        /// <summary>BATCH-TA-26/B3 — seed the per-peer notify map from <c>account.getNotifyExceptions</c>.
+        ///
+        /// WHY THIS EXISTS. The mute gate previously resolved a chat from the UI's `_allChats`, which holds
+        /// ONE page of ~100 dialogs until the list is scrolled — so a muted chat further down simply wasn't
+        /// found and the gate failed open. Even after routing the gate here, the two remaining sources are
+        /// the CachedDialogs SNAPSHOT (also partial, and frozen at seed) and the category default. This is
+        /// the missing input: ONE round-trip that returns every peer whose notify settings DIFFER from the
+        /// category default — i.e. the authoritative exception list, with no dependence on how far any list
+        /// has paged. Passing a null peer asks for all of them.
+        /// Best-effort by design: a failure leaves the map as it was, and the gate still has the snapshot
+        /// and the category defaults to work from.</summary>
+        public async Task<int> SeedNotifyExceptionsAsync()
+        {
+            if (Client == null) return 0;
+            try
+            {
+                var res = await Client.Account_GetNotifyExceptions(null, false, false).ConfigureAwait(false);
+                int n = 0;
+                var list = res is UpdatesCombined uc ? uc.updates : (res as Updates)?.updates;
+                if (list != null)
+                    foreach (var u in list)
+                        if (u is UpdateNotifySettings uns) { ApplyNotifyUpdate(uns.peer, uns.notify_settings); n++; }
+                TelegArm.Helpers.Logger.Diag("[NOTIFY] acct=" + AccountId + " notify exceptions seeded: " + n);
+                return n;
+            }
+            catch (Exception ex)
+            {
+                TelegArm.Helpers.Logger.Diag("[NOTIFY] acct=" + AccountId + " notify exceptions FAILED: " + ex.Message);
+                return 0;
+            }
         }
 
         private PeerNotifySettings DialogNotifySettings(Peer peer)

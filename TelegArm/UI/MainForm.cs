@@ -5268,13 +5268,30 @@ namespace TelegArm.UI
             if (acctId == AccountContext.ActiveId) return;   // became active mid-flight → its own path handles it (no double)
             if (!AppSettings.Instance.EnableNotifications) return;
             long peerId = peer.ID;
+
+            // ⚠ BATCH-TA-26/B1 — THE SAME BACKLOG GATE AS THE ACTIVE PATH, AND IT MATTERS MORE HERE.
+            // Every warm account runs its own UpdateManager off its own persisted state file, so on a cold
+            // start EACH of them replays its own offline backlog. Fixing only the active account would have
+            // left a two-account user with the identical burst, just attributed to account B.
+            // TA-26a/S1 — same as the active path: the sender marked it silent, so no ping. The unread
+            // badge for this account is unaffected.
+            if ((m.flags & Message.Flags.silent) != 0)
+            { NotifyLog("suppressed(bg)", peerId, m.ID, "silent"); return; }
+
+            if (IsBacklog(m)) { NotifyLog("suppressed(bg)", peerId, m.ID, "backlog"); return; }
+
             var key = (acctId, peerId, m.ID);
-            if (_bgToastSeen.Contains(key)) return;
+            if (_bgToastSeen.Contains(key)) { NotifyLog("suppressed(bg)", peerId, m.ID, "dup"); return; }
             _bgToastSeen.Add(key); _bgToastSeenOrder.Enqueue(key);
             while (_bgToastSeenOrder.Count > ToastSeenCap) _bgToastSeen.Remove(_bgToastSeenOrder.Dequeue());
 
-            bool mentioned = (m.flags & Message.Flags.mentioned) != 0;
-            if (!mentioned && svc.IsPeerEffectivelyMuted(peer)) return;   // muted for THIS account → silent
+            // TA-26c — the SAME client-side mention test as the active path. A background account's muted
+            // chat must break through on a mention for the same reason the active one does.
+            string mentionHow;
+            bool mentioned = MentionsMe(m, svc.Me, out mentionHow);
+            // Already the correct resolver — TA-26/B2 changed only its FAILURE direction (unknown ⇒ silent).
+            if (!mentioned && svc.IsPeerEffectivelyMuted(peer))
+            { NotifyLog("suppressed(bg)", peerId, m.ID, "muted" + (m.reply_to != null ? " reply=1" : "")); return; }
 
             string chatTitle = BgPeerTitle(svc, peer) ?? "Chat";
             if (mentioned) chatTitle = "@ " + chatTitle;
@@ -5284,7 +5301,9 @@ namespace TelegArm.UI
             if (text.Length > 160) text = text.Substring(0, 160) + "…";
 
             _lastNotifiedAccountId = acctId; _lastNotifiedPeerId = peerId;
-            Logger.Diag("[NOTIFY-BG] toast acct=" + acctId + " peer=" + peerId + " msg=" + m.ID);
+            // TA-26b/D4 — same deciding factor as the active path (see MaybeToast's emit line).
+            Logger.Diag("[NOTIFY-BG] toast acct=" + acctId + " peer=" + peerId + " msg=" + m.ID
+                        + " reason=" + (mentioned ? "mention:" + mentionHow : "not-muted"));
             try { _notifyIcon.ShowBalloonTip(4000, acctName + " · " + chatTitle, text, ToolTipIcon.None); } catch { /* tray gone */ }
         }
 
@@ -5536,26 +5555,31 @@ namespace TelegArm.UI
             _muteDefChats = MuteUntilOf(chats) ?? DateTime.MinValue;
             _muteDefBroadcasts = MuteUntilOf(bcast) ?? DateTime.MinValue;
             ReapplyEffectiveMutes();   // MUTE-EFFECTIVE: category-muted chats now paint the bell (the icon was per-peer only)
+
+            // ⚠ BATCH-TA-26/B2 — THE ACTIVE ACCOUNT MUST POPULATE THE **SERVICE'S** STATE TOO.
+            // The notify gate now asks svc.IsPeerEffectivelyMuted, which reads the SERVICE's MuteDef* /
+            // _liveNotify / CachedDialogs — not the three MainForm fields set just above. Those fields still
+            // drive the row bell icon, but they are invisible to the gate. Without this call the service's
+            // defaults stay MinValue for the ACTIVE account and every category mute ("mute all groups") would
+            // be ignored by the gate — a regression the routing change would otherwise have introduced.
+            // Both are idempotent (LoadNotifyDefaultsAsync has a _notifyDefaultsLoaded latch).
+            try { await _service.LoadNotifyDefaultsAsync(); } catch { }
+            try { await _service.SeedNotifyExceptionsAsync(); } catch { }   // TA-26/B3
+
             if (LogOn) System.Diagnostics.Debug.WriteLine("[NOTIFY] category defaults: users="
                 + _muteDefUsers.ToString("u") + " chats=" + _muteDefChats.ToString("u") + " broadcasts=" + _muteDefBroadcasts.ToString("u")
                 + " → effective-muted=" + _allChats.Count(ComputeEffectiveMuted) + "/" + _allChats.Count);
         }
 
-        /// <summary>The notify gate's mute resolution: the peer's explicit setting when present (a past
-        /// explicit value = unmuted, overriding the category), else the category default.</summary>
-        private bool IsEffectivelyMuted(ChatEntry entry, out string reason)
-        {
-            reason = null;
-            if (entry == null) return false;                          // unknown chat → can't be muted
-            if (entry.Muted) { reason = "muted"; return true; }       // explicit mute (incl. optimistic toggle)
-            if (entry.MuteUntil.HasValue) return false;               // explicit setting, not muted → overrides category
-            DateTime cat = entry.PeerInfo is User ? _muteDefUsers
-                : entry.PeerInfo is Channel bc && (bc.flags & Channel.Flags.broadcast) != 0 ? _muteDefBroadcasts
-                : entry.PeerInfo != null ? _muteDefChats
-                : entry.IsGroup ? _muteDefChats : _muteDefUsers;      // unresolved peer → best guess by kind
-            if (cat > DateTime.UtcNow) { reason = "category-muted"; return true; }
-            return false;
-        }
+        // ⚠ BATCH-TA-26/B2 — `IsEffectivelyMuted(ChatEntry, out string)` WAS DELETED HERE, DELIBERATELY.
+        // It was the notify gate's mute resolution and it is the bug: it opened with
+        //     if (entry == null) return false;   // "unknown chat → can't be muted"
+        // and its caller looked the entry up in `_allChats`, which holds one page of ~100 dialogs until the
+        // list is scrolled. A muted chat further down was never found, so the gate answered "not muted".
+        // The gate now asks TelegramService.IsPeerEffectivelyMuted — no UI list, and it fails CLOSED.
+        // It is removed rather than left unused because an unreferenced helper that answers this question
+        // WRONGLY is an invitation to reuse it. ComputeEffectiveMuted (below) is the surviving `_allChats`
+        // reader and is fine: it only decides which BELL ICON a row paints, where being wrong costs a glyph.
 
         /// <summary>MUTE-EFFECTIVE: the mute state the ROW ICON should show — the peer's EXPLICIT setting when present
         /// (future=muted, past/0=unmuted, overriding the category), else the peer-kind CATEGORY default. This is what
@@ -13797,6 +13821,107 @@ namespace TelegArm.UI
         private readonly HashSet<(long, long, int)> _bgToastSeen = new HashSet<(long, long, int)>();
         private readonly Queue<(long, long, int)> _bgToastSeenOrder = new Queue<(long, long, int)>();
 
+        // ── BATCH-TA-26/B1 — THE BACKLOG GATE ────────────────────────────────────────────────────
+        /// <summary>How far BEFORE this process started a message may be dated and still notify.
+        /// Covers the ordinary race where a message is sent while we are connecting: the update can be
+        /// delivered a few seconds after start-up while its server timestamp predates it. 60 s is generous
+        /// for that and still far below any real "I was offline" gap.</summary>
+        private const int NotifyBacklogGraceSeconds = 60;
+        private static readonly DateTime NotifyProcessStartUtc = DateTime.UtcNow;
+
+        /// <summary>TRUE for a message that predates this run — i.e. one replayed by getDifference rather
+        /// than newly received.
+        ///
+        /// ⚠ WHY A DATE AND NOT A "was this live?" FLAG: there isn't one. WTC's UpdateManager SYNTHESISES
+        /// UpdateNewMessage from the getDifference result and raises it through the SAME callback as a live
+        /// update (HandleDifference), so nothing on the update distinguishes them. The message's own
+        /// server-set timestamp is the only honest signal we have.
+        /// ⚠ AND WHY NO PERSISTED WATERMARK, which is the obvious "smarter" version: it re-creates the very
+        /// bug this fixes. A watermark says "notify everything since I last looked", so the first launch
+        /// after a few hours offline would fire a burst of toasts — exactly the behaviour being removed.
+        /// What the user missed is already carried, better, by the unread badges and the chat list; a
+        /// notification is an INTERRUPTION, and interrupting about something that happened hours ago is
+        /// noise. Deliberate: launching does not re-announce the backlog.
+        /// The message pump only starts after start-up, so `_toastSeen` cannot help here — on a cold start
+        /// it is empty, which is precisely why every backlogged message used to get through.</summary>
+        private static bool IsBacklog(Message m)
+        {
+            return m != null && m.date < NotifyProcessStartUtc.AddSeconds(-NotifyBacklogGraceSeconds);
+        }
+
+        // ── BATCH-TA-26c — DOES THIS MESSAGE MENTION *ME*? ───────────────────────────────────────
+        /// <summary>The mute break-through test. Answers <c>how</c> with the rule that fired, so the log
+        /// says WHY a message got through instead of leaving it to be re-derived later.
+        ///
+        /// ⚠ WHY THIS IS NOT JUST `Message.Flags.mentioned`, WHICH IS WHAT WE USED TO DO.
+        /// MEASURED (log telegarm_20260806_125552.log, peer 1824808427 — a channel muted only by the
+        /// account-level broadcasts default):
+        ///     id=90 preview='@xhamedz'  -> [NOTIFY] suppressed … reason=muted
+        ///     id=92 preview='@xhamedz'  -> [NOTIFY] suppressed … reason=muted
+        /// `@xhamedz` IS the receiving account's username, and the server did NOT set the flag — the gate
+        /// only reaches the mute check when the flag is false. In the SAME chat in an earlier run, replies
+        /// DID carry it (msgs 86/88 emitted), so the server sets it for replies-to-me and not for this.
+        /// Official clients show these notifications because they do not trust one bit: they decide
+        /// mention-ness themselves from the entities and the user's own identity. So do we now.
+        ///
+        /// FOUR RULES, cheapest first, each recorded distinctly so the next log is self-explaining:
+        ///   flag        — the server said so (still authoritative; covers replies-to-me)
+        ///   entity-id   — MessageEntityMentionName addressed at my user id (a text-mention of me by name)
+        ///   entity-text — MessageEntityMention whose text is my @username
+        ///   text        — my @username appears in the body with NO entity at all. This is the one that
+        ///                 catches the case above, and it is deliberate: a message that writes your handle
+        ///                 is addressing you whether or not the server chose to encode an entity.
+        /// ⚠ Rule 4 is token-exact: "@hamed" must not match "@hamedz". Without that guard every user whose
+        ///   username is a prefix of someone else's would break through on the wrong messages.</summary>
+        private static bool MentionsMe(Message m, User me, out string how)
+        {
+            how = null;
+            if (m == null) return false;
+            if ((m.flags & Message.Flags.mentioned) != 0) { how = "flag"; return true; }
+            if (me == null) return false;
+
+            string text = m.message ?? "";
+            if (m.entities != null)
+                foreach (var e in m.entities)
+                {
+                    if (e is MessageEntityMentionName mn && mn.user_id == me.id) { how = "entity-id"; return true; }
+                    if (e is InputMessageEntityMentionName imn && imn.user_id is InputUser iu && iu.user_id == me.id)
+                    { how = "entity-id"; return true; }
+                }
+
+            string un = me.MainUsername;
+            if (string.IsNullOrEmpty(un)) return false;
+
+            if (m.entities != null)
+                foreach (var e in m.entities)
+                    if (e is MessageEntityMention && e.offset >= 0 && e.length > 0
+                        && e.offset + e.length <= text.Length
+                        && string.Equals(text.Substring(e.offset, e.length).TrimStart('@'), un,
+                                         StringComparison.OrdinalIgnoreCase))
+                    { how = "entity-text"; return true; }
+
+            if (ContainsUsernameToken(text, un)) { how = "text"; return true; }
+            return false;
+        }
+
+        /// <summary>"@name" present as a WHOLE token — the next character must not continue a username
+        /// (Telegram usernames are letters, digits and underscore), so "@hamed" does not match "@hamedz".</summary>
+        private static bool ContainsUsernameToken(string text, string username)
+        {
+            if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(username)) return false;
+            string needle = "@" + username;
+            int i = 0;
+            while ((i = text.IndexOf(needle, i, StringComparison.OrdinalIgnoreCase)) >= 0)
+            {
+                int end = i + needle.Length;
+                if (end >= text.Length) return true;
+                char c = text[end];
+                if (!(char.IsLetterOrDigit(c) || c == '_')) return true;
+                i = end;
+            }
+            return false;
+        }
+
         /// <summary>One [NOTIFY] line per gate decision (Logger.Enabled-gated; nothing per tick).</summary>
         private static void NotifyLog(string what, long peerId, int msgId, string reason)
         {
@@ -13814,6 +13939,18 @@ namespace TelegArm.UI
             if (!AppSettings.Instance.EnableNotifications) return;                 // master switch off (user choice, not logged)
             if (outgoing) { NotifyLog("suppressed", peerId, m.ID, "own"); return; }
 
+            // ⚠ BATCH-TA-26a/S1 — THE SENDER ASKED FOR NO PING. `silent` is Telegram's "send without
+            //   sound/notification" (WTC: "whether this is a silent message (no notification triggered)"),
+            //   set by the sender or by a channel posting silently. We never checked it, so we pinged for
+            //   messages explicitly marked not to.
+            //   ⚠ THIS SUPPRESSES THE **NOTIFICATION ONLY**. The message is still delivered, still lands in
+            //     the chat, and STILL COUNTS TOWARD THE UNREAD BADGE — silent means "don't interrupt me",
+            //     not "hide it". Do not "fix" this into skipping the badge or the chat-list preview.
+            if ((m.flags & Message.Flags.silent) != 0)
+            { NotifyLog("suppressed", peerId, m.ID, "silent"); return; }
+
+            if (IsBacklog(m)) { NotifyLog("suppressed", peerId, m.ID, "backlog"); return; }
+
             var key = (peerId, m.ID);
             if (_toastSeen.Contains(key)) { NotifyLog("suppressed", peerId, m.ID, "dup"); return; }
             _toastSeen.Add(key);
@@ -13823,15 +13960,55 @@ namespace TelegArm.UI
             if (_isForeground && _selectedChat != null && _selectedChat.PeerId == peerId)
             { NotifyLog("suppressed", peerId, m.ID, "focused"); return; }
 
-            var entry = _allChats.FirstOrDefault(c => c.PeerId == peerId);
-            // MENTION-REACTION: break-through-mute. A mention/reply (Message.Flags.mentioned — covers @mentions AND
-            // replies to you) NOTIFIES EVEN in a muted chat (client-side rule; Telegram has no server mention-mute).
-            // Non-mention messages in a muted chat still suppress (unchanged).
-            bool mentioned = (m.flags & Message.Flags.mentioned) != 0;
-            string muteReason;
-            if (!mentioned && IsEffectivelyMuted(entry, out muteReason))
-            { NotifyLog("suppressed", peerId, m.ID, muteReason); return; }
+            // MENTION-REACTION: break-through-mute. A message flagged `mentioned` NOTIFIES EVEN in a muted
+            // chat (client-side rule; Telegram has no server mention-mute). Unchanged by TA-26.
+            // ⚠ WHAT `mentioned` ACTUALLY COVERS — **OBSERVED**, not read off a doc (TA-26b/D3).
+            //   *** A REPLY TO YOUR OWN MESSAGE SETS THIS FLAG. *** Measured on a real account, log
+            //   telegarm_20260806_124156.log, peer 1824808427 — a chat whose OTHER messages the resolver
+            //   reported muted in the same run:
+            //       12:43:52.121  [NOTIFY] emit      peer=1824808427 msg=86
+            //       12:44:00.479  [NOTIFY] suppressed peer=1824808427 msg=87 reason=muted
+            //       12:44:23.202  [NOTIFY] emit      peer=1824808427 msg=88
+            //       12:44:27.886  [NOTIFY] suppressed peer=1824808427 msg=89 reason=muted
+            //   86 and 88 were REPLIES and they got through; the only route past the mute gate is this
+            //   flag, so the server had set it on both.
+            //   ⚠ I PREVIOUSLY NARROWED THIS TO "@mentions and text-mentions, replies not documented",
+            //     reasoning from WTC's summary and Telegram's mentions page. THAT WAS WRONG, and it is a
+            //     standing reminder that the docs describe the entity case without excluding the reply
+            //     case — absence of a statement is not a statement of absence. The log is the authority.
+            //   ⚠ SEPARATE, STILL UNEXPLAINED: in that same run a message the tester INTENDED as an
+            //     @mention did NOT carry the flag (it is one of the two suppressed as `muted`). The gate
+            //     behaved correctly — it can only read the flag the server set — so this is a question
+            //     about how the mention was composed (does the recipient account actually have that
+            //     username?), NOT about this code. Do not "fix" the gate for it.
+            string mentionHow;
+            bool mentioned = MentionsMe(m, _service != null ? _service.Me : null, out mentionHow);
 
+            // ⚠ BATCH-TA-26/B2 — THE MUTE ANSWER COMES FROM THE SERVICE, NOT FROM `_allChats`.
+            // This used to be `_allChats.FirstOrDefault(...)` fed into IsEffectivelyMuted, whose first line
+            // was `if (entry == null) return false;  // unknown chat → can't be muted`. `_allChats` holds ONE
+            // page of ~100 dialogs until the list is scrolled (TA-11/TA-14), so a muted chat further down was
+            // simply NOT FOUND, the gate answered "not muted", and it notified. That is the reported bug.
+            // The BACKGROUND path never had it: it already asks svc.IsPeerEffectivelyMuted, which resolves
+            // live per-peer override → dialog snapshot → category default and touches no UI list at all.
+            // Both paths now share that one resolver, and it FAILS CLOSED (unknown ⇒ silent).
+            if (!mentioned)
+            {
+                var svc = _service;
+                if (svc == null) { NotifyLog("suppressed", peerId, m.ID, "no-service"); return; }   // fail closed
+                if (svc.IsPeerEffectivelyMuted(m.peer_id))
+                {
+                    // `reply=1` is diagnostic only (TA-26c): if a REPLY to us is ever suppressed here, the
+                    // server did not set the flag for it either and the break-through needs a reply rule
+                    // as well as the mention rules. Nothing branches on it.
+                    NotifyLog("suppressed", peerId, m.ID, "muted" + (m.reply_to != null ? " reply=1" : ""));
+                    return;
+                }
+            }
+
+            // `_allChats` is still consulted for the TITLE — that is presentation, and being wrong there
+            // costs a generic caption, not a wrongly-delivered notification.
+            var entry = _allChats.FirstOrDefault(c => c.PeerId == peerId);
             string title = entry?.Title ?? "TelegArm";
             if (mentioned) title = "@ " + title;   // distinguish a mention toast
             string text = GetDisplayText(m);
@@ -13839,7 +14016,14 @@ namespace TelegArm.UI
             if (text.Length > 160) text = text.Substring(0, 160) + "…";
 
             _lastNotifiedPeerId = peerId; _lastNotifiedAccountId = AccountContext.ActiveId;   // NOTIFY-BACKGROUND: active toast → click opens, no switch
-            NotifyLog("emit", peerId, m.ID, null);
+            // ⚠ BATCH-TA-26b/D4 — RECORD *WHY* IT NOTIFIED, not just that it did.
+            //   The gate logged every SUPPRESSION with a reason but emitted anonymously, so "why did this
+            //   notify?" was unanswerable from a log — the exact mirror of the bug that started this whole
+            //   thread, where a silent drop had no reason either. `mention` means it broke THROUGH a mute;
+            //   `not-muted` means the mute gate simply said no. Those two are indistinguishable in the
+            //   output otherwise, and telling them apart is what settles whether `mentioned` is set for
+            //   replies (TA-26b/D3 could not answer that from the previous logs).
+            NotifyLog("emit", peerId, m.ID, mentioned ? "mention:" + mentionHow : "not-muted");
             try { _notifyIcon.ShowBalloonTip(4000, title, text, ToolTipIcon.None); } catch { /* tray gone */ }
         }
 
