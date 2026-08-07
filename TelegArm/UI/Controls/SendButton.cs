@@ -34,7 +34,15 @@ namespace TelegArm.UI.Controls
             Size = new Size(40, 40);          // identical to MicButton
             Cursor = Cursors.Hand;
             TabStop = false;
-            BackColor = Color.Transparent;
+            // ⚠⚠ DO NOT SET `BackColor = Color.Transparent` HERE. A plain Control REJECTS it —
+            //    "Control does not support transparent background colors" — and it throws in the CTOR,
+            //    so the app does not start at all. It shipped in v1.9.0 and crashed TelegArm on launch
+            //    on the RT device (crash.log, 2026-08-06 16:28).
+            //    MicButton — the control every metric here was supposed to be copied from — does not set
+            //    BackColor at all; it INHERITS the composer bar's colour, which is what makes the area
+            //    outside the drawn disc match. Adding that one line was the deviation, and it was the bug.
+            //    If a genuinely transparent background is ever needed, it requires
+            //    SetStyle(ControlStyles.SupportsTransparentBackColor, true) — but it is not needed here.
             ThemeHelper.ThemeChanged += OnThemeChanged;
         }
 
