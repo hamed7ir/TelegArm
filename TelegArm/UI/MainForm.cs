@@ -941,7 +941,12 @@ namespace TelegArm.UI
             bottomBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));   // 2 input / recording
             bottomBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 40));   // 3 emoji
             bottomBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 48));   // 4 mic
-            bottomBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96));   // 5 send
+            // ⚠ 96 -> 40, MATCHING THE EMOJI COLUMN. 96 was sized for the old MaterialButton that had the
+            //   word "Send" in it. The round send disc replaced that button but the COLUMN kept its width,
+            //   so a 40px control sat in a 96px cell with ~28px of dead space either side — which is why
+            //   the button read as oversized and unbalanced even after the disc itself was shrunk. The
+            //   control was never the problem; its cell was.
+            bottomBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 40));   // 5 send (== emoji)
 
             // FIRST FontHelper call in BuildUi. FontHelper's static ctor is LAZY and registers five embedded
             // TTFs with BOTH GDI+ (PrivateFontCollection) and gdi32 (AddFontMemResourceEx) — if that cost is
@@ -2739,7 +2744,47 @@ namespace TelegArm.UI
             RouteProfilePending(pf);
         }
 
-        private void ToggleDock() { SetDockOpen(_dock == null || !_dock.Visible); }
+        /// <summary>BATCH-TA-37 — the narrowest FORM width at which the dock may be open.
+        /// 340 (dock) + 360 (Panel2MinSize, the conversation) + 240 (chat list) + chrome ≈ 960. Below it
+        /// the dock does not merely look tight — it squeezes the conversation under its own minimum and the
+        /// header controls collide, which is the overlap in the report.</summary>
+        private const int DockMinFormWidth = 960;
+
+        /// <summary>⚠ OPENING THE DOCK ON A NARROW WINDOW GROWS THE WINDOW; IT DOES NOT COVER THE CHAT.
+        /// The dock is additional surface, so taking it out of the conversation's space is the one thing it
+        /// must not do. If the window cannot grow — maximised, or the screen is too small — the dock is
+        /// refused rather than opened on top of the chat.</summary>
+        private bool EnsureRoomForDock()
+        {
+            if (Width >= DockMinFormWidth) return true;
+            if (WindowState != FormWindowState.Normal) return false;   // maximised: nowhere to grow
+
+            var wa = Screen.FromControl(this).WorkingArea;
+            int want = Math.Min(DockMinFormWidth, wa.Width);
+            if (want <= Width) return false;                            // screen itself is too narrow
+
+            Width = want;
+            if (Left + Width > wa.Right) Left = Math.Max(wa.Left, wa.Right - Width);
+            return Width >= DockMinFormWidth;
+        }
+
+        /// <summary>The window got too narrow to hold the dock — close it rather than let it overlap.
+        /// Called from the resize path, so dragging the edge in collapses the dock the way it grew.</summary>
+        private void EnforceDockWidth()
+        {
+            if (_dock != null && _dock.Visible && Width < DockMinFormWidth) SetDockOpen(false);
+        }
+
+        private void ToggleDock()
+        {
+            bool want = _dock == null || !_dock.Visible;
+            if (want && !EnsureRoomForDock())
+            {
+                if (Logger.Enabled) Logger.Diag("[DOCK] refused — window " + Width + "px < " + DockMinFormWidth);
+                return;
+            }
+            SetDockOpen(want);
+        }
 
         private void SetDockOpen(bool open)
         {
@@ -10754,6 +10799,16 @@ namespace TelegArm.UI
         private const int WM_ACTIVATEAPP = 0x001C;   // sent when the APPLICATION (not just a form) gains/loses foreground
         private bool _appActive = true;
         private const int WM_DWMCOLORIZATIONCOLORCHANGED = 0x0320;   // OS accent/colorization changed (fires on 8.1 AND 10/11)
+
+        /// <summary>TA-37 — the dock closes itself when the window is dragged narrower than it can hold.
+        /// ⚠ Symmetric with EnsureRoomForDock: opening it GROWS the window, so shrinking must CLOSE it.
+        /// Without this the dock stays open as the edge comes in and re-creates the overlap the threshold
+        /// exists to prevent.</summary>
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            EnforceDockWidth();
+        }
 
         protected override void WndProc(ref System.Windows.Forms.Message m)
         {
