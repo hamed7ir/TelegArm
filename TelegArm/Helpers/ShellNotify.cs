@@ -43,9 +43,22 @@ namespace TelegArm.Helpers
         private static object _notifier, _history, _tileUpdater, _badgeUpdater;
         private static bool _init;
 
-        /// <summary>True when Action Center / tile delivery is actually possible. False on RT 8.1, on
-        /// Windows 7, and on any copy whose AUMID has no Start-Menu shortcut.</summary>
+        /// <summary>True when ACTION CENTER delivery is possible: Windows 10/11 (SuppressPopup present)
+        /// AND a Start-Menu shortcut carrying our AUMID. False on RT 8.1 and Windows 7.</summary>
         public static bool Available { get; private set; }
+
+        /// <summary>★ TRUE WHEN THE **START TILE** IS POSSIBLE — WHICH IS A DIFFERENT QUESTION.
+        ///
+        /// ⚠ THIS EXISTS BECAUSE GATING THE TILE ON <see cref="Available"/> WAS A REAL BUG, AND IT
+        ///   DISABLED THE TILE ON EXACTLY THE DEVICE THE TILE IS FOR. Action Center support is detected via
+        ///   ApiInformation + ToastNotification.SuppressPopup, both of which are **Windows 10+**.
+        ///   `ApiInformation` DOES NOT EXIST ON RT 8.1 at all — so Init returned early there, Available
+        ///   stayed false, and the live tile (an 8.1/10 feature that Windows 11 has since REMOVED) was
+        ///   skipped on the only OS that can show one. The two capabilities are independent:
+        ///     · Action Center  → Win10/11 only, needs SuppressPopup
+        ///     · Live tile      → Win8.1/10, needs only TileUpdateManager, which 8.1 has
+        ///   They are probed separately now, and a failure of one never disables the other.</summary>
+        public static bool TileAvailable { get; private set; }
 
         /// <summary>Why <see cref="Available"/> is false, for the log and nothing else.</summary>
         public static string Reason { get; private set; }
@@ -70,8 +83,14 @@ namespace TelegArm.Helpers
                 // it is what a future shortcut would have to match.
                 SetCurrentProcessExplicitAppUserModelID(Aumid);
 
+                _tXml = WinRT("Windows.Data.Xml.Dom.XmlDocument");
+
+                // ── THE TILE IS PROBED FIRST AND INDEPENDENTLY (see TileAvailable's remarks) ──
+                // It needs neither ApiInformation nor SuppressPopup, so it must not sit behind either.
+                InitTile();
+
                 var api = WinRT("Windows.Foundation.Metadata.ApiInformation");
-                if (api == null) { Fail("no WinRT ApiInformation (Windows 7 / RT 8.1) — Action Center and tile skipped"); return; }
+                if (api == null) { Fail("no WinRT ApiInformation (Windows 7 / RT 8.1) — Action Center skipped (tile unaffected)"); return; }
 
                 var isProp = api.GetMethod("IsPropertyPresent", new[] { typeof(string), typeof(string) });
                 bool win10 = isProp != null && (bool)isProp.Invoke(null, new object[]
@@ -112,25 +131,63 @@ namespace TelegArm.Helpers
                 }
                 if (setting != "Enabled") { Fail("Windows reports notifications " + setting + " for this app"); return; }
 
-                // Tiles are best-effort on top: a Win11 box has no tile surface at all, which is not a failure.
-                try
-                {
-                    var mkTile = _tTileMgr == null ? null : _tTileMgr.GetMethod("CreateTileUpdaterForApplication",
-                        BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(string) }, null);
-                    if (mkTile != null) _tileUpdater = mkTile.Invoke(null, new object[] { Aumid });
-                    if (_tileUpdater != null)
-                        _tTileUpd.GetMethod("EnableNotificationQueue").Invoke(_tileUpdater, new object[] { true });
-                    var mkBadge = _tBadgeMgr == null ? null : _tBadgeMgr.GetMethod("CreateBadgeUpdaterForApplication",
-                        BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(string) }, null);
-                    if (mkBadge != null) _badgeUpdater = mkBadge.Invoke(null, new object[] { Aumid });
-                }
-                catch { _tileUpdater = null; _badgeUpdater = null; }
-
                 Available = true;
                 Logger.Diag("[SHELL] Action Center ON aumid=" + Aumid + " setting=" + setting
                             + " tile=" + (_tileUpdater != null) + " badge=" + (_badgeUpdater != null));
             }
             catch (Exception ex) { Fail("init threw: " + ex.Message); }
+        }
+
+        /// <summary>Probes the Start tile independently of Action Center. Works on Windows 8.1/10; on
+        /// Windows 11 the calls succeed and simply have nowhere to appear (tiles were removed), which is
+        /// NOT a failure and is not logged as one.</summary>
+        private static void InitTile()
+        {
+            try
+            {
+                _tTileMgr = WinRT("Windows.UI.Notifications.TileUpdateManager");
+                _tTileUpd = WinRT("Windows.UI.Notifications.TileUpdater");
+                _tTileNotif = WinRT("Windows.UI.Notifications.TileNotification");
+                _tBadgeMgr = WinRT("Windows.UI.Notifications.BadgeUpdateManager");
+                _tBadgeNotif = WinRT("Windows.UI.Notifications.BadgeNotification");
+                if (_tXml == null || _tTileMgr == null || _tTileUpd == null || _tTileNotif == null)
+                { Logger.Diag("[SHELL] tile OFF — WinRT tile types absent (pre-Windows 8)"); return; }
+
+                // ⚠ AUMID overload only — the parameterless form assumes package identity and throws.
+                var mk = _tTileMgr.GetMethod("CreateTileUpdaterForApplication",
+                    BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(string) }, null);
+                if (mk == null) { Logger.Diag("[SHELL] tile OFF — no AUMID overload"); return; }
+                _tileUpdater = mk.Invoke(null, new object[] { Aumid });
+
+                // Same registration signal as ToastNotifier.Setting: it throws 0x80070490 when no
+                // Start-Menu shortcut carries the AUMID. If the property is absent on this OS, proceed —
+                // a tile push that fails is caught and harmless, whereas refusing to try would disable
+                // the feature on a platform we simply could not interrogate.
+                var setting = _tileUpdater.GetType().GetProperty("Setting");
+                if (setting != null)
+                {
+                    try { setting.GetValue(_tileUpdater, null); }
+                    catch (Exception ex)
+                    {
+                        _tileUpdater = null;
+                        Logger.Diag("[SHELL] tile OFF — no Start-Menu shortcut carries AUMID \"" + Aumid
+                                    + "\" (hr=0x" + Marshal.GetHRForException(ex.InnerException ?? ex).ToString("X8")
+                                    + "). Install TelegArm, then PIN IT TO START.");
+                        return;
+                    }
+                }
+
+                _tTileUpd.GetMethod("EnableNotificationQueue").Invoke(_tileUpdater, new object[] { true });
+
+                var mkBadge = _tBadgeMgr == null ? null : _tBadgeMgr.GetMethod("CreateBadgeUpdaterForApplication",
+                    BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(string) }, null);
+                if (mkBadge != null) _badgeUpdater = mkBadge.Invoke(null, new object[] { Aumid });
+
+                TileAvailable = true;
+                Logger.Diag("[SHELL] tile ON aumid=" + Aumid + " queue=5 badge=" + (_badgeUpdater != null)
+                            + " — pin TelegArm to Start to see it (Windows 11 has no tile surface)");
+            }
+            catch (Exception ex) { _tileUpdater = null; Logger.Diag("[SHELL] tile OFF — " + ex.Message); }
         }
 
         private static void Fail(string why)
@@ -205,7 +262,7 @@ namespace TelegArm.Helpers
         ///   That is not a failure and must not be logged as one.</summary>
         public static void PushTile(System.Collections.Generic.IList<Tuple<string, string>> items)
         {
-            if (!Available || _tileUpdater == null || items == null) return;
+            if (!TileAvailable || _tileUpdater == null || items == null) return;
             try
             {
                 var upd = _tTileUpd.GetMethod("Update");
@@ -233,7 +290,7 @@ namespace TelegArm.Helpers
 
         public static void ClearTile()
         {
-            if (!Available || _tileUpdater == null) return;
+            if (!TileAvailable || _tileUpdater == null) return;
             try { _tTileUpd.GetMethod("Clear").Invoke(_tileUpdater, null); } catch { }
         }
 
@@ -241,7 +298,7 @@ namespace TelegArm.Helpers
         /// everywhere). 0 clears it.</summary>
         public static void SetTileBadge(int count)
         {
-            if (!Available || _badgeUpdater == null) return;
+            if (!TileAvailable || _badgeUpdater == null) return;
             try
             {
                 string xml = count > 0 ? "<badge value='" + count + "'/>" : "<badge value='none'/>";
@@ -303,6 +360,19 @@ namespace TelegArm.Helpers
         private static IntPtr _lastOverlay = IntPtr.Zero;
         private static int _lastBadge = -1;
 
+        /// <summary>The ACCENT CHANGED, so the badge must be redrawn even though the COUNT did not.
+        /// SetTaskbarBadge short-circuits on an unchanged count — which is right, it runs on every unread
+        /// change — so a colour-only change needs this to defeat that guard. No-op before the taskbar
+        /// button exists; the TaskbarButtonCreated path paints it then.</summary>
+        public static void RefreshBadgeColour(Form form)
+        {
+            if (!_taskbarReady) return;
+            int n = _lastBadge;
+            if (n <= 0) return;
+            _lastBadge = -1;
+            SetTaskbarBadge(form, n);
+        }
+
         /// <summary>TA-28/T2 — the taskbar button now exists (first creation, or an explorer restart).
         /// Re-applies the current count, because everything sent before this was dropped on the floor.</summary>
         public static void ReapplyTaskbarBadge(Form form)
@@ -360,16 +430,21 @@ namespace TelegArm.Helpers
         /// ⚠ CLAMPED TO A SINGLE DIGIT then "9+". A taskbar overlay is roughly 16-32px across; three
         ///   characters in that space are unreadable at any DPI, so past 9 the exact number is not
         ///   information the badge can carry. The tooltip and the tray text still say the real total.
-        /// ⚠ LEGIBLE ON BOTH A LIGHT AND A DARK TASKBAR, which is INDEPENDENT of the app theme — the user
-        ///   can run a light app on a dark taskbar or the reverse. So the badge does not use the app accent:
-        ///   it is a saturated red disc with a white glyph and a white rim, which holds its contrast against
-        ///   any taskbar colour. This is one of the few places where NOT following the app theme is correct.</summary>
+        /// ⚠ ACCENT-COLOURED, with a WHITE RIM AND WHITE GLYPH — and the rim is what makes that safe.
+        ///   The taskbar's own light/dark theme is INDEPENDENT of the app theme, and an accent can be any
+        ///   colour the user picked, including one close to their taskbar. The white ring separates the
+        ///   disc from whatever sits behind it, so legibility does not depend on the accent being lucky.
+        ///   ⚠ If the accent is very pale, the white glyph inside it can still get thin — the rim keeps
+        ///     the badge VISIBLE, it cannot make a pale fill high-contrast. Worth an eye on a light accent.</summary>
         private static IntPtr BuildBadgeIcon(int count)
         {
             string text = count > 9 ? "9+" : count.ToString();
             int side = 16;
             try { side = Math.Max(16, Math.Min(GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON))); }
             catch { }
+            Color fill;
+            try { fill = ThemeHelper.GetWindowsAccentColor(); }
+            catch { fill = Color.FromArgb(0, 120, 212); }
             using (var bmp = new Bitmap(side, side))
             {
                 using (var g = Graphics.FromImage(bmp))
@@ -377,7 +452,7 @@ namespace TelegArm.Helpers
                     g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
                     g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
                     float rim = Math.Max(1f, side / 16f);
-                    using (var b = new SolidBrush(Color.FromArgb(232, 62, 62)))
+                    using (var b = new SolidBrush(fill))
                         g.FillEllipse(b, 0, 0, side - 1, side - 1);
                     using (var p = new Pen(Color.FromArgb(235, 255, 255, 255), rim))
                         g.DrawEllipse(p, rim / 2f, rim / 2f, side - 1 - rim, side - 1 - rim);
