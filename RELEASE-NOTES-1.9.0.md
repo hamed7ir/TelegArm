@@ -46,8 +46,8 @@ wrong.
 - **Master mute** — one switch silences everything, mentions included. Unread badges keep counting.
 - **Action Center entries on Windows 10/11** (see the limitation below), added silently alongside the
   window and retired when you read the chat.
-- **A live tile on Windows 8.1 / 10** showing up to five recent unread chats.
-- **A taskbar unread badge**, which works everywhere including Windows RT.
+- **A taskbar unread badge**, which works everywhere including Windows RT — and which counts only
+  chats you have **not** muted.
 - **Preview privacy**: one setting hides message text from the notification, the Action Center entry
   and the tile together.
 
@@ -98,9 +98,12 @@ Stated because you will otherwise find them yourself.
 - **The taskbar unread badge undercounts.** It sums the chats currently loaded — roughly the first
   page — so unread conversations further down the list are not counted until you scroll. The badge
   deliberately ignores muted chats.
-- **The Start tile's avatar is unverified on ARM32.** Windows 11 removed live tiles entirely, so the
-  development machine has no tile surface to test against. If images do not render on a Surface RT,
-  the tile falls back to text.
+- **There is no live tile, and there cannot be one.** It was attempted and dropped. An unpackaged
+  desktop app's Start tile is a *static shortcut tile* — Windows accepts tile updates for it and
+  silently discards them. The giveaway is that a pinned TelegArm tile offers only Small and Medium;
+  Wide and Large exist only for apps that declare them in a UWP manifest. Supporting it would require
+  packaging TelegArm as a sparse MSIX with a signing certificate, and Windows 11 has removed tiles
+  altogether. The taskbar unread badge covers the same need and works everywhere.
 - **The notification window's no-focus-steal behaviour is verified on Windows 11, not yet on 8.1.**
   If it misbehaves, Settings has a "legacy tray balloon" switch that restores the old behaviour
   without reinstalling.

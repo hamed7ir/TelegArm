@@ -88,6 +88,14 @@ namespace TelegArm
         /// <summary>STARTUP-SETTING: true when launched with "--startup" (the HKCU Run-key auto-start at login) →
         /// MainForm starts minimized to the tray (silent, Telegram-Desktop style) instead of a full window.</summary>
         internal static bool StartupLaunch;
+
+        /// <summary>BATCH-TA-37/A4 — true when COM launched us to serve a toast activation (-Embedding).
+        /// ⚠ THE ONLY THING THIS CHANGES is what happens when the single-instance mutex is NOT acquired.
+        /// Every path with -Embedding ABSENT behaves exactly as before; that is deliberate, because this
+        /// file's job is preventing two live clients on one session (AUTH_KEY_DUPLICATED), and the diff
+        /// has to make that provable by reading it.</summary>
+        internal static bool ComEmbedding;
+
         private const int ASFW_ANY = -1;
 
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
@@ -114,6 +122,10 @@ namespace TelegArm
             {
                 if (string.Equals(arg, "--restarted", StringComparison.OrdinalIgnoreCase)) restarted = true;
                 else if (string.Equals(arg, "--startup", StringComparison.OrdinalIgnoreCase)) StartupLaunch = true;   // STARTUP-SETTING
+                // BATCH-TA-37/A4a — COM passes -Embedding (or /Embedding) when it launches a LocalServer32
+                // for an activation. It means "you were started to serve a click", not "the user ran you".
+                else if (string.Equals(arg, "-Embedding", StringComparison.OrdinalIgnoreCase)
+                      || string.Equals(arg, "/Embedding", StringComparison.OrdinalIgnoreCase)) ComEmbedding = true;
             }
 
             Mutex mutex;
@@ -142,14 +154,47 @@ namespace TelegArm
 
                 if (!acquired)
                 {
+                    // ⚠ BATCH-TA-37/A4c — A COM ACTIVATION LAUNCH MUST NOT SURFACE THE WINDOW.
+                    //   COM launched us because a toast was clicked, but an instance is already running (or
+                    //   starting) and IT owns the registered class object, so IT will serve the activation.
+                    //   Broadcasting WM_ShowExisting here would raise that instance's window with NO chat
+                    //   opened — the user clicks a notification and gets the wrong thing. Exit quietly and
+                    //   let the owner deliver.
+                    //   ⚠ BUT NEVER SILENTLY: this is the exact race that makes a click do nothing, so it
+                    //     leaves a line behind. A silent return here is unanswerable from a log.
+                    if (ComEmbedding)
+                    {
+                        Helpers.Logger.Diag("[SHELL] activation dropped, instance starting — "
+                                            + "another process owns the class object; not surfacing a window");
+                        return;
+                    }
+
                     // Another instance holds the session — don't start a second Client (AUTH_KEY_DUPLICATED).
                     // Bring the existing window to the front instead of the old popup, then exit silently.
                     if (!restarted) ActivateExistingInstance();
                     return;
                 }
 
+                // ⚠ BATCH-TA-37/A4b — REGISTER THE CLASS OBJECT **HERE**, the moment the mutex is ours and
+                //   before Run() does anything heavy. When the app was launched BY a click, COM is already
+                //   blocked waiting for this registration; TelegArm's cold start does session and network
+                //   work, and registering after that races CoCreateInstance's timeout — the click would
+                //   silently do nothing.
+                //   ⚠ A7 — ShellNotify.Init() decides Available, which requires a Start-Menu shortcut
+                //     carrying our AUMID. A portable copy therefore never registers, and its existing
+                //     "[SHELL] Action Center OFF" line already explains the absence.
+                Helpers.ShellNotify.Init();
+                if (Helpers.ShellNotify.Available) Helpers.ToastActivator.Register();
+                else if (ComEmbedding)
+                    Helpers.Logger.Diag("[SHELL] launched for activation but Action Center is unavailable — "
+                                        + Helpers.ShellNotify.Reason);
+
                 try { Run(); }
-                finally { mutex.ReleaseMutex(); }
+                finally
+                {
+                    Helpers.ToastActivator.Revoke();   // A4e — never leave a class object for a dead process
+                    mutex.ReleaseMutex();
+                }
             }
         }
 
@@ -181,6 +226,14 @@ namespace TelegArm
             // traces (native load / VLC extract / fonts) are captured on RT, where DebugView can't run.
             // Default OFF: only the session header is written and no handle is held (Settings→Advanced toggles).
             try { FileLog.Init(AppSettings.Instance.FileLogging); } catch { /* logging must never block startup */ }
+
+            // ⚠ TA-37 FIX — REPLAY THE [SHELL] LINES Init() RAISED BEFORE THIS POINT.
+            //   ShellNotify.Init() runs in Main(), ahead of Run(), so COM's activation timeout is met —
+            //   but that is BEFORE the line above registers the trace tee, and Logger.Diag drops anything
+            //   raised earlier. The device showed the result: Action Center working and NOT ONE [SHELL]
+            //   line in the log, which made the live-tile question undiagnosable, because "no log line"
+            //   and "the code never ran" are indistinguishable.
+            try { Helpers.ShellNotify.ReplayLog(); } catch { }
 
             // BATCH-TA-13/W1 — tee WTelegramClient's OWN log into ours. Until now the library was a black box:
             // TA-12 established from its source (D:\repo\WTelegramClient @ telegarm/shipped-4.4.6) that a
