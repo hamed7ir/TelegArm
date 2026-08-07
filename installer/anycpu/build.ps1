@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 #  Builds the AnyCPU .NET installer (Setup.exe + payload.zip) from bin\Release.
 #
 #  WHY: an Inno Setup installer is native x86 and CANNOT run on Windows RT (ARM).
@@ -61,7 +61,11 @@ $setup = Join-Path $outdir 'Setup.exe'
 #   Windows 7 machine with only 4.0 still cannot run Setup.exe. Stated, not hidden.
 # ⚠ /nostdlib+ + explicit reference-assembly paths is what actually retargets it. Without them csc
 #   binds to the compiler's own (4.7+) assemblies and the /target switch is cosmetic.
-$refRoot = "${env:ProgramFiles(x86)}\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.5"
+# ⚠ NOT "${env:ProgramFiles(x86)}\..." — the parentheses inside ${} break the parser when it is
+#   interpolated into a string. Fetch the variable explicitly and join.
+$pf86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+if (-not $pf86) { $pf86 = $env:ProgramFiles }
+$refRoot = Join-Path $pf86 'Reference Assemblies\Microsoft\Framework\.NETFramework\v4.5'
 if (-not (Test-Path "$refRoot\mscorlib.dll")) { throw "4.5 reference assemblies not found at $refRoot — cannot retarget Setup.exe" }
 $refs = @('mscorlib','System','System.Core','System.Windows.Forms','System.Drawing',
           'System.IO.Compression','System.IO.Compression.FileSystem') |
