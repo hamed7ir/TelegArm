@@ -509,7 +509,7 @@ namespace TelegArm.UI
             ProfileRow showAll = null;
             if (items.Count > StoryPreviewMax)
             {
-                showAll = new ProfileRow(_dark, _accentColor) { Glyph = "🗂", Label = "Show all " + items.Count + " stories", Width = ContentW };
+                showAll = new ProfileRow(_dark, _accentColor) { Glyph = "▦", Label = "Show all " + items.Count + " stories", Width = ContentW };
                 showAll.Clicked += OpenStoriesGallery;
                 AddFlow(showAll, 2);
             }
@@ -817,9 +817,20 @@ namespace TelegArm.UI
         {
             if (OtherUser == null) { ThemedDialog.Show(this, "Block", "Only users can be blocked.", "OK"); return; }
             bool target = !_blocked;
-            try { await _service.SetBlockedAsync(_entry.Peer, target); }
+            bool ok;
+            try { ok = await _service.SetBlockedAsync(_entry.Peer, target); }
             catch (Exception ex) { ThemedDialog.Show(this, "Block", "Couldn't change block state: " + ex.Message, "OK"); return; }
+
+            // ⚠ TA-39 — HONOUR THE RETURN VALUE. contacts.block/unblock return Bool, and this used to
+            //   ignore it and announce success unconditionally. A request Telegram declined was
+            //   indistinguishable from one it honoured.
+            if (!ok)
+            {
+                ThemedDialog.Show(this, "Block", "Telegram did not apply that change. Nothing was altered.", "OK");
+                return;
+            }
             _blocked = target;
+            RefreshActionRows();   // the row must now read Unblock, or the next tap toggles the wrong way
             ThemedDialog.Show(this, "Block", target ? "User blocked." : "User unblocked.", "OK");
         }
 
@@ -828,13 +839,21 @@ namespace TelegArm.UI
 
         private static List<MediaCat> Categories() => new List<MediaCat>
         {
-            new MediaCat { Glyph = "🖼", Label = "Photos",         Filter = new InputMessagesFilterPhotos() },
-            new MediaCat { Glyph = "🎬", Label = "Videos",         Filter = new InputMessagesFilterVideo() },
-            new MediaCat { Glyph = "📄", Label = "Files",          Filter = new InputMessagesFilterDocument() },
-            new MediaCat { Glyph = "🎵", Label = "Audio",          Filter = new InputMessagesFilterMusic(),  ListMode = true },
-            new MediaCat { Glyph = "🔗", Label = "Shared links",   Filter = new InputMessagesFilterUrl(),    ListMode = true },
-            new MediaCat { Glyph = "🎤", Label = "Voice messages", Filter = new InputMessagesFilterVoice(),  ListMode = true },
-            new MediaCat { Glyph = "🎞", Label = "GIFs",           Filter = new InputMessagesFilterGif() },
+            // ⚠ BATCH-TA-39 — BMP GLYPHS ONLY. THE ASTRAL ONES RENDER AS TOFU BOXES ON RT 8.1.
+            //   Windows 8.1's Segoe UI Symbol covers SOME emoji above U+FFFF and not others, which is why
+            //   this looked fine on the dev box and showed empty boxes on the device for Photos (U+1F5BC),
+            //   GIFs (U+1F39E) and Delete contact (U+1F5D1), while the music note and microphone happened
+            //   to render. "It renders here" is not evidence for RT.
+            //   Everything below is now from Geometric Shapes / Misc Symbols / Dingbats (U+25xx-U+27xx),
+            //   which 8.1 covers completely. Same reasoning as the drawn header glyphs — a font glyph
+            //   renders inconsistently on RT — applied without hand-drawing seven icons.
+            new MediaCat { Glyph = "▣", Label = "Photos",         Filter = new InputMessagesFilterPhotos() },
+            new MediaCat { Glyph = "▶", Label = "Videos",         Filter = new InputMessagesFilterVideo() },
+            new MediaCat { Glyph = "▤", Label = "Files",          Filter = new InputMessagesFilterDocument() },
+            new MediaCat { Glyph = "♫", Label = "Audio",          Filter = new InputMessagesFilterMusic(),  ListMode = true },
+            new MediaCat { Glyph = "⛓", Label = "Shared links",   Filter = new InputMessagesFilterUrl(),    ListMode = true },
+            new MediaCat { Glyph = "◉", Label = "Voice messages", Filter = new InputMessagesFilterVoice(),  ListMode = true },
+            new MediaCat { Glyph = "▷", Label = "GIFs",           Filter = new InputMessagesFilterGif() },
         };
 
         private async void LoadMediaCounts()
@@ -876,14 +895,33 @@ namespace TelegArm.UI
             AddFlow(SectionLabel("ACTIONS"), 16);
             if (OtherUser != null)   // user contact → Edit/Delete + Block (Share hidden for release — RELEASE-FIXES-V11)
             {
-                AddActionRow("✏", "Edit contact", false, EditContact);
-                AddActionRow("🗑", "Delete contact", true, DeleteContact);
-                AddActionRow("🚫", _blocked ? "Unblock user" : "Block user", true, BlockUser);
+                // BMP glyphs only — see Categories() for why. U+1F5D1 (wastebasket) was a tofu box on RT.
+                AddActionRow("✎", "Edit contact", false, EditContact);
+                AddActionRow("✖", "Delete contact", true, DeleteContact);
+                _blockRow = AddActionRow("⊘", _blocked ? "Unblock user" : "Block user", true, BlockUser);
             }
             else                     // channel / group → Leave (destructive)
             {
-                AddActionRow("🚪", LeaveLabel(), true, LeaveChat);
+                AddActionRow("⇤", LeaveLabel(), true, LeaveChat);
             }
+        }
+
+        /// <summary>TA-39 — the block row, kept so its label can be corrected in place.</summary>
+        private ProfileRow _blockRow;
+
+        /// <summary>Retitles the block row after the state changes, so it reads "Unblock user" the moment
+        /// the block lands. Without it the label kept saying "Block user" and the next tap toggled the
+        /// wrong way. ⚠ Updated IN PLACE rather than rebuilding the ACTIONS section — rebuilding would
+        /// re-add its "ACTIONS" header and duplicate it.</summary>
+        private void RefreshActionRows()
+        {
+            try
+            {
+                if (_blockRow == null || _blockRow.IsDisposed) return;
+                _blockRow.Label = _blocked ? "Unblock user" : "Block user";
+                _blockRow.Invalidate();
+            }
+            catch { /* cosmetic refresh; never break the dialog */ }
         }
 
         /// <summary>"Leave channel" for a broadcast, "Leave group" for a megagroup/basic group, else "Leave".</summary>
@@ -907,11 +945,13 @@ namespace TelegArm.UI
             FinishOrRoute();   // close the profile after leaving (embedded: tell the host, stay put)
         }
 
-        private void AddActionRow(string glyph, string label, bool danger, Action action)
+        /// <summary>Returns the row so a caller can retitle it later (TA-39: the block row).</summary>
+        private ProfileRow AddActionRow(string glyph, string label, bool danger, Action action)
         {
             var row = new ProfileRow(_dark, _accentColor) { Glyph = glyph, Label = label, Danger = danger, Width = ContentW };
             row.Clicked += () => action();
             AddFlow(row, 0);
+            return row;
         }
 
         // ── Details load (status + contact/bio + counts) ─────────────────────
@@ -952,6 +992,25 @@ namespace TelegArm.UI
 
             LoadMediaCounts();
             AddBottomActions();
+
+            // ⚠ TA-39 — LOAD THE **REAL** BLOCKED STATE. `_blocked` was a plain field that started false
+            //   and was only ever written by our own toggle, so opening an already-blocked user's profile
+            //   showed "Block user"; tapping it asked Telegram to block someone already blocked, which is
+            //   a no-op the UI then reported as "User blocked." That is the other half of "blocking does
+            //   not work" — the API call was fine, the state was fiction.
+            //   Source is UserFull.flags.blocked, the same field ComposerState.Resolve trusts, so the
+            //   profile and the composer cannot disagree. Async and last: it is a network round-trip and
+            //   nothing above it should wait on it.
+            if (OtherUser != null)
+            {
+                try
+                {
+                    bool blocked = await _service.IsBlockedAsync(OtherUser);
+                    if (IsDisposed) return;
+                    if (blocked != _blocked) { _blocked = blocked; RefreshActionRows(); }
+                }
+                catch { /* leave the optimistic default; the toggle still reports the truth */ }
+            }
         }
 
         // ── Members section (PROFILE-MEMBERS) ────────────────────────────────
@@ -1043,7 +1102,7 @@ namespace TelegArm.UI
             if (totalMembers > users.Count && _entry.PeerInfo is Channel mgAll)
             {
                 var all = new ProfileRow(_dark, _accentColor)
-                { Glyph = "👥", Label = "Show all " + totalMembers.ToString("N0") + " members", Width = ContentW - 32 };
+                { Glyph = "◎", Label = "Show all " + totalMembers.ToString("N0") + " members", Width = ContentW - 32 };
                 all.Clicked += () =>
                 {
                     using (var f = new Admin.ChatMembersForm(_service, mgAll, Admin.ChatMembersForm.Mode.Members, _dark, _accentColor))
