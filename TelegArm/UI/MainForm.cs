@@ -986,6 +986,7 @@ namespace TelegArm.UI
                 Margin = new Padding(12, 10, 6, 10),
                 Enabled = false
             };
+            EnableComposerMultiline(_messageInput);   // TA-40 — or Shift+Enter has nothing to insert into
             _messageInput.KeyDown += (s, e) =>
             {
                 // ── COMPOSER SEND KEY (TA-36) ────────────────────────────────────────────────────
@@ -2016,6 +2017,18 @@ namespace TelegArm.UI
                 if (m.Msg != WM_CHAR && m.Msg != WM_UNICHAR && m.Msg != WM_IME_CHAR) return false;
                 ch = (char)(m.WParam.ToInt64() & 0xFFFF);
                 if (m.Msg == WM_CHAR && ch == (char)0x08) { isBackspace = true; return true; }   // backspace
+                // ★ BATCH-TA-41 — CARRIAGE RETURN IS AN EDITING CHAR. THIS LINE IS WHY SHIFT+ENTER
+                //   PRODUCED NOTHING ON RT WHILE WORKING PERFECTLY ON THE DEV BOX.
+                //   `\r` is 0x0D and `\n` is 0x0A — both BELOW ' ' (0x20) — so the old `ch >= ' '` test
+                //   classified Enter as "not editing" and it never entered HandleEditingChar. On the dev
+                //   box that was harmless: the message fell through to the native EDIT, which inserted the
+                //   break itself. On RT in CUAS dead mode the native EDIT inserts NOTHING for any WM_CHAR
+                //   — that is the entire reason this shim exists — so with Enter excluded from the shim,
+                //   nothing forced it and the newline was silently dropped. The next characters then
+                //   continued on the same line, which is exactly the "lines get combined" report.
+                //   ⚠ SAFE AGAINST DOUBLE-SENDING: an Enter that means SEND sets SuppressKeyPress, which
+                //     stops WM_CHAR being generated at all, so only Shift+Enter ever reaches this test.
+                if (ch == '\r' || ch == '\n') return true;
                 return ch >= ' ' && ch != (char)0x7F;                                             // printable
             }
 
@@ -2090,6 +2103,16 @@ namespace TelegArm.UI
                     string s;
                     if (char.IsLowSurrogate(ch) && _pendingHigh != '\0') { s = new string(new[] { _pendingHigh, ch }); _pendingHigh = '\0'; }
                     else if (char.IsLowSurrogate(ch)) return;                       // lone low half → drop
+                    // ⚠ TA-41 — A LINE BREAK IS "\r\n" IN A WinForms TextBox, NOT "\r". Assigning a bare
+                    //   CR to SelectedText does not produce a usable break; the control stores \r\n pairs
+                    //   and its Lines/SelectionStart maths assume them. Normalise both CR and LF to the pair.
+                    //   ⚠ AND ONLY IN A MULTILINE BOX: this same shim also carries the SEARCH field, which
+                    //     is single-line — forcing a break in there would corrupt the query rather than help.
+                    else if (ch == '\r' || ch == '\n')
+                    {
+                        if (!tb.Multiline) return;                                  // single-line target → ignore
+                        s = Environment.NewLine;
+                    }
                     else s = ch.ToString();
                     _inSelfEdit = true;
                     try { tb.SelectedText = s; }               // replaces a live selection too (standard EDIT behavior)
@@ -2372,6 +2395,52 @@ namespace TelegArm.UI
 
         /// <summary>[KBD] SEND truth: logs the composer's outer/inner text length + preview from a send entry point,
         /// so an empty send (text-capture bug) is distinguishable and a missing "button" line pinpoints a hit-test bug.</summary>
+        /// <summary>★ BATCH-TA-40 — WHY SHIFT+ENTER DID NOTHING, AND WHAT THIS FIXES.
+        ///
+        /// The composer is a <c>MaterialTextBox2</c>, and TA-36's Shift+Enter branch deliberately fell
+        /// through WITHOUT SuppressKeyPress so "the control inserts the break itself". **It cannot.**
+        /// MaterialTextBox2 derives from <c>Control</c>, not <c>TextBox</c>, and exposes no Multiline,
+        /// AcceptsReturn, WordWrap or ScrollBars at all — checked against the shipped MaterialSkin.dll.
+        /// It is a single-line control, so Enter had nothing to insert into and the keystroke evaporated.
+        /// The comment describing the intent was right; the assumption about the control was not.
+        ///
+        /// ⚠ WHY NOT SWAP TO MaterialMultiLineTextBox2, WHICH MATERIALSKIN ALSO SHIPS. Because
+        /// <c>_messageInput</c> is load-bearing: drafts, send-entities/markdown wrapping, clipboard paste,
+        /// the cue text, and above all the hard-won RT input shim (the CUAS dead-mode path) all bind to
+        /// this instance and this type. Swapping the control to gain one keystroke would put every one of
+        /// those back in play on a device that is not iterated on per batch.
+        ///
+        /// MaterialTextBox2 HOSTS a private <c>baseTextBox</c> of type <c>BaseTextBox : TextBox</c> — a
+        /// real multiline-capable TextBox. Turning multiline on THERE gives Enter something to insert into
+        /// while leaving the control's type, painting and every binding untouched.
+        /// ⚠ Reflection is the only route: the field is private and there is no property for it. It is
+        ///   guarded — if a future MaterialSkin renames it, Shift+Enter degrades to doing nothing again,
+        ///   which is exactly today's behaviour and not a crash.</summary>
+        private static void EnableComposerMultiline(Control materialTextBox2)
+        {
+            try
+            {
+                var f = materialTextBox2.GetType().GetField("baseTextBox",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                // ⚠ Cast to TextBox, not TextBoxBase: AcceptsReturn and ScrollBars are declared on TextBox.
+                //   BaseTextBox derives from TextBox, so this is the real type, not a widening guess.
+                var inner = f?.GetValue(materialTextBox2) as TextBox;
+                if (inner == null) { Logger.Diag("[COMPOSER] multiline OFF — baseTextBox not found"); return; }
+                inner.Multiline = true;
+                inner.AcceptsReturn = true;    // without this Enter goes to the form's AcceptButton, not the text
+                inner.WordWrap = true;
+                // ⚠ TA-41 — NO SCROLLBAR, AND THAT IS DELIBERATE. I set ScrollBars.Vertical here in TA-40
+                //   and it painted a WHITE native Win32 bar in the composer — the SAME trap already fixed
+                //   in the emoji category strip: a native scrollbar cannot be themed, and Win10/11 hides
+                //   the problem because its system bar is already dark.
+                //   ScrollBars.None does not cost scrolling: a multiline TextBox still scrolls to keep the
+                //   caret visible as you type or arrow through it. The bar was only ever decoration, and an
+                //   unthemeable white one is worse than none.
+                inner.ScrollBars = ScrollBars.None;
+            }
+            catch (Exception ex) { Logger.Diag("[COMPOSER] multiline OFF — " + ex.Message); }
+        }
+
         /// <summary>Does this Enter keypress mean SEND, under the user's chosen mode?
         /// ⚠ The modifier must be EXACT: in Enter mode, Ctrl+Enter must NOT send, or someone who switched
         /// back from Ctrl mode has their muscle memory firing messages silently. An unrecognised stored
