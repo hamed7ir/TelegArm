@@ -1,4 +1,4 @@
-// =============================================================================
+﻿// =============================================================================
 //  TelegArm AnyCPU installer  (Setup.cs)
 //
 //  A .NET Framework 4.7 AnyCPU/MSIL installer, so it runs on Windows RT 8.1 (ARM32)
@@ -50,7 +50,7 @@ namespace TelegArmSetup
         //   RT 8.1 both ship 4.5 in-box, so the RT vehicle is unaffected.
         private const int Net47Release = 460798;   // 4.7 RTM on Windows 10 1703; every later 4.x is higher
 
-        private static bool HasNet47(out int found)
+        internal static bool HasNet47(out int found)
         {
             found = 0;
             try
@@ -71,7 +71,7 @@ namespace TelegArmSetup
         /// <summary>⚠ THE DOWNLOAD POINTER MUST MATCH THE ARCHITECTURE. Microsoft's web installer does
         /// NOT serve ARM32 — pointing an RT user at it hands them a file that cannot run, which is worse
         /// than no link. The Open-RT mirror carries the ARM32 redistributables.</summary>
-        private static string RuntimeHelpText(int found)
+        internal static string RuntimeHelpText(int found)
         {
             bool arm = false;
             try
@@ -429,7 +429,7 @@ namespace TelegArmSetup
     {
         private readonly TextBox _path;
         private readonly CheckBox _desktop;
-        private readonly Button _install, _cancel, _browse;
+        private readonly Button _install, _cancel, _browse, _check;
         private readonly Label _status;
         private readonly ProgressBar _bar;
         private static readonly Color Accent = Color.FromArgb(198, 24, 124);
@@ -454,6 +454,37 @@ namespace TelegArmSetup
             _browse = new Button { Left = 378, Top = 108, Width = 84, Height = 26, Text = "Browse..." };
             _browse.Click += (s, e) => { using (var d = new FolderBrowserDialog()) { try { d.SelectedPath = _path.Text; } catch { } if (d.ShowDialog(this) == DialogResult.OK) _path.Text = Path.Combine(d.SelectedPath, Program.AppName); } };
             _desktop = new CheckBox { Left = 18, Top = 148, Width = 300, Text = "Create a desktop shortcut", Checked = true };
+
+            // BATCH-TA-35 — a "Check requirements" button the user can press BEFORE committing to an
+            // install. The check already runs automatically on Install, but that only ever speaks up to
+            // REFUSE; there was no way to ask "will this work on my machine?" and get a yes. On a device
+            // like the Surface RT — where getting the runtime is a manual trip to a mirror — being able to
+            // confirm it first, without starting an install, is the difference between a two-minute check
+            // and a failed install you have to reason backwards from.
+            _check = new Button { Left = 18, Top = 178, Width = 150, Height = 26, Text = "Check requirements" };
+            _check.Click += (s, e) =>
+            {
+                int found;
+                bool ok = Program.HasNet47(out found);
+                if (ok)
+                {
+                    _status.ForeColor = Color.FromArgb(0, 128, 0);
+                    _status.Text = "Ready to install — .NET Framework "
+                                 + (found >= 528040 ? "4.8" : found >= 461808 ? "4.7.2" : "4.7")
+                                 + " detected (release " + found + ").";
+                }
+                else
+                {
+                    _status.ForeColor = Color.FromArgb(176, 0, 0);
+                    _status.Text = found > 0
+                        ? "Missing .NET Framework 4.7 — this PC has release " + found + "."
+                        : "Missing .NET Framework 4 — see the details.";
+                    // The full explanation, including the ARCHITECTURE-APPROPRIATE download pointer.
+                    MessageBox.Show(this, Program.RuntimeHelpText(found),
+                                    Program.AppName + " — requirements",
+                                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+            };
             _status = new Label { Left = 18, Top = 194, Width = 444, Height = 18, ForeColor = Color.Gray, Text = "" };
             _bar = new ProgressBar { Left = 18, Top = 216, Width = 444, Height = 14, Style = ProgressBarStyle.Marquee, Visible = false, MarqueeAnimationSpeed = 30 };
             _install = new Button { Left = 300, Top = 256, Width = 84, Height = 28, Text = "Install" };
@@ -462,7 +493,7 @@ namespace TelegArmSetup
             _cancel.Click += (s, e) => Close();
 
             Controls.Add(header);
-            Controls.Add(lbl); Controls.Add(_path); Controls.Add(_browse); Controls.Add(_desktop);
+            Controls.Add(lbl); Controls.Add(_path); Controls.Add(_browse); Controls.Add(_desktop); Controls.Add(_check);
             Controls.Add(_status); Controls.Add(_bar); Controls.Add(_install); Controls.Add(_cancel);
             AcceptButton = _install; CancelButton = _cancel;
         }
