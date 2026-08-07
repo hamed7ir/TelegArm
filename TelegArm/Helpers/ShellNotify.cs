@@ -63,6 +63,70 @@ namespace TelegArm.Helpers
         /// <summary>Why <see cref="Available"/> is false, for the log and nothing else.</summary>
         public static string Reason { get; private set; }
 
+        [ComImport, Guid("00021401-0000-0000-C000-000000000046")] private class CShellLink { }
+
+        [ComImport, InterfaceType(ComInterfaceType.InterfaceIsIUnknown), Guid("0000010b-0000-0000-C000-000000000046")]
+        private interface IPersistFile
+        {
+            void GetClassID(out Guid pClassID);
+            [PreserveSig] int IsDirty();
+            void Load([MarshalAs(UnmanagedType.LPWStr)] string f, int mode);
+            void Save([MarshalAs(UnmanagedType.LPWStr)] string f, [MarshalAs(UnmanagedType.Bool)] bool remember);
+            void SaveCompleted([MarshalAs(UnmanagedType.LPWStr)] string f);
+            void GetCurFile([MarshalAs(UnmanagedType.LPWStr)] out string f);
+        }
+
+        [StructLayout(LayoutKind.Sequential)] private struct PROPERTYKEY { public Guid fmtid; public int pid; }
+        [StructLayout(LayoutKind.Sequential)]
+        private struct PROPVARIANT { public ushort vt; public ushort r1, r2, r3; public IntPtr p; public IntPtr pad; }
+
+        [ComImport, InterfaceType(ComInterfaceType.InterfaceIsIUnknown), Guid("886d8eeb-8cf2-4446-8d02-cdba1dbdcf99")]
+        private interface IPropertyStore
+        {
+            void GetCount(out uint c);
+            void GetAt(uint i, out PROPERTYKEY k);
+            void GetValue(ref PROPERTYKEY k, out PROPVARIANT v);
+            void SetValue(ref PROPERTYKEY k, ref PROPVARIANT v);
+            void Commit();
+        }
+
+        /// <summary>Is there a Start-Menu shortcut whose AppUserModelID is ours? Checks the per-user and
+        /// machine-wide Programs folders, which are the ONLY places Windows indexes for app identity.
+        /// Cheap: a handful of .lnk reads, once per launch, and only for files named after the app.</summary>
+        private static bool HasRegisteredShortcut()
+        {
+            try
+            {
+                foreach (var root in new[] { Environment.GetFolderPath(Environment.SpecialFolder.Programs),
+                                             Environment.GetFolderPath(Environment.SpecialFolder.CommonPrograms) })
+                {
+                    if (string.IsNullOrEmpty(root) || !System.IO.Directory.Exists(root)) continue;
+                    foreach (var lnk in System.IO.Directory.GetFiles(root, "TelegArm*.lnk",
+                                                                     System.IO.SearchOption.AllDirectories))
+                    {
+                        if (string.Equals(ReadShortcutAumid(lnk), Aumid, StringComparison.OrdinalIgnoreCase))
+                            return true;
+                    }
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        private static string ReadShortcutAumid(string lnkPath)
+        {
+            try
+            {
+                var link = new CShellLink();
+                ((IPersistFile)link).Load(lnkPath, 0);
+                var key = new PROPERTYKEY { fmtid = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"), pid = 5 };
+                PROPVARIANT v;
+                ((IPropertyStore)link).GetValue(ref key, out v);
+                return v.p == IntPtr.Zero ? null : Marshal.PtrToStringUni(v.p);
+            }
+            catch { return null; }
+        }
+
         private static Type WinRT(string name)
         {
             try { return Type.GetType(name + ", Windows, ContentType=WindowsRuntime", false); }
@@ -79,9 +143,32 @@ namespace TelegArm.Helpers
             _init = true;
             try
             {
-                // The AUMID is set even when WinRT is unavailable: it also controls taskbar grouping, and
-                // it is what a future shortcut would have to match.
-                SetCurrentProcessExplicitAppUserModelID(Aumid);
+                // ══ ⚠⚠ ONLY CLAIM THE AUMID IF A START-MENU SHORTCUT ACTUALLY CARRIES IT ══════════
+                // SetCurrentProcessExplicitAppUserModelID does NOT only affect notifications: Windows
+                // resolves the TASKBAR ICON (and grouping, and pinning) through the AUMID. Claiming an
+                // identity that no shortcut backs means Windows cannot find an icon for it and falls back
+                // to a GENERIC one — which is exactly what happened to the portable build in v1.9.0, where
+                // TelegArm's taskbar icon turned into a blank document.
+                //
+                // ⚠ AND THIS IS WHY THE CHECK IS THE RIGHT SHAPE FOR A DELETED SHORTCUT. It is not
+                //   "read the icon from the shortcut" — it is "do not claim an identity that is not
+                //   registered". If the user deletes the shortcut, the next launch simply does not claim
+                //   the AUMID, and the icon reverts to the exe's own. The icon can never be left broken.
+                //
+                // ⚠ A SHORTCUT IN THE APP'S OWN FOLDER WOULD NOT WORK. Windows only indexes the Start-Menu
+                //   locations for app identity; a .lnk anywhere else is never scanned and registers nothing.
+                if (HasRegisteredShortcut())
+                {
+                    SetCurrentProcessExplicitAppUserModelID(Aumid);
+                }
+                else
+                {
+                    Logger.Diag("[SHELL] AUMID NOT claimed — no Start-Menu shortcut carries \"" + Aumid
+                                + "\". Taskbar icon stays the exe's own; Action Center and tile are off. "
+                                + "This is the normal portable/uninstalled state.");
+                    Reason = "no Start-Menu shortcut";
+                    return;   // nothing below can work without the identity
+                }
 
                 _tXml = WinRT("Windows.Data.Xml.Dom.XmlDocument");
 

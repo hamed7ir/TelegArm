@@ -977,11 +977,29 @@ namespace TelegArm.UI
             };
             _messageInput.KeyDown += (s, e) =>
             {
-                if (e.KeyCode == Keys.Enter)
+                // ── COMPOSER SEND KEY (TA-36) ────────────────────────────────────────────────────
+                // ⚠ SHIFT+ENTER IS ALWAYS A NEWLINE, in every mode. It is the one convention every chat
+                //   client shares; a setting that changed it would be a trap, not a preference. Falling
+                //   through without SuppressKeyPress lets the multiline TextBox insert the break itself,
+                //   which is what makes the caret and undo behave normally.
+                if (e.KeyCode == Keys.Enter && e.Shift) { /* newline — let the control handle it */ }
+                else if (e.KeyCode == Keys.Enter && SendKeyPressed(e))
                 {
                     SendPathLog("enter");
-                    e.SuppressKeyPress = true;
+                    e.SuppressKeyPress = true;   // eat it, or the TextBox also inserts a newline
                     SendCurrentMessage();
+                }
+                else if (e.KeyCode == Keys.Enter)
+                {
+                    // A non-sending Enter in Ctrl/Alt mode: an ordinary newline.
+                }
+                // ── PASTE A FILE OR IMAGE INTO THE COMPOSER (TA-36) ──────────────────────────────
+                // ⚠ ONLY swallowed when the clipboard actually holds a file or a bitmap. Ctrl+V with TEXT
+                //   must keep pasting text — checking the clipboard FIRST and falling through otherwise is
+                //   what stops this hijacking ordinary paste.
+                else if (e.Control && e.KeyCode == Keys.V && TryPasteAttachment())
+                {
+                    e.SuppressKeyPress = true;
                 }
                 // SEND-ENTITIES: desktop formatting shortcuts — wrap the selection in the markdown marker that
                 // becomes a MessageEntity on send (Ctrl+B bold, Ctrl+I italic, Ctrl+K link).
@@ -2343,6 +2361,21 @@ namespace TelegArm.UI
 
         /// <summary>[KBD] SEND truth: logs the composer's outer/inner text length + preview from a send entry point,
         /// so an empty send (text-capture bug) is distinguishable and a missing "button" line pinpoints a hit-test bug.</summary>
+        /// <summary>Does this Enter keypress mean SEND, under the user's chosen mode?
+        /// ⚠ The modifier must be EXACT: in Enter mode, Ctrl+Enter must NOT send, or someone who switched
+        /// back from Ctrl mode has their muscle memory firing messages silently. An unrecognised stored
+        /// value falls back to plain Enter — the default — rather than leaving the composer unable to
+        /// send at all, which is what a strict enum parse would have done to a hand-edited settings file.</summary>
+        private static bool SendKeyPressed(KeyEventArgs e)
+        {
+            switch (AppSettings.Instance.SendKey)
+            {
+                case "CtrlEnter": return e.Control && !e.Alt;
+                case "AltEnter": return e.Alt && !e.Control;
+                default: return !e.Control && !e.Alt;   // "Enter"
+            }
+        }
+
         private void SendPathLog(string via)
         {
             try
@@ -13506,6 +13539,56 @@ namespace TelegArm.UI
             if (_selectedChat == null || !e.Data.GetDataPresent(DataFormats.FileDrop)) return;
             if (e.Data.GetData(DataFormats.FileDrop) is string[] paths && paths.Length > 0)
                 OnFilesDropped(paths);
+        }
+
+        /// <summary>BATCH-TA-36 — Ctrl+V in the composer with a FILE or an IMAGE on the clipboard opens the
+        /// same upload dialog a drag-and-drop does, so the user still chooses whether and how to send.
+        /// Returns false for anything else (text, nothing) so ordinary paste is untouched.
+        ///
+        /// ⚠ IT REUSES OnFilesDropped RATHER THAN SENDING ANYTHING ITSELF. That path already owns the
+        ///   optimistic bubbles, the album grouping, the progress tokens and the failure handling; a second
+        ///   send path would be a second set of those bugs. A pasted bitmap is written to a temp PNG first,
+        ///   because the dialog works in file paths — CopyFromScreen-style clipboard images have no path.
+        /// ⚠ Clipboard access is wrapped: it is shared machine state and another app holding it open makes
+        ///   these calls throw, which must never take the composer down.</summary>
+        private bool TryPasteAttachment()
+        {
+            if (_selectedChat == null || _service?.Client == null) return false;
+            try
+            {
+                // 1. Real files copied in Explorer — the common case, and the cheapest to detect.
+                if (Clipboard.ContainsFileDropList())
+                {
+                    var list = Clipboard.GetFileDropList();
+                    var paths = new List<string>();
+                    foreach (string p in list)
+                        if (!string.IsNullOrEmpty(p) && System.IO.File.Exists(p)) paths.Add(p);
+                    if (paths.Count > 0) { OnFilesDropped(paths.ToArray()); return true; }
+                    return false;   // a folder-only drop list: nothing we can upload
+                }
+
+                // 2. A bitmap (screenshot, "copy image" from a browser). Materialise it as a PNG so the
+                //    dialog has a path to work with, in the app's own temp area.
+                if (Clipboard.ContainsImage())
+                {
+                    using (var img = Clipboard.GetImage())
+                    {
+                        if (img == null) return false;
+                        string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "TelegArm-paste");
+                        System.IO.Directory.CreateDirectory(dir);
+                        string file = System.IO.Path.Combine(dir,
+                            "pasted-" + DateTime.Now.ToString("yyyyMMdd-HHmmss-fff") + ".png");
+                        img.Save(file, System.Drawing.Imaging.ImageFormat.Png);
+                        OnFilesDropped(new[] { file });
+                        return true;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                if (LogOn) System.Diagnostics.Debug.WriteLine("[PASTE] attachment paste failed: " + ex.Message);
+            }
+            return false;   // text or nothing → let the TextBox paste normally
         }
 
         private void OnFilesDropped(string[] paths)

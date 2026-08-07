@@ -69,7 +69,14 @@ namespace TelegArm.UI.Controls
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
 
-            int d = Math.Min(Width, Height) - 4;
+            // ⚠ THE DISC IS SMALLER THAN THE CONTROL, AND THAT IS THE WHOLE POINT.
+            //   The control is 40x40 to match MicButton's CELL, but the neighbours draw thin LINE ART
+            //   inside that cell — a filled disc spanning the same 36px reads far heavier than a mic or a
+            //   paperclip outline and made the composer look unbalanced. 30px is the filled-shape
+            //   equivalent of their optical weight: the ink stops well short of the cell edge, the way
+            //   theirs does. Same lesson as the header glyph box (TA-24) — matching the BOX is not the
+            //   same as matching the WEIGHT.
+            int d = Math.Min(30, Math.Min(Width, Height) - 6);
             var disc = new Rectangle((Width - d) / 2, (Height - d) / 2, d, d);
             Color accent = ThemeHelper.GetWindowsAccentColor();
 
