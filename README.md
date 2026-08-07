@@ -1,4 +1,5 @@
 # TelegArm
+<img width="1366" height="768" alt="te" src="https://github.com/user-attachments/assets/46279785-a7f0-4d54-8f87-00184b12107b" />
 
 A lightweight, **pure-managed C# Telegram client** built to run on **jailbroken Windows RT 8.1**
 and **Windows 10 ARM32** — hardware the official Telegram apps abandoned. It talks MTProto
