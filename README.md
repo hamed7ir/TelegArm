@@ -15,6 +15,22 @@ runs everywhere from a Surface RT to a modern x64 desktop.
 
 One `AnyCPU + Prefer32Bit` binary covers all of the above (32-bit process on every arch).
 
+## Requirements — .NET Framework 4.7
+
+TelegArm needs **.NET Framework 4.7 or later** on the device. Without it the app will not start, and
+Windows' own error message never says why.
+
+- **Windows RT 8.1 (Surface / Surface 2)** — RT ships with .NET 4.5, so **you must install 4.7 first**:
+  **https://go.microsoft.com/fwlink/?linkid=2088632**
+- **Windows 10 ARM32** — already has it. **No action needed.**
+- **Windows 8.1 / 10 / 11 (x86 / x64 / ARM64)** — usually already present; install from the link above
+  if TelegArm refuses to start.
+
+The installer checks for 4.7 before installing and stops with an explanation if it is missing, rather
+than installing something that cannot run — and there is a **Check requirements** button you can press
+first. The portable build cannot perform that check (it is itself compiled against 4.7, so it fails
+before any of its own code runs), so install .NET first if you are using it.
+
 ## Features
 
 - Phone + 2FA login with silent session resume; QR login; multiple accounts
