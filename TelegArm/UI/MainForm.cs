@@ -2793,6 +2793,7 @@ namespace TelegArm.UI
             // fires on accent changes that do not raise ThemeChanged, which is exactly the gap the magnifier
             // has and the reason its hover tint goes stale.
             if (_sendButton != null) _sendButton.Invalidate();
+            ShellNotify.RefreshBadgeColour(this);   // TA-35: the taskbar badge is accent-coloured now
             if (_attachButton != null) _attachButton.Invalidate(); // self-themes from ThemeHelper
             if (_footerBar != null) { _footerBar.AccentColor = _accent; _footerBar.IsDark = _dark; _footerBar.Invalidate(); }
             if (_threadJoinBar != null) { _threadJoinBar.AccentColor = _accent; _threadJoinBar.IsDark = _dark; _threadJoinBar.Invalidate(); }
