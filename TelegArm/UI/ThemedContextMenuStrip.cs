@@ -136,7 +136,7 @@ namespace TelegArm.UI
             if (t.Contains("forward"))                  return "➡️";
             if (t.Contains("copy link") || t.Contains("copy url")) return "🔗";
             if (t.Contains("copy"))                     return "📋";
-            if (t.Contains("delete"))                   return "🗑️";
+            if (t.Contains("delete"))                   return "✖";
             if (t.Contains("unpin") || t.Contains("pin")) return "📌";
             if (t.Contains("edit"))                     return "✏️";
             if (t.Contains("select"))                   return "✅";
@@ -150,7 +150,7 @@ namespace TelegArm.UI
             if (t.Contains("unread"))                   return "🔵";
             if (t.Contains("clear"))                    return "🧹";
             if (t.Contains("reveal") || t.Contains("folder")) return "📁";
-            if (t.Contains("photo") || t.Contains("image") || t.Contains("file")) return "🖼️";
+            if (t.Contains("photo") || t.Contains("image") || t.Contains("file")) return "▣";
             if (t.Contains("round video") || t.Contains("video")) return "🎥";
             if (t.Contains("poll"))                     return "📊";
             if (t.Contains("react"))                    return "😊";

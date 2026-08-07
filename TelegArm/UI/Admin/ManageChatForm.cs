@@ -35,7 +35,7 @@ namespace TelegArm.UI.Admin
 
             int y = 10;
             Row(scroll, ref y, "✏   Edit info", () => Open(new EditChatInfoForm(service, channel, peer, title, about, dark, accent)));
-            Row(scroll, ref y, "👥   Members", () => Open(new ChatMembersForm(service, channel, ChatMembersForm.Mode.Members, dark, accent)));
+            Row(scroll, ref y, "◎   Members", () => Open(new ChatMembersForm(service, channel, ChatMembersForm.Mode.Members, dark, accent)));
             Row(scroll, ref y, "⭐   Administrators", () => Open(new ChatMembersForm(service, channel, ChatMembersForm.Mode.Admins, dark, accent)));
             if (isMega)
                 Row(scroll, ref y, "🔒   Default permissions", async () => await DefaultPermsForm.OpenAsync(this, service, peer, channel.default_banned_rights, dark, accent));
