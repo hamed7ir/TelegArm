@@ -38,6 +38,15 @@ namespace TelegArm.Core
         /// it is checked before either is chosen.</summary>
         public bool EnableNotifications { get; set; } = true;
 
+        /// <summary>How the composer sends. "Enter" (default) = Enter sends, Shift+Enter newline.
+        /// "CtrlEnter" = Ctrl+Enter sends, Enter newline. "AltEnter" = Alt+Enter sends, Enter newline.
+        ///
+        /// ⚠ SHIFT+ENTER IS *ALWAYS* A NEWLINE, in every mode — it is the one convention every chat app
+        /// shares, and a mode where it did something else would be a trap rather than a preference.
+        /// Stored as a string rather than an enum so an unrecognised value from a hand-edited or
+        /// newer settings.json degrades to the default instead of throwing on deserialize.</summary>
+        public string SendKey { get; set; } = "Enter";
+
         /// <summary>BATCH-TA-33/L6 — show MESSAGE TEXT in notifications and on the Start tile, or only who
         /// sent it. Off means the notification window, the Action Center entry and the tile all read
         /// "Alice Morgan · 3 new messages" instead of the message body.

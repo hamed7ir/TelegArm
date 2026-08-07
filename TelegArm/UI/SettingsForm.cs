@@ -268,6 +268,28 @@ namespace TelegArm.UI
             _notifications = RowSwitch(notif, 0, s.EnableNotifications);
             RowClickable(notif, 0, () => _notifications.Flip());   // UI-FIX-T1: whole row flips the switch (touch)
 
+            // ── COMPOSER (TA-36) — which key sends ──────────────────────────────────────────────
+            // Applied LIVE (the composer reads AppSettings on each keypress), so no restart note here —
+            // unlike the layout options below, which are decided once at build time.
+            y = SectionLabel(p, "COMPOSER", y);
+            var composerCard = Card(p, y, 1); y += composerCard.Height + SecGap;
+            RowTitle(composerCard, 0, "Send message with",
+                     "Shift+Enter is always a new line, whichever you pick");
+            var sendSeg = new Segmented3
+            {
+                Options = new[] { "Enter", "Ctrl+Enter", "Alt+Enter" },
+                Accent = _accent, IsDark = ThemeHelper.IsDark, Size = new Size(230, 30)
+            };
+            int sendIdx = s.SendKey == "CtrlEnter" ? 1 : s.SendKey == "AltEnter" ? 2 : 0;
+            sendSeg.SetSelected(sendIdx, false);
+            sendSeg.Applied = sendSeg.Selected;
+            sendSeg.SelectionChanged += idx =>
+            {
+                s.SendKey = idx == 1 ? "CtrlEnter" : idx == 2 ? "AltEnter" : "Enter";
+                s.Save();
+            };
+            PlaceRight(composerCard, 0, sendSeg);
+
             // FOLDER-SIDEBAR: folder navigation style — tabs (default) or a side rail. Restart-apply (the
             // layout is decided once at BuildLeftPanel), same pattern as composited scroll / proportional scaling.
             y = SectionLabel(p, "LAYOUT", y);
