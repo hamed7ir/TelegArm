@@ -2964,7 +2964,7 @@ namespace TelegArm.UI
             rows.Add(Row("➕", "Add Account", AddAccount));
             rows.Add(Sep());
             rows.Add(Row("👤", "My Profile", ShowProfile));
-            rows.Add(Row("👥", "New Group", NewGroup));
+            rows.Add(Row("◎", "New Group", NewGroup));
             rows.Add(Row("📢", "New Channel", NewChannel));
             rows.Add(Row("📇", "Contacts", OpenContacts));
             // RELEASE-FIXES-V11 (H2): "Calls" hidden for release (parked for a later version — don't ship a "coming soon" dead item).
@@ -3785,7 +3785,7 @@ namespace TelegArm.UI
         {
             if (_selectedChat == null) { OpenAttachmentDialog(); return; }
             var menu = new ThemedContextMenuStrip();
-            AddMenuItem(menu, "🖼   Photo or File", () => OpenAttachmentDialog());
+            AddMenuItem(menu, "▣   Photo or File", () => OpenAttachmentDialog());
             AddMenuItem(menu, "⏺   Round Video", () => OpenRoundRecorder());
             AddMenuItem(menu, "📊   Create Poll", () => OpenCreatePoll());
             menu.Show(_attachButton, new Point(0, -menu.PreferredSize.Height));
@@ -6843,10 +6843,10 @@ namespace TelegArm.UI
 
             // ⚠ BATCH-TA-20/S0c — SAVED MESSAGES IS NOT A CHAT YOU CAN LEAVE OR DELETE.
             // It is an InputPeerUser of YOURSELF, so without this guard it inherited the private-chat menu
-            // and offered "🗑 Delete chat" on your own saved notes. The same flag is what future entries
+            // and offered "✖ Delete chat" on your own saved notes. The same flag is what future entries
             // (Block, TA-19/S3) must consult — the check belongs to the context, not to each entry.
             if (!c.IsSelf)
-                AddMenuItem(menu, "🗑   " + (c.IsUser ? "Delete chat" : LeaveLabelFor(entry)),
+                AddMenuItem(menu, "✖   " + (c.IsUser ? "Delete chat" : LeaveLabelFor(entry)),
                     () => DeleteOrLeaveChat(entry));
         }
 
@@ -12865,7 +12865,7 @@ namespace TelegArm.UI
                     AddMenuItem(menu, "💾   Save", () => { var _ = SaveMediaAsync(msg); });
                     AddMenuItem(menu, "📁   Reveal in folder", () => RevealMedia(msg));
                 }
-                AddMenuItem(menu, "🗑   Delete", () => DeleteMessage(ctl, msg));
+                AddMenuItem(menu, "✖   Delete", () => DeleteMessage(ctl, msg));
             }
 
             if (menu.Items.Count == 0) { menu.Dispose(); return; }
@@ -13833,7 +13833,7 @@ namespace TelegArm.UI
             var attrs = doc.attributes ?? new DocumentAttribute[0];
 
             if (attrs.Any(a => a is DocumentAttributeSticker)) return "🎭 Sticker";
-            if (attrs.Any(a => a is DocumentAttributeAnimated)) return "🎞 GIF";
+            if (attrs.Any(a => a is DocumentAttributeAnimated)) return "▷ GIF";
 
             var audio = attrs.OfType<DocumentAttributeAudio>().FirstOrDefault();
             if (audio != null)
