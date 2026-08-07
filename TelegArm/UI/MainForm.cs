@@ -122,7 +122,7 @@ namespace TelegArm.UI
         // stays: it's used ONLY by the [KBD] diagnostics (HookKbdDiag), never to change the composer's font.
         private static readonly System.Reflection.FieldInfo _baseTextBoxField =
             typeof(MaterialTextBox2).GetField("baseTextBox", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-        private MaterialButton _sendButton;
+        private UI.Controls.SendButton _sendButton;   // TA-34/A: was a MaterialButton labelled "Send"
         private TableLayoutPanel _rightLayout;
         // FORUM-TOPICS: the topic chip bar (chat-panel row 4), shown only for forum groups; chips reuse FolderTabItem so
         // they match the folder tabs (theme/accent/selected-bubble) and recolor live by rebuild on theme change.
@@ -1011,12 +1011,11 @@ namespace TelegArm.UI
             fmtMenu.Items.Add("Paste").Click += (s, e) => PasteIntoComposer();
             _messageInput.ContextMenuStrip = fmtMenu;
 
-            _sendButton = new MaterialButton
+            // TA-34/A — a round accent disc with a drawn paper-plane, sized and centred exactly like the
+            // mic/emoji/attach buttons beside it (Anchor.None, 40x40 from the control itself).
+            _sendButton = new UI.Controls.SendButton
             {
-                Text = "Send",
-                Dock = DockStyle.Fill,
-                Margin = new Padding(0, 14, 12, 14),
-                Type = MaterialButton.MaterialButtonType.Contained,
+                Anchor = AnchorStyles.None,
                 Enabled = false
             };
             _sendButton.Click += (s, e) => { SendPathLog("button"); if (_voiceState == VoiceState.Ready) SendPendingVoice(); else SendCurrentMessage(); };
@@ -2789,6 +2788,11 @@ namespace TelegArm.UI
             // itself via ThemeHelper.ThemeChanged, but its ROWS were built with the old colours.)
             DropDockProfile();
             if (_dockTabs != null) { SetDockPane(_dockPane); _dockTabs.Invalidate(); }   // accent underline + labels
+            // TA-34/A4 — repaint the send disc on a live accent change. It reads ThemeHelper in OnPaint, so
+            // it has no baked-in colour to re-assert, but it must still be told to redraw: RefreshThemedControls
+            // fires on accent changes that do not raise ThemeChanged, which is exactly the gap the magnifier
+            // has and the reason its hover tint goes stale.
+            if (_sendButton != null) _sendButton.Invalidate();
             if (_attachButton != null) _attachButton.Invalidate(); // self-themes from ThemeHelper
             if (_footerBar != null) { _footerBar.AccentColor = _accent; _footerBar.IsDark = _dark; _footerBar.Invalidate(); }
             if (_threadJoinBar != null) { _threadJoinBar.AccentColor = _accent; _threadJoinBar.IsDark = _dark; _threadJoinBar.Invalidate(); }
@@ -10719,6 +10723,16 @@ namespace TelegArm.UI
 
         protected override void WndProc(ref System.Windows.Forms.Message m)
         {
+            // BATCH-TA-28/T2 — the shell has (re)created our taskbar button. Anything we sent to
+            // SetOverlayIcon before this point was silently discarded, and this fires AGAIN after an
+            // explorer.exe restart — so without re-applying here the badge disappears for the rest of the
+            // session the first time explorer crashes or is restarted.
+            if (m.Msg == ShellNotify.WM_TaskbarButtonCreated)
+            {
+                ShellNotify.ReapplyTaskbarBadge(this);
+                base.WndProc(ref m);
+                return;
+            }
             if (m.Msg == WM_ACTIVATEAPP)
             {
                 bool active = m.WParam != IntPtr.Zero;   // wParam != 0 → app activated; 0 → app backgrounded
@@ -13825,8 +13839,25 @@ namespace TelegArm.UI
             //   TASKBAR badge depend on a tray icon it has nothing to do with — the same shape of mistake
             //   TA-27 fixed in the notify gate. The unread total is computed unconditionally now, and only
             //   the tray-specific lines stay behind the guard.
-            int unread = 0;
-            foreach (var c in _allChats) unread += Math.Max(0, c.UnreadCount);
+            // ⚠ TWO TOTALS, AND THEY ARE DIFFERENT ON PURPOSE (BATCH-TA-28/T4).
+            //   `unread`        — every unread message. What the tray tooltip has always shown; unchanged.
+            //   `unreadLoud`    — unread in chats the user has NOT muted. What the BADGE and the TILE show.
+            // A badge is a demand for attention, so counting chats the user explicitly silenced would be
+            // the badge arguing with a decision they already made — the same reasoning as the notify gate.
+            // ⚠ THE RESOLVER IS ComputeEffectiveMuted, the one the ROW BELL ICON uses, deliberately. The
+            //   notify gate uses TelegramService.IsPeerEffectivelyMuted, and TA-26 kept both on purpose
+            //   (that one fails CLOSED for a gate; this one reads the UI's own list). For a COUNT the right
+            //   answer is the one the user can SEE: a badge that disagrees with the visible bell icons is
+            //   the actual bug. Same resolver as the tile, so those two can never disagree either.
+            // ⚠ AND THE NUMBER IS STILL ONLY AS COMPLETE AS `_allChats` (TA-28/T1) — see UpdateStartTile.
+            int unread = 0, unreadLoud = 0;
+            foreach (var c in _allChats)
+            {
+                int n = Math.Max(0, c.UnreadCount);
+                if (n == 0) continue;
+                unread += n;
+                if (!ComputeEffectiveMuted(c)) unreadLoud += n;
+            }
 
             // ── TA-33 — THE BADGE ON THE ICON ───────────────────────────────────────────────────
             // ⚠ DRIVEN FROM THE UNREAD TOTAL, **NOT** FROM THE NOTIFY EMIT PATH, AND THAT IS DELIBERATE.
@@ -13835,9 +13866,9 @@ namespace TelegArm.UI
             //   mute, a muted chat, a `silent` message or a suppressed backlog all silently desynced the
             //   badge from reality, and the user would find a count that disagrees with the chat list.
             //   This is the same "do not interrupt me" vs "do not tell me" line N4 draws.
-            ShellNotify.SetTaskbarBadge(this, unread);   // works on RT 8.1, Win7 and Win11 — no AUMID needed
-            ShellNotify.SetTileBadge(unread);            // Start tile only; no-op without a shortcut
-            UpdateStartTile(unread);
+            ShellNotify.SetTaskbarBadge(this, unreadLoud);   // RT 8.1 / Win7 / Win11 — no AUMID needed
+            ShellNotify.SetTileBadge(unreadLoud);            // Start tile only; no-op without a shortcut
+            UpdateStartTile(unreadLoud);
 
             if (_notifyIcon == null) return;
             _notifyIcon.Text = unread > 0 ? "TelegArm — " + unread + " unread" : "TelegArm";
@@ -13862,12 +13893,12 @@ namespace TelegArm.UI
         ///   <see cref="AppSettings.NotificationPreviews"/> — the notification setting — rather than adding a
         ///   second switch, because "who may read my messages over my shoulder" is one question, and two
         ///   toggles that answer it differently is a privacy bug waiting to happen.</summary>
-        private void UpdateStartTile(int unread)
+        private void UpdateStartTile(int unreadLoud)
         {
             if (!ShellNotify.Available) return;   // no tile surface / no shortcut → nothing to do
             try
             {
-                if (unread <= 0) { ShellNotify.ClearTile(); return; }
+                if (unreadLoud <= 0) { ShellNotify.ClearTile(); return; }
                 bool previews = AppSettings.Instance.NotificationPreviews;
                 var items = new List<Tuple<string, string>>();
                 foreach (var c in _allChats)

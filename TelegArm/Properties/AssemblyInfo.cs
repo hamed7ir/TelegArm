@@ -32,5 +32,8 @@ using System.Runtime.InteropServices;
 // You can specify all the values or you can default the Build and Revision Numbers
 // by using the '*' as shown below:
 // [assembly: AssemblyVersion("1.0.*")]
-[assembly: AssemblyVersion("1.1.0.0")]
-[assembly: AssemblyFileVersion("1.1.0.0")]
+// v1.9.0 (BATCH-TA-34/D1). THE source of truth: Program.Version reads it, TelegramService reports it to
+// Telegram as app_version, and installer/anycpu/build.ps1 derives the package name from the built exe's
+// FileVersion. ⚠ ONE hardcoded copy still exists — Setup.cs's AppVersion — and must be bumped with this.
+[assembly: AssemblyVersion("1.9.0.0")]
+[assembly: AssemblyFileVersion("1.9.0.0")]
