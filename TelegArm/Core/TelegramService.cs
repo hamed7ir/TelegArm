@@ -1942,8 +1942,33 @@ namespace TelegArm.Core
                    });
 
         /// <summary>Blocks/unblocks a user (contacts.block / contacts.unblock).</summary>
-        public Task SetBlockedAsync(InputPeer peer, bool blocked)
-            => blocked ? (Task)Client.Contacts_Block(peer) : Client.Contacts_Unblock(peer);
+        /// <summary>Blocks or unblocks a peer, and RETURNS WHETHER TELEGRAM ACTUALLY DID IT.
+        ///
+        /// ⚠ BATCH-TA-39 — THIS USED TO RETURN `Task` AND THROW THE ANSWER AWAY:
+        ///     => blocked ? (Task)Client.Contacts_Block(peer) : Client.Contacts_Unblock(peer);
+        ///   `contacts.block` and `contacts.unblock` return **Bool**, not void (checked against the shipped
+        ///   WTelegramClient.dll, rail R8: `Contacts_Block(Client, InputPeer id, bool my_stories_from = opt)`
+        ///   → `Task&lt;bool&gt;`). Casting to the non-generic Task awaited completion and DISCARDED the
+        ///   result, so a request Telegram declined looked identical to one it honoured, and the caller
+        ///   cheerfully reported "User blocked." That is half of why blocking appeared not to work.</summary>
+        public Task<bool> SetBlockedAsync(InputPeer peer, bool blocked)
+            => blocked ? Client.Contacts_Block(peer) : Client.Contacts_Unblock(peer);
+
+        /// <summary>TA-39 — the AUTHORITATIVE blocked state for a user, from `UserFull.flags.blocked`.
+        /// ProfileForm previously kept a plain bool that started false and was only ever written by its own
+        /// toggle, so an already-blocked user showed "Block user" and clicking it was a no-op the UI still
+        /// reported as success. This is the same field ComposerState.Resolve already trusts, so the profile
+        /// and the composer can no longer disagree about whether someone is blocked.</summary>
+        public async Task<bool> IsBlockedAsync(User u)
+        {
+            if (u == null) return false;
+            try
+            {
+                var full = await GetUserFullAsync(u).ConfigureAwait(false);
+                return full != null && (full.flags & UserFull.Flags.blocked) != 0;
+            }
+            catch { return false; }
+        }
 
         /// <summary>Renames a saved contact. contacts.addContact re-adds the EXISTING user (matched by id) with new
         /// names → Telegram treats it as an edit. Reuses the contact's known phone; the optional note /

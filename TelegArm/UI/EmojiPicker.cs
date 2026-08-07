@@ -113,12 +113,28 @@ namespace TelegArm.UI
         {
             _emojiPanel = new Panel { Dock = DockStyle.Fill, BackColor = BackColor, Visible = false };
 
-            var catBar = new FlowLayoutPanel
+            // ⚠ BATCH-TA-39 — THE CATEGORY STRIP USES THE **STICKER PACK BAR'S** SHAPE, NOT A PLAIN
+            //   FlowLayoutPanel. It was `new FlowLayoutPanel { AutoScroll = true }` + ScrollbarTheme.Apply,
+            //   and on Windows 8.1 that showed a WHITE native scrollbar under the categories while the
+            //   sticker strip beside it looked right.
+            //   WHY: AutoScroll on an ordinary panel creates a NATIVE Win32 scrollbar, and
+            //   ScrollbarTheme.Apply cannot repaint one — on Win10/11 the system bar happens to be dark
+            //   already, which is why this only showed up on the device. NoNativeScrollFlowPanel
+            //   SUPPRESSES the native bar so an owner-drawn ThemedScrollBar can be docked instead, which
+            //   is exactly what BuildStickerTab does with _stickerPackBar + packHost.
+            //   Same construction here, so the two strips cannot diverge again.
+            var catBar = new Controls.NoNativeScrollFlowPanel
             {
-                Dock = DockStyle.Bottom, Height = 40, WrapContents = false, AutoScroll = true,
+                Dock = DockStyle.Fill, WrapContents = false, AutoScroll = true,
                 BackColor = _dark ? Color.FromArgb(34, 34, 37) : Color.FromArgb(236, 236, 240), Padding = new Padding(4, 3, 4, 0)
             };
-            ScrollbarTheme.Apply(catBar, _dark);
+            var catHost = new Panel
+            {
+                Dock = DockStyle.Bottom, Height = 48,
+                BackColor = catBar.BackColor
+            };
+            catHost.Controls.Add(catBar);   // Fill added first → docks last, taking the remainder
+            catHost.Controls.Add(new Controls.ThemedScrollBar(catBar, _dark, _accent, horizontal: true) { Dock = DockStyle.Bottom });
 
             var host = new Controls.NoNativeScrollPanel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = BackColor };
             ScrollbarTheme.Apply(host, _dark);
@@ -156,7 +172,7 @@ namespace TelegArm.UI
             }
 
             _emojiPanel.Controls.Add(host);     // Fill (add first → docks last)
-            _emojiPanel.Controls.Add(catBar);   // Bottom
+            _emojiPanel.Controls.Add(catHost);   // Bottom — the strip plus its owner-drawn scrollbar
             AddScrollbar(_emojiPanel, host);    // Right
             Controls.Add(_emojiPanel);
             TelegArm.UI.Controls.TouchScroller.Enable(host, horizontal: false);      // finger-pan the emoji grid (RT touch)
