@@ -453,7 +453,10 @@ namespace TelegArmSetup
             _path = new TextBox { Left = 18, Top = 110, Width = 350, Text = Program.DefaultDir() };
             _browse = new Button { Left = 378, Top = 108, Width = 84, Height = 26, Text = "Browse..." };
             _browse.Click += (s, e) => { using (var d = new FolderBrowserDialog()) { try { d.SelectedPath = _path.Text; } catch { } if (d.ShowDialog(this) == DialogResult.OK) _path.Text = Path.Combine(d.SelectedPath, Program.AppName); } };
-            _desktop = new CheckBox { Left = 18, Top = 148, Width = 300, Text = "Create a desktop shortcut", Checked = true };
+            // Width trimmed 300 -> 280 so it cannot collide with the Check-requirements button now sharing
+            // this row (which starts at x=312). The checkbox's text is far shorter than either width, but
+            // an overlapping hit-test region steals clicks even when nothing looks wrong.
+            _desktop = new CheckBox { Left = 18, Top = 148, Width = 280, Text = "Create a desktop shortcut", Checked = true };
 
             // BATCH-TA-35 — a "Check requirements" button the user can press BEFORE committing to an
             // install. The check already runs automatically on Install, but that only ever speaks up to
@@ -461,7 +464,12 @@ namespace TelegArmSetup
             // like the Surface RT — where getting the runtime is a manual trip to a mirror — being able to
             // confirm it first, without starting an install, is the difference between a two-minute check
             // and a failed install you have to reason backwards from.
-            _check = new Button { Left = 18, Top = 178, Width = 150, Height = 26, Text = "Check requirements" };
+            // ⚠ POSITION MATTERS HERE, AND THE FIRST CUT WAS WRONG. At Top=178 with Height=26 this button
+            //   ran to y=204, while _status sits at Top=194 — a 10 px overlap that painted the button over
+            //   the status text. It now shares the desktop-shortcut ROW instead (that row's right half is
+            //   empty), right-aligned to 462 so its edge lines up with the Browse button above it, and
+            //   nothing below has to move.
+            _check = new Button { Left = 312, Top = 145, Width = 150, Height = 26, Text = "Check requirements" };
             _check.Click += (s, e) =>
             {
                 int found;
