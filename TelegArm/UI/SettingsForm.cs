@@ -1251,22 +1251,25 @@ namespace TelegArm.UI
 
         private void OnOk(object sender, EventArgs e)
         {
-            var s = AppSettings.Instance;
-            s.AutoDownloadPhotos = _photos.Checked;
-            s.AutoDownloadVideos = _videos.Checked;
-            s.AutoDownloadDocuments = _documents.Checked;
-            s.AutoDownloadVoice = _voice.Checked;
-            s.AutoDownloadAudio = _audio.Checked;
-            s.AutoDownloadGifs = _gifs.Checked;
-            s.AutoPlayGifs = _autoPlayGifs.Checked;
-            s.AnimateWebmStickers = _animateWebm.Checked;
-            s.EnableNotifications = _notifications.Checked;
-            s.MaxAutoDownloadSizeMB = (int)_maxSize.Value;
-            // BATCH-TA-3/D2 — VALIDATE ON SET, not only when the daily job runs. MediaCacheFolder is free text
-            // and the prune recurses AllDirectories, so a folder that is / contains / sits inside the accounts
-            // root would put a delete sweep next to session files. The prune refuses such a target at run time
-            // too, but refusing it HERE means the bad value never reaches settings.json in the first place, and
-            // the user finds out while they are looking at the field rather than silently a day later.
+            // ══ BATCH-TA-34/B1 — VALIDATE **BEFORE** MUTATING ANYTHING ═══════════════════════════
+            // ⚠ THIS BLOCK USED TO LIVE ~10 LINES LOWER, AND THAT WAS A REAL BUG. Ten settings were
+            //   assigned into AppSettings.Instance — the LIVE singleton every reader consults — and only
+            //   THEN was the cache folder validated. On the refusal path the method returned before
+            //   s.Save(), so every one of those ten changes took effect immediately and then SILENTLY
+            //   REVERTED on the next launch. The user changed a setting, watched it work, and lost it.
+            //   The old comment there said "nothing saved", which is what hid it: nothing was written to
+            //   DISK, but the singleton was already mutated.
+            // ⚠ REORDERING IS THE FIX, NOT A SNAPSHOT-AND-ROLLBACK. This validation reads only
+            //   _cacheBox.Text, so it has no dependency on the assignments below — moving it up is
+            //   sufficient and leaves nothing to get wrong. A rollback path would have to enumerate the
+            //   same ten fields and stay in sync with them forever; the eleventh setting someone adds is
+            //   the one they would forget. Validate first, mutate once, and there is no window to undo.
+            //   ⚠ KEEP IT THAT WAY: any future validation belongs ABOVE the assignments too.
+            // (Original rationale, BATCH-TA-3/D2 — VALIDATE ON SET, not only when the daily job runs.
+            //  MediaCacheFolder is free text and the prune recurses AllDirectories, so a folder that is /
+            //  contains / sits inside the accounts root would put a delete sweep next to session files.
+            //  Refusing it HERE means the bad value never reaches settings.json in the first place, and the
+            //  user finds out while they are looking at the field rather than silently a day later.)
             string wantCache = _cacheBox.Text.Trim();
             string cacheRefusal = MediaCache.PruneRefusalReason(wantCache);
             // "does not exist" is not a reason to reject — EnsureFolder below creates it. Only overlap is fatal.
@@ -1278,15 +1281,23 @@ namespace TelegArm.UI
                     "TelegArm deletes old files from this folder, so it must not overlap where your account " +
                     "sessions are stored. Pick a dedicated folder (the default is a \"Cache\" folder).",
                     "TelegArm — cache folder", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                // ⚠ "nothing saved" WAS WRONG AND IS CORRECTED HERE (TA-32, comment only — no behaviour
-                //   change, the bug below is out of this batch's scope). Nothing is written to DISK, but the
-                //   ten assignments above (lines 1255-1264) have ALREADY mutated AppSettings.Instance, which
-                //   is the live singleton every reader consults. So on this path a settings change — master
-                //   mute included — takes effect immediately and then silently REVERTS on the next launch.
-                //   Whoever fixes it: snapshot the singleton before assigning, or validate before mutating.
-                return;   // not persisted; the dialog stays open on the offending value
+                return;   // NOTHING has been touched yet — in memory or on disk. The dialog stays open.
             }
 
+            var s = AppSettings.Instance;
+            s.AutoDownloadPhotos = _photos.Checked;
+            s.AutoDownloadVideos = _videos.Checked;
+            s.AutoDownloadDocuments = _documents.Checked;
+            s.AutoDownloadVoice = _voice.Checked;
+            s.AutoDownloadAudio = _audio.Checked;
+            s.AutoDownloadGifs = _gifs.Checked;
+            s.AutoPlayGifs = _autoPlayGifs.Checked;
+            s.AnimateWebmStickers = _animateWebm.Checked;
+            s.EnableNotifications = _notifications.Checked;
+            s.MaxAutoDownloadSizeMB = (int)_maxSize.Value;
+            // B2 — the cache folder was validated and accepted ABOVE, before any of these assignments ran,
+            // so by the time we reach here every path leads to s.Save(). There is no longer a return
+            // between the first mutation and the persist.
             s.MediaCacheFolder = wantCache;
             s.DefaultSaveFolder = _saveBox.Text.Trim();
             s.MediaCacheRetentionDays = (int)_retention.Value;

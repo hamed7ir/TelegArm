@@ -286,11 +286,34 @@ namespace TelegArm.Helpers
         private class CTaskbarList { }
 
         [DllImport("user32.dll")] private static extern bool DestroyIcon(IntPtr hIcon);
+        [DllImport("user32.dll")] private static extern int GetSystemMetrics(int nIndex);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int RegisterWindowMessage(string lpString);
+
+        private const int SM_CXSMICON = 49, SM_CYSMICON = 50;
+
+        /// <summary>BATCH-TA-28/T2 — the shell posts this to every top-level window when the taskbar BUTTON
+        /// is created. ⚠ SetOverlayIcon BEFORE it arrives is a SILENT NO-OP, and it fires AGAIN after an
+        /// explorer.exe restart — so a badge applied only on unread-change vanishes when explorer restarts
+        /// and never comes back. MainForm.WndProc watches for it and calls <see cref="ReapplyTaskbarBadge"/>.</summary>
+        public static readonly int WM_TaskbarButtonCreated = RegisterWindowMessage("TaskbarButtonCreated");
 
         private static ITaskbarList3 _taskbar;
-        private static bool _taskbarTried;
+        private static bool _taskbarTried, _taskbarReady;
         private static IntPtr _lastOverlay = IntPtr.Zero;
         private static int _lastBadge = -1;
+
+        /// <summary>TA-28/T2 — the taskbar button now exists (first creation, or an explorer restart).
+        /// Re-applies the current count, because everything sent before this was dropped on the floor.</summary>
+        public static void ReapplyTaskbarBadge(Form form)
+        {
+            _taskbarReady = true;
+            int n = _lastBadge;
+            _lastBadge = -1;              // defeat the no-change short-circuit; this is a forced repaint
+            _lastOverlay = IntPtr.Zero;   // explorer took our old icon down with it; do not destroy a stale handle
+            if (n > 0) SetTaskbarBadge(form, n);
+            Logger.Diag("[SHELL] taskbar button created — badge re-applied (" + Math.Max(0, n) + ")");
+        }
 
         /// <summary>Paints an unread count onto the taskbar button. 0 removes it.
         /// Cheap-guarded: repainting the same number every time the unread total is recomputed would
@@ -310,9 +333,17 @@ namespace TelegArm.Helpers
                 }
                 if (_taskbar == null) return;
 
+                // TA-28/T2 — before the taskbar button exists the call is a silent no-op, so remember the
+                // number and let ReapplyTaskbarBadge paint it when the shell says the button is ready.
+                if (!_taskbarReady) return;
+
                 IntPtr icon = count > 0 ? BuildBadgeIcon(count) : IntPtr.Zero;
-                _taskbar.SetOverlayIcon(form.Handle, icon,
-                                        count > 0 ? count + " unread" : null);
+                // TA-28/T2 — the description is what a SCREEN READER announces, so it is a sentence, not a
+                // number: "3 unread conversations" tells you what the overlay means; "3" does not.
+                string say = count <= 0 ? null
+                           : count == 1 ? "1 unread conversation"
+                           : count + " unread conversations";
+                _taskbar.SetOverlayIcon(form.Handle, icon, say);
                 // ⚠ The shell COPIES the icon, so ours must be destroyed or every recount leaks a GDI
                 //   handle — on a long session that is thousands.
                 if (_lastOverlay != IntPtr.Zero) DestroyIcon(_lastOverlay);
@@ -321,25 +352,39 @@ namespace TelegArm.Helpers
             catch (Exception ex) { Logger.Diag("[SHELL] taskbar badge failed: " + ex.Message); }
         }
 
-        /// <summary>A filled accent circle with the count, ">99" past three digits. 16x16 is the overlay
-        /// size the shell asks for at 100%; it scales it for higher DPI itself.</summary>
+        /// <summary>BATCH-TA-28/T3 — a filled circle with the count.
+        ///
+        /// ⚠ SIZED FROM SM_CXSMICON, NOT A HARDCODED 16. The overlay is a small icon, and the small-icon
+        ///   metric is what actually scales with DPI — 16 is only correct at 100%, and at 200% a 16px icon
+        ///   is upscaled by the shell into a blurry smear. Asking the system costs one call.
+        /// ⚠ CLAMPED TO A SINGLE DIGIT then "9+". A taskbar overlay is roughly 16-32px across; three
+        ///   characters in that space are unreadable at any DPI, so past 9 the exact number is not
+        ///   information the badge can carry. The tooltip and the tray text still say the real total.
+        /// ⚠ LEGIBLE ON BOTH A LIGHT AND A DARK TASKBAR, which is INDEPENDENT of the app theme — the user
+        ///   can run a light app on a dark taskbar or the reverse. So the badge does not use the app accent:
+        ///   it is a saturated red disc with a white glyph and a white rim, which holds its contrast against
+        ///   any taskbar colour. This is one of the few places where NOT following the app theme is correct.</summary>
         private static IntPtr BuildBadgeIcon(int count)
         {
-            string text = count > 99 ? "99+" : count.ToString();
-            using (var bmp = new Bitmap(16, 16))
+            string text = count > 9 ? "9+" : count.ToString();
+            int side = 16;
+            try { side = Math.Max(16, Math.Min(GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON))); }
+            catch { }
+            using (var bmp = new Bitmap(side, side))
             {
                 using (var g = Graphics.FromImage(bmp))
                 {
                     g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
                     g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
+                    float rim = Math.Max(1f, side / 16f);
                     using (var b = new SolidBrush(Color.FromArgb(232, 62, 62)))
-                        g.FillEllipse(b, 0, 0, 15, 15);
-                    using (var p = new Pen(Color.FromArgb(230, 255, 255, 255), 1f))
-                        g.DrawEllipse(p, 0.5f, 0.5f, 14.5f, 14.5f);
-                    float size = text.Length >= 3 ? 6.5f : text.Length == 2 ? 8f : 9.5f;
+                        g.FillEllipse(b, 0, 0, side - 1, side - 1);
+                    using (var p = new Pen(Color.FromArgb(235, 255, 255, 255), rim))
+                        g.DrawEllipse(p, rim / 2f, rim / 2f, side - 1 - rim, side - 1 - rim);
+                    float size = (text.Length == 2 ? 0.58f : 0.68f) * side;
                     using (var f = new Font("Segoe UI", size, FontStyle.Bold, GraphicsUnit.Pixel))
                     using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
-                        g.DrawString(text, f, Brushes.White, new RectangleF(0, 0, 16, 16), sf);
+                        g.DrawString(text, f, Brushes.White, new RectangleF(0, 0, side, side), sf);
                 }
                 return bmp.GetHicon();
             }

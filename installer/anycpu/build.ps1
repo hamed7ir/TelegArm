@@ -50,10 +50,28 @@ Remove-Item $stage -Recurse -Force
 
 # 2. Compile Setup.exe as AnyCPU (MSIL -> runs on RT + x86/x64).
 $setup = Join-Path $outdir 'Setup.exe'
-& $csc /nologo /target:winexe /platform:anycpu "/out:$setup" "/win32icon:$icon" "/resource:$icon,TelegArmSetup.icon.ico" `
-    /reference:System.dll /reference:System.Windows.Forms.dll /reference:System.Drawing.dll `
-    /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll "$here\Setup.cs"
+# BATCH-TA-34/C1 — COMPILE Setup.exe AGAINST .NET 4.5, NOT 4.7.
+# ⚠ THIS IS WHAT MAKES THE PREREQUISITE CHECK POSSIBLE AT ALL. An installer built against the very
+#   runtime it is checking for cannot start on a machine that lacks it, so the user gets the same
+#   cryptic Windows dialog the check exists to replace. Building against a LOWER surface means
+#   Setup.exe runs, detects the missing 4.7, and explains — no native bootstrapper needed.
+# ⚠ 4.5 IS THE FLOOR, NOT 4.0: Setup.cs uses ZipArchive (System.IO.Compression), which is 4.5+.
+#   Dropping to 4.0 would mean hand-rolling zip extraction, which is not worth it — Windows 8 and
+#   Windows RT 8.1 both ship 4.5 in-box, so the RT ship vehicle is unaffected. Residual gap: a
+#   Windows 7 machine with only 4.0 still cannot run Setup.exe. Stated, not hidden.
+# ⚠ /nostdlib+ + explicit reference-assembly paths is what actually retargets it. Without them csc
+#   binds to the compiler's own (4.7+) assemblies and the /target switch is cosmetic.
+$refRoot = "${env:ProgramFiles(x86)}\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.5"
+if (-not (Test-Path "$refRoot\mscorlib.dll")) { throw "4.5 reference assemblies not found at $refRoot — cannot retarget Setup.exe" }
+$refs = @('mscorlib','System','System.Core','System.Windows.Forms','System.Drawing',
+          'System.IO.Compression','System.IO.Compression.FileSystem') |
+        ForEach-Object { "/reference:$refRoot\$_.dll" }
+
+& $csc /nologo /target:winexe /platform:anycpu /nostdlib+ /langversion:5 `
+    "/out:$setup" "/win32icon:$icon" "/resource:$icon,TelegArmSetup.icon.ico" `
+    $refs "$here\Setup.cs"
 if ($LASTEXITCODE -ne 0) { throw "csc failed ($LASTEXITCODE)" }
+Write-Host "  Setup.exe compiled against .NET 4.5 reference assemblies (prerequisite check can run)" -ForegroundColor DarkGray
 
 # 3. Package the RT-runnable distributable (Setup.exe + payload.zip must travel together).
 $dist = Join-Path $root "installer\Output\TelegArm-$ver-Setup-AnyCPU.zip"

@@ -33,10 +33,79 @@ namespace TelegArmSetup
     internal static class Program
     {
         internal const string AppName = "TelegArm";
-        internal const string AppVersion = "1.1.0";
+        // ⚠ A SECOND COPY OF THE VERSION. The app's real source is TelegArm/Properties/AssemblyInfo.cs;
+        //   this one is hardcoded because Setup.exe is compiled separately and has no reference to the app.
+        //   Bump BOTH or the installer's Add/Remove entry disagrees with the binary it installed.
+        internal const string AppVersion = "1.9.0";
         internal const string Publisher = "Hamed (hamed7ir)";
         internal const string PayloadName = "payload.zip";
         internal const string UninstallKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\TelegArm";
+
+        // ══ BATCH-TA-34/C2 — .NET 4.7 PREREQUISITE CHECK ═══════════════════════════════════════
+        // TelegArm targets .NET Framework 4.7 (rail R1). Without it the app fails to start with a
+        // Windows dialog that never says "install .NET" — so the installer has to say it instead.
+        // ⚠ THIS ONLY WORKS BECAUSE Setup.exe IS COMPILED AGAINST 4.5, NOT 4.7 (see build.ps1). An
+        //   installer targeting the runtime it is checking for cannot run to deliver the message. 4.5
+        //   is the floor rather than 4.0 because Setup.cs uses ZipArchive, which is 4.5+; Windows 8 and
+        //   RT 8.1 both ship 4.5 in-box, so the RT vehicle is unaffected.
+        private const int Net47Release = 460798;   // 4.7 RTM on Windows 10 1703; every later 4.x is higher
+
+        private static bool HasNet47(out int found)
+        {
+            found = 0;
+            try
+            {
+                using (var k = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
+                           @"SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full"))
+                {
+                    if (k == null) return false;
+                    object v = k.GetValue("Release");
+                    if (v == null) return false;
+                    found = Convert.ToInt32(v);
+                    return found >= Net47Release;
+                }
+            }
+            catch { return true; }   // ⚠ FAIL OPEN: a registry we cannot read must not block an install
+        }
+
+        /// <summary>⚠ THE DOWNLOAD POINTER MUST MATCH THE ARCHITECTURE. Microsoft's web installer does
+        /// NOT serve ARM32 — pointing an RT user at it hands them a file that cannot run, which is worse
+        /// than no link. The Open-RT mirror carries the ARM32 redistributables.</summary>
+        private static string RuntimeHelpText(int found)
+        {
+            bool arm = false;
+            try
+            {
+                string a = Environment.GetEnvironmentVariable("PROCESSOR_ARCHITECTURE") ?? "";
+                string w = Environment.GetEnvironmentVariable("PROCESSOR_ARCHITEW6432") ?? "";
+                arm = a.IndexOf("ARM", StringComparison.OrdinalIgnoreCase) >= 0
+                   || w.IndexOf("ARM", StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+            catch { }
+
+            return "TelegArm needs the Microsoft .NET Framework 4.7 or later.\r\n\r\n"
+                 + (found > 0 ? "This PC has an older 4.x (release " + found + ").\r\n\r\n"
+                              : "This PC does not have .NET Framework 4 installed.\r\n\r\n")
+                 + (arm
+                    ? "For Windows RT / ARM32, get it from the Open-RT mirror:\r\n"
+                      + "    https://files.open-rt.party/Software/Redistributables/\r\n\r\n"
+                      + "Microsoft's own web installer does NOT provide an ARM32 build, so do not use it."
+                    : "Download it from Microsoft:\r\n"
+                      + "    https://dotnet.microsoft.com/download/dotnet-framework")
+                 + "\r\n\r\nInstall it, then run this setup again.";
+        }
+
+        /// <summary>Returns true when setup may proceed. Shows the explanation and refuses otherwise.</summary>
+        private static bool RequireRuntime(bool silent)
+        {
+            int found;
+            if (HasNet47(out found)) return true;
+            string msg = RuntimeHelpText(found);
+            if (silent) Console.Error.WriteLine(msg);
+            else MessageBox.Show(msg, "TelegArm — .NET Framework 4.7 required",
+                                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return false;
+        }
 
         [STAThread]
         private static int Main(string[] args)
@@ -50,10 +119,17 @@ namespace TelegArmSetup
                 }
                 if (args.Length >= 1 && Eq(args[0], "--silent"))
                 {
+                    // C2 — refuse rather than install something that cannot start. Exit code 2 so a
+                    // scripted caller can tell "missing runtime" from a real failure.
+                    if (!RequireRuntime(true)) return 2;
                     string dir = args.Length >= 2 ? args[1] : DefaultDir();
                     Installer.Install(dir, true, null);
                     return 0;
                 }
+
+                // ⚠ AFTER the uninstall branch, deliberately: removing TelegArm must keep working on a
+                //   machine whose runtime was uninstalled first. Only INSTALLING needs the prerequisite.
+                if (!RequireRuntime(false)) return 2;
 
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
