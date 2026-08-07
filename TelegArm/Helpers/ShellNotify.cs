@@ -35,6 +35,29 @@ namespace TelegArm.Helpers
         /// then delivers nothing. Shaped after the existing publisher/product identifiers.</summary>
         public const string Aumid = "hamed7ir.TelegArm";
 
+        /// <summary>★ BATCH-TA-37/T2 — THE LIVE TILE IS OFF, AND IT CANNOT BE MADE TO WORK FROM HERE.
+        ///
+        /// ⚠ DO NOT FLIP THIS TO true EXPECTING A TILE. The code below is correct and the API calls all
+        ///   SUCCEED — that is exactly what made this so slow to diagnose. Windows accepts every tile
+        ///   update for our AUMID and then DISCARDS it, because an unpackaged Win32 app's Start tile is a
+        ///   STATIC SHORTCUT TILE that renders the app icon, not a notification surface.
+        ///
+        /// THE PROOF, from the RT 8.1 device: a pinned TelegArm tile offers only **Small and Medium**.
+        /// Wide and Large are missing, and those sizes exist only when an app declares them in a UWP
+        /// manifest. Windows was telling us the tile is a desktop-shortcut tile the whole time.
+        ///
+        /// WHAT IT WOULD ACTUALLY TAKE: package identity — a sparse MSIX package (Windows 10 1809+) with
+        /// a signing certificate, or a full Desktop Bridge conversion. `SecondaryTile` is not a way round
+        /// it: RequestCreateAsync also requires package identity, so a "create the tile" setting cannot
+        /// work either. And Windows 11 removed tiles entirely, so the entire feature would serve only
+        /// 8.1/10.
+        ///
+        /// EVERY LINE IS KEPT (T1) so the decision is reversible if TelegArm is ever packaged — flipping
+        /// this one flag is then the whole change. Until then it stays off so no work is done per unread
+        /// recompute. The TASKBAR BADGE carries unread-at-a-glance instead, needs no AUMID, and works on
+        /// RT, Windows 7 and Windows 11 alike.</summary>
+        private const bool TilePushEnabled = false;
+
         [DllImport("shell32.dll")]
         private static extern int SetCurrentProcessExplicitAppUserModelID([MarshalAs(UnmanagedType.LPWStr)] string appID);
 
@@ -163,7 +186,7 @@ namespace TelegArm.Helpers
                 }
                 else
                 {
-                    Logger.Diag("[SHELL] AUMID NOT claimed — no Start-Menu shortcut carries \"" + Aumid
+                    Say("[SHELL] AUMID NOT claimed — no Start-Menu shortcut carries \"" + Aumid
                                 + "\". Taskbar icon stays the exe's own; Action Center and tile are off. "
                                 + "This is the normal portable/uninstalled state.");
                     Reason = "no Start-Menu shortcut";
@@ -206,21 +229,27 @@ namespace TelegArm.Helpers
                 //   invented one — so it proves nothing. Reading .Setting is what throws 0x80070490 when no
                 //   Start-Menu shortcut carries the AUMID. Measured: unregistered AUMIDs throw here,
                 //   registered ones return Enabled. This is the whole of A6's diagnosis, in one property.
-                string setting;
+                // ⚠⚠ `Setting` IS A DIAGNOSTIC, **NEVER A GATE**. THIS WAS THE ACTION CENTER BUG.
+                //   ToastNotifier.Setting throws 0x80070490 for an UNPACKAGED desktop app even when
+                //   delivery works perfectly — it is not a statement about whether Show() will succeed.
+                //   Earlier code treated the throw as "not registered" and set Available = false, which
+                //   disabled Action Center on every machine, permanently, and made it look like Windows
+                //   was rejecting us.
+                //   MEASURED after a real install (AUMID + ToastActivatorCLSID on the shortcut,
+                //   LocalServer32 written): Setting THREW 0x80070490 and, in the same session,
+                //   Show() succeeded and ToastNotificationHistory.GetHistory(aumid) returned the entry.
+                //   Delivery is the only thing that proves delivery. Log the value, gate on nothing.
+                string setting = "(unavailable)";
                 try { setting = _notifier.GetType().GetProperty("Setting").GetValue(_notifier, null).ToString(); }
                 catch (Exception ex)
                 {
-                    Fail("no Start-Menu shortcut carries AUMID \"" + Aumid + "\" (hr=0x"
-                         + Marshal.GetHRForException(ex.InnerException ?? ex).ToString("X8")
-                         + ") — running portable/uninstalled, so NO Action Center entry and NO tile. The"
-                         + " notification WINDOW is unaffected.");
-                    return;
+                    setting = "unreadable hr=0x" + Marshal.GetHRForException(ex.InnerException ?? ex).ToString("X8")
+                            + " (normal for an unpackaged app — NOT a failure)";
                 }
-                if (setting != "Enabled") { Fail("Windows reports notifications " + setting + " for this app"); return; }
 
                 Available = true;
-                Logger.Diag("[SHELL] Action Center ON aumid=" + Aumid + " setting=" + setting
-                            + " tile=" + (_tileUpdater != null) + " badge=" + (_badgeUpdater != null));
+                Say("[SHELL] Action Center ON aumid=" + Aumid + " setting=" + setting
+                            + " tilePush=" + TileAvailable + " badge=" + (_badgeUpdater != null));
             }
             catch (Exception ex) { Fail("init threw: " + ex.Message); }
         }
@@ -238,31 +267,28 @@ namespace TelegArm.Helpers
                 _tBadgeMgr = WinRT("Windows.UI.Notifications.BadgeUpdateManager");
                 _tBadgeNotif = WinRT("Windows.UI.Notifications.BadgeNotification");
                 if (_tXml == null || _tTileMgr == null || _tTileUpd == null || _tTileNotif == null)
-                { Logger.Diag("[SHELL] tile OFF — WinRT tile types absent (pre-Windows 8)"); return; }
+                { Say("[SHELL] tile OFF — WinRT tile types absent (pre-Windows 8)"); return; }
 
                 // ⚠ AUMID overload only — the parameterless form assumes package identity and throws.
                 var mk = _tTileMgr.GetMethod("CreateTileUpdaterForApplication",
                     BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(string) }, null);
-                if (mk == null) { Logger.Diag("[SHELL] tile OFF — no AUMID overload"); return; }
+                if (mk == null) { Say("[SHELL] tile OFF — no AUMID overload"); return; }
                 _tileUpdater = mk.Invoke(null, new object[] { Aumid });
 
                 // Same registration signal as ToastNotifier.Setting: it throws 0x80070490 when no
                 // Start-Menu shortcut carries the AUMID. If the property is absent on this OS, proceed —
                 // a tile push that fails is caught and harmless, whereas refusing to try would disable
                 // the feature on a platform we simply could not interrogate.
-                var setting = _tileUpdater.GetType().GetProperty("Setting");
-                if (setting != null)
+                // ⚠ SAME CORRECTION AS THE TOAST PATH: TileUpdater.Setting is a DIAGNOSTIC, not a gate.
+                //   It throws 0x80070490 for an unpackaged app whether or not updates would be delivered,
+                //   and bailing on that throw disabled the tile exactly the way it disabled Action Center.
+                //   Log it; try anyway. A tile push that genuinely fails is caught below and is harmless.
+                try
                 {
-                    try { setting.GetValue(_tileUpdater, null); }
-                    catch (Exception ex)
-                    {
-                        _tileUpdater = null;
-                        Logger.Diag("[SHELL] tile OFF — no Start-Menu shortcut carries AUMID \"" + Aumid
-                                    + "\" (hr=0x" + Marshal.GetHRForException(ex.InnerException ?? ex).ToString("X8")
-                                    + "). Install TelegArm, then PIN IT TO START.");
-                        return;
-                    }
+                    var setting = _tileUpdater.GetType().GetProperty("Setting");
+                    if (setting != null) setting.GetValue(_tileUpdater, null);
                 }
+                catch { /* expected for an unpackaged app — not a failure */ }
 
                 _tTileUpd.GetMethod("EnableNotificationQueue").Invoke(_tileUpdater, new object[] { true });
 
@@ -270,17 +296,49 @@ namespace TelegArm.Helpers
                     BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(string) }, null);
                 if (mkBadge != null) _badgeUpdater = mkBadge.Invoke(null, new object[] { Aumid });
 
-                TileAvailable = true;
-                Logger.Diag("[SHELL] tile ON aumid=" + Aumid + " queue=5 badge=" + (_badgeUpdater != null)
-                            + " — pin TelegArm to Start to see it (Windows 11 has no tile surface)");
+                TileAvailable = TilePushEnabled;
+                // ★ T3 — THE TRUTH, NOT "tile ON". This line used to claim success on a feature that
+                //   cannot work, which is the same "looks like it works" trap that hid the Action Center
+                //   bug for weeks. See TilePushEnabled for the full reasoning.
+                Say("[SHELL] tile INERT — the API is reachable (aumid=" + Aumid + " badge="
+                    + (_badgeUpdater != null) + ") but an unpackaged Win32 app gets a STATIC shortcut tile: "
+                    + "Windows ACCEPTS these updates and DISCARDS them. Proof: a pinned TelegArm tile offers "
+                    + "only Small/Medium — Wide and Large require a UWP manifest. Live tiles would need a "
+                    + "sparse MSIX package (Win10 1809+, signing cert), and Windows 11 has no tiles at all. "
+                    + "Pushing is DISABLED; the taskbar badge covers unread-at-a-glance instead.");
             }
-            catch (Exception ex) { _tileUpdater = null; Logger.Diag("[SHELL] tile OFF — " + ex.Message); }
+            catch (Exception ex) { _tileUpdater = null; Say("[SHELL] tile OFF — " + ex.Message); }
+        }
+
+        // ⚠⚠ EVERY [SHELL] LINE IS BUFFERED, BECAUSE Init() NOW RUNS BEFORE THE LOG FILE EXISTS.
+        //   TA-37/A4b moved Init() into Main(), ahead of Run(), so the COM class object is registered
+        //   before COM's activation timeout. But FileLog.Init — which registers the trace tee — runs
+        //   INSIDE Run(), and Logger.Diag silently DROPS anything raised before that. The result was a
+        //   device with Action Center working and NOT ONE [SHELL] LINE in its log, which made the tile
+        //   impossible to diagnose: "no log line" and "the code never ran" look identical.
+        //   So every line is kept here as well as emitted, and Run() calls ReplayLog() once the tee is up.
+        private static readonly System.Collections.Generic.List<string> _early
+            = new System.Collections.Generic.List<string>();
+
+        private static void Say(string line)
+        {
+            lock (_early) { if (_early.Count < 32) _early.Add(line); }
+            Logger.Diag(line);
+        }
+
+        /// <summary>Re-emits everything Init() said before the log file was open. Called from Run() right
+        /// after FileLog.Init. Safe to call twice; the buffer is cleared.</summary>
+        public static void ReplayLog()
+        {
+            string[] lines;
+            lock (_early) { lines = _early.ToArray(); _early.Clear(); }
+            foreach (var l in lines) Logger.Diag(l);
         }
 
         private static void Fail(string why)
         {
             Available = false; Reason = why;
-            Logger.Diag("[SHELL] Action Center OFF — " + why);
+            Say("[SHELL] Action Center OFF — " + why);
         }
 
         private static object Xml(string xml)
@@ -301,13 +359,18 @@ namespace TelegArm.Helpers
         /// showing. Purely additive: if anything here fails the user still got the window.
         /// ⚠ &lt;audio silent="true"/&gt; IS NOT OPTIONAL. SuppressPopup stops the BANNER, not the SOUND —
         ///   assuming otherwise is how you ship a notification that dings twice.</summary>
-        public static void PushToast(string title, string body, string tag, string group)
+        public static void PushToast(string title, string body, string tag, string group, string launchArgs)
         {
             if (!Available || _notifier == null) return;
             try
             {
+                // ⚠ TA-37/A6 — `launch` is what comes back as invokedArgs when the entry is CLICKED, and it
+                //   carries (acct, peer, msg) so the click opens the right chat under the right ACCOUNT.
+                //   activationType='foreground' asks Windows to activate our COM callback rather than just
+                //   launching the exe with no context.
                 string xml =
-                    "<toast><visual><binding template='ToastGeneric'>" +
+                    "<toast activationType='foreground' launch='" + Esc(launchArgs) + "'>" +
+                    "<visual><binding template='ToastGeneric'>" +
                     "<text>" + Esc(title) + "</text><text>" + Esc(body) + "</text>" +
                     "</binding></visual><audio silent='true'/></toast>";
                 var toast = Activator.CreateInstance(_tToast, new object[] { Xml(xml) });

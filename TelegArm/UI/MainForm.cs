@@ -383,6 +383,11 @@ namespace TelegArm.UI
             // setup, because the window channel deliberately does not depend on the tray existing. Static
             // event ⇒ it is unsubscribed in the shutdown path, same discipline as PeerTitleChanged above.
             NotificationStack.Clicked += OnNotificationActivated;
+            // TA-37/A2 — an Action Center click lands on the SAME handler as a notification-window click,
+            // so both end in OpenNotifiedChat. Not a second open-chat path.
+            // ⚠ The COM call arrives on an RPC thread, so marshal; and it can arrive BEFORE this handler
+            //   was attached (the app was launched BY the click), which is what DrainPending covers.
+            ToastActivator.Activated += OnToastActivated;
 
             // BATCH-TA-0.1: the sub-stamps proved BuildUi is only ~120 ms — the bulk of the pre-network cold
             // start is HERE, between ctor entry and BuildUi. MaterialSkinManager.Instance is the singleton's
@@ -468,6 +473,7 @@ namespace TelegArm.UI
                 // TA-27: close any live notification windows and drop the static-event handler. A topmost
                 // window outliving the app would be an orphan the user cannot get rid of.
                 NotificationStack.Clicked -= OnNotificationActivated;
+                ToastActivator.Activated -= OnToastActivated;   // TA-37: static event, same leak discipline
                 try { NotificationStack.CloseAll(); } catch { }
                 AudioPlayer.Shutdown();
                 try { _recorder?.Dispose(); } catch { }
@@ -4391,6 +4397,14 @@ namespace TelegArm.UI
             base.OnLoad(e);
             PerfLog.Boot("MainForm.OnLoad → ResumeSessionAsync");
             await ResumeSessionAsync();
+
+            // ⚠ TA-37 — DELIVER A CLICK THAT LAUNCHED US. When the app was closed, Windows started this
+            //   process to serve the activation, so ToastActivator.Activate ran long before OnLoad and had
+            //   no handler to call; it parked the result instead. Draining AFTER ResumeSessionAsync matters:
+            //   OpenNotifiedChat needs the chat list and, for a background account, a switch — neither of
+            //   which exists until the session is up. Without this the single most important case (click
+            //   while closed) opens the app to no chat at all.
+            try { ToastActivator.DrainPending(); } catch { }
         }
 
         /// <summary>
@@ -14363,7 +14377,8 @@ namespace TelegArm.UI
             //   an Action Center entry. That is the right way round — the entry is the quiet record you
             //   read afterwards, which is exactly what you want after being left alone.)
             ShellNotify.PushToast(info.Title, info.Text,
-                                  info.MessageId.ToString(), info.PeerId.ToString());
+                                  info.MessageId.ToString(), info.PeerId.ToString(),
+                                  ToastActivator.BuildArgs(info.AccountId, info.PeerId, info.MessageId));
 
             if (AppSettings.Instance.LegacyTrayBalloon)
             {
@@ -14402,6 +14417,19 @@ namespace TelegArm.UI
         private void OnNotificationActivated(long acctId, long peerId, int msgId)
         {
             OpenNotifiedChat(acctId, peerId);
+        }
+
+        /// <summary>TA-37/A2 — an Action Center entry was clicked. Windows calls the COM activator on an
+        /// RPC thread, so hop to the UI thread and then take the SAME route a notification-window click
+        /// takes. Nothing here knows how to open a chat; that stays in one place.</summary>
+        private void OnToastActivated(long acctId, long peerId, int msgId)
+        {
+            try
+            {
+                if (!IsHandleCreated || IsDisposed) return;
+                BeginInvoke((Action)(() => OnNotificationActivated(acctId, peerId, msgId)));
+            }
+            catch (Exception ex) { Logger.Diag("[SHELL] activation dispatch failed: " + ex.Message); }
         }
 
         /// <summary>The one implementation behind both click paths: restore the window, switch accounts if

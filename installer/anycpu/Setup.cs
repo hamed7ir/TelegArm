@@ -208,6 +208,10 @@ namespace TelegArmSetup
 
             Report(progress, "Registering...");
             RegisterUninstall(targetDir, exe, uninst);
+            // TA-37/A5 — LocalServer32, so COM can LAUNCH TelegArm when an Action Center entry is
+            // clicked while the app is closed. Paired with the ToastActivatorCLSID on the shortcut above:
+            // the shortcut says which CLSID we use, this says which exe serves it.
+            Shortcut.RegisterActivator(exe);
             Report(progress, "Done.");
         }
 
@@ -251,6 +255,7 @@ namespace TelegArmSetup
             RemoveShortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), Program.AppName + ".lnk"));
             RemoveShortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), Program.AppName + ".lnk"));
             try { Registry.CurrentUser.DeleteSubKeyTree(Program.UninstallKey, false); } catch { }
+            Shortcut.UnregisterActivator();   // TA-37/A5 - a stale LocalServer32 breaks later activations
             RemoveUserData();
             SelfDeleteDir(dir);   // remove the install dir last (uninstall.exe runs from inside it)
             return true;
@@ -337,13 +342,31 @@ namespace TelegArmSetup
                 try
                 {
                     var store = (IPropertyStore)link;
+
                     var pv = new PROPVARIANT();
                     pv.vt = 31;                                        // VT_LPWSTR
                     pv.pointerValue = Marshal.StringToCoTaskMemUni(Aumid);
                     var key = PKEY_AppUserModel_ID;
                     store.SetValue(ref key, ref pv);
-                    store.Commit();
                     Marshal.FreeCoTaskMem(pv.pointerValue);
+
+                    // ══ BATCH-TA-37/A5 — THE TOAST ACTIVATOR CLSID ═════════════════════════════
+                    // ⚠ WITHOUT THIS, WINDOWS 10/11 DOES NOT REGISTER US WITH THE NOTIFICATION
+                    //   PLATFORM AT ALL. Measured before it existed: ToastNotifier.Setting threw
+                    //   0x80070490 (ERROR_NOT_FOUND) even with a correct AUMID on a real installed
+                    //   shortcut — the AUMID alone is not enough for an unpackaged desktop app.
+                    //   It is a VT_CLSID (vt = 72), not a string: the shell stores the GUID itself.
+                    var cpv = new PROPVARIANT();
+                    cpv.vt = 72;                                       // VT_CLSID
+                    var guid = new Guid(ToastActivatorClsid);
+                    byte[] raw = guid.ToByteArray();
+                    cpv.pointerValue = Marshal.AllocCoTaskMem(raw.Length);
+                    Marshal.Copy(raw, 0, cpv.pointerValue, raw.Length);
+                    var ckey = PKEY_AppUserModel_ToastActivatorCLSID;
+                    store.SetValue(ref ckey, ref cpv);
+                    Marshal.FreeCoTaskMem(cpv.pointerValue);
+
+                    store.Commit();
                 }
                 catch { /* pre-Win7 shell, or no IPropertyStore — the shortcut is still valid without it */ }
 
@@ -356,12 +379,47 @@ namespace TelegArmSetup
         /// registers it — the portable package deliberately does not.</summary>
         internal const string Aumid = "hamed7ir.TelegArm";
 
+        /// <summary>⚠ MUST EQUAL TelegArm.Helpers.ToastActivator.Clsid, and the LocalServer32 key written
+        /// by RegisterActivator below. Three copies of one GUID; change one, change all three.</summary>
+        internal const string ToastActivatorClsid = "6E7B4A2C-9F31-4E58-B0D2-1C7A5E9D3F84";
+
         // System.AppUserModel.ID — {9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3}, PID 5.
         private static PROPERTYKEY PKEY_AppUserModel_ID = new PROPERTYKEY
         {
             fmtid = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"),
             pid = 5
         };
+
+        // System.AppUserModel.ToastActivatorCLSID — same fmtid, PID 26.
+        private static PROPERTYKEY PKEY_AppUserModel_ToastActivatorCLSID = new PROPERTYKEY
+        {
+            fmtid = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"),
+            pid = 26
+        };
+
+        /// <summary>BATCH-TA-37/A5 — HKCU\Software\Classes\CLSID\{guid}\LocalServer32 = the exe.
+        /// This is how COM launches TelegArm when an Action Center entry is clicked while the app is
+        /// CLOSED. Per-user (HKCU), so it needs no admin, matching the per-user install.
+        /// ⚠ Removed by the uninstaller — a stale LocalServer32 pointing at a deleted exe makes every
+        ///   later activation fail with a COM error instead of doing nothing.</summary>
+        internal static void RegisterActivator(string exePath)
+        {
+            try
+            {
+                using (var k = Registry.CurrentUser.CreateSubKey(
+                           @"Software\Classes\CLSID\{" + ToastActivatorClsid + @"}\LocalServer32"))
+                {
+                    if (k != null) k.SetValue(null, "\"" + exePath + "\"");
+                }
+            }
+            catch { /* best-effort: without it, clicking a toast while closed simply does nothing */ }
+        }
+
+        internal static void UnregisterActivator()
+        {
+            try { Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\CLSID\{" + ToastActivatorClsid + "}", false); }
+            catch { }
+        }
 
         [StructLayout(LayoutKind.Sequential)]
         private struct PROPERTYKEY { public Guid fmtid; public int pid; }
