@@ -83,28 +83,83 @@ namespace TelegArmSetup
             }
             catch { }
 
+            // ⚠ TA-42 — this text is now only shown when .NET 4 is ENTIRELY ABSENT. An older 4.x gets a
+            //   warning that lets the install proceed (see RequireRuntime), because a 4.7-targeted app
+            //   runs on earlier 4.x and refusing was blocking machines where TelegArm demonstrably works.
+            // ⚠ AND THE ARM POINTER IS MICROSOFT'S. An earlier build sent ARM users to the Open-RT mirror
+            //   and told them Microsoft "does NOT provide an ARM32 build" — that was my inference, and the
+            //   project owner confirmed the Microsoft fwlink below is what RT 8.1 users actually use. The
+            //   README carries the same link, so the two cannot disagree.
             return "TelegArm needs the Microsoft .NET Framework 4.7 or later.\r\n\r\n"
-                 + (found > 0 ? "This PC has an older 4.x (release " + found + ").\r\n\r\n"
-                              : "This PC does not have .NET Framework 4 installed.\r\n\r\n")
-                 + (arm
-                    ? "For Windows RT / ARM32, get it from the Open-RT mirror:\r\n"
-                      + "    https://files.open-rt.party/Software/Redistributables/\r\n\r\n"
-                      + "Microsoft's own web installer does NOT provide an ARM32 build, so do not use it."
-                    : "Download it from Microsoft:\r\n"
-                      + "    https://dotnet.microsoft.com/download/dotnet-framework")
+                 + "This PC does not have .NET Framework 4 installed.\r\n\r\n"
+                 + "Download it here:\r\n" + RuntimeDownloadLine()
                  + "\r\n\r\nInstall it, then run this setup again.";
         }
 
-        /// <summary>Returns true when setup may proceed. Shows the explanation and refuses otherwise.</summary>
+        /// <summary>Returns true when setup may proceed.
+        ///
+        /// ★ BATCH-TA-42 — THIS NO LONGER HARD-BLOCKS ON THE RELEASE NUMBER, AND THE OLD BEHAVIOUR WAS A
+        ///   REAL BUG: a Windows 10 ARM32 device reporting Release **460788** was REFUSED THE INSTALL while
+        ///   the portable package ran TelegArm on that same machine perfectly. The app working is proof the
+        ///   runtime is sufficient; a check that contradicts a running app is wrong, whatever the docs say.
+        ///
+        /// WHY THE ORIGINAL REASONING WAS FAULTY. .NET Framework 4.x is an IN-PLACE update sharing one CLR,
+        /// and a 4.7-TARGETED assembly runs on an earlier 4.x runtime unless it actually calls a 4.7-only
+        /// API — TargetFrameworkVersion mostly selects compatibility quirks, it is not a hard gate. So
+        /// "Release &gt;= 460798" tested something stricter than what the app needs. Microsoft's own table
+        /// is also per-OS (4.7 is 460798 on 1703 and 460805 elsewhere), so no single threshold is right
+        /// across the Windows versions this ships to.
+        ///
+        /// WHAT IT DOES NOW:
+        ///   · **no .NET 4 at all** (key or value missing) → still REFUSE. The app genuinely cannot start,
+        ///     and that is the case the check exists for.
+        ///   · **.NET 4 present but below the 4.7 marker** → WARN, name the release, offer the download,
+        ///     and let the user continue. On the machine above that is the difference between an install
+        ///     and a dead end.
+        /// ⚠ Silent mode keeps going in the warn case — a scripted install must not block on a dialog —
+        ///   but still refuses when .NET 4 is absent.</summary>
         private static bool RequireRuntime(bool silent)
         {
             int found;
-            if (HasNet47(out found)) return true;
+            if (HasNet47(out found)) return true;          // 4.7+ → straight through
+
+            if (found > 0)
+            {
+                // Older 4.x IS installed. TelegArm very probably runs; do not stand in the way.
+                string warn = "This PC reports .NET Framework release " + found + ", which is older than 4.7.\r\n\r\n"
+                            + "TelegArm usually still runs on an older 4.x, and installing is safe to try. "
+                            + "If it does not start, install .NET 4.7 and run TelegArm again:\r\n\r\n"
+                            + RuntimeDownloadLine() + "\r\n\r\nContinue with the installation?";
+                if (silent) { Console.Error.WriteLine(warn); return true; }   // scripted → proceed
+                return MessageBox.Show(warn, "TelegArm — .NET Framework " + found,
+                                       MessageBoxButtons.YesNo, MessageBoxIcon.Information,
+                                       MessageBoxDefaultButton.Button1) == DialogResult.Yes;
+            }
+
+            // Nothing from the .NET 4 family at all → this really cannot work.
             string msg = RuntimeHelpText(found);
             if (silent) Console.Error.WriteLine(msg);
-            else MessageBox.Show(msg, "TelegArm — .NET Framework 4.7 required",
+            else MessageBox.Show(msg, "TelegArm — .NET Framework required",
                                  MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return false;
+        }
+
+        /// <summary>The architecture-appropriate download line, shared by the refusal and the warning.</summary>
+        internal static string RuntimeDownloadLine()
+        {
+            bool arm = false;
+            try
+            {
+                string a = Environment.GetEnvironmentVariable("PROCESSOR_ARCHITECTURE") ?? "";
+                string w = Environment.GetEnvironmentVariable("PROCESSOR_ARCHITEW6432") ?? "";
+                arm = a.IndexOf("ARM", StringComparison.OrdinalIgnoreCase) >= 0
+                   || w.IndexOf("ARM", StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+            catch { }
+            return arm
+                ? "    https://go.microsoft.com/fwlink/?linkid=2088632\r\n"
+                  + "    (Windows RT 8.1 ships .NET 4.5 and needs this; Windows 10 ARM32 already has it.)"
+                : "    https://dotnet.microsoft.com/download/dotnet-framework";
         }
 
         [STAThread]
@@ -539,13 +594,23 @@ namespace TelegArmSetup
                                  + (found >= 528040 ? "4.8" : found >= 461808 ? "4.7.2" : "4.7")
                                  + " detected (release " + found + ").";
                 }
+                else if (found > 0)
+                {
+                    // ⚠ TA-42 — AN OLDER 4.x IS NOT A FAILURE. TelegArm normally runs on it, and the
+                    //   installer no longer refuses, so this must not be painted red as if it were fatal.
+                    _status.ForeColor = Color.FromArgb(180, 110, 0);
+                    _status.Text = ".NET release " + found + " (older than 4.7) — TelegArm will probably still run.";
+                    MessageBox.Show(this,
+                        "This PC reports .NET Framework release " + found + ", which is older than 4.7.\r\n\r\n"
+                        + "TelegArm usually still runs on an older 4.x, so installing is safe to try. If it "
+                        + "does not start, install .NET 4.7 and run TelegArm again:\r\n\r\n"
+                        + Program.RuntimeDownloadLine(),
+                        Program.AppName + " — requirements", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
                 else
                 {
                     _status.ForeColor = Color.FromArgb(176, 0, 0);
-                    _status.Text = found > 0
-                        ? "Missing .NET Framework 4.7 — this PC has release " + found + "."
-                        : "Missing .NET Framework 4 — see the details.";
-                    // The full explanation, including the ARCHITECTURE-APPROPRIATE download pointer.
+                    _status.Text = "No .NET Framework 4 found — TelegArm cannot run.";
                     MessageBox.Show(this, Program.RuntimeHelpText(found),
                                     Program.AppName + " — requirements",
                                     MessageBoxButtons.OK, MessageBoxIcon.Information);
