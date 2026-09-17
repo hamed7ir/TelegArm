@@ -8,8 +8,9 @@ runs everywhere from a Surface RT to a modern x64 desktop.
 
 ## Runs on
 
+- **Windows RT 8.0 (ARM32)** — requires the .NET Framework 4.8 update, which is currently difficult to obtain for RT 8.0
 - **Windows RT 8.1 (ARM32)** — the original Surface / Surface 2 (requires the RT jailbreak to run desktop apps)
-- **Windows 10 ARM32**
+- **Windows 10 ARM32** (build 15035)
 - **Windows 8.1 / 10 / 11 (x86 / x64 /ARM64)**
 - **Windows 7 (not tested yet)*
 
