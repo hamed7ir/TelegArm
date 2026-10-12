@@ -5,6 +5,8 @@ VisualStudioVersion = 15.0.37327.16
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TelegArm", "TelegArm\TelegArm.csproj", "{0BE14FF9-F66B-4B3D-B34B-47B8DE8F836B}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TelegArm.SelfTest", "TelegArm.SelfTest\TelegArm.SelfTest.csproj", "{6D96FAF6-3F93-40DE-84E4-FC8A597F4BC4}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -15,6 +17,10 @@ Global
 		{0BE14FF9-F66B-4B3D-B34B-47B8DE8F836B}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{0BE14FF9-F66B-4B3D-B34B-47B8DE8F836B}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{0BE14FF9-F66B-4B3D-B34B-47B8DE8F836B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6D96FAF6-3F93-40DE-84E4-FC8A597F4BC4}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6D96FAF6-3F93-40DE-84E4-FC8A597F4BC4}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6D96FAF6-3F93-40DE-84E4-FC8A597F4BC4}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6D96FAF6-3F93-40DE-84E4-FC8A597F4BC4}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

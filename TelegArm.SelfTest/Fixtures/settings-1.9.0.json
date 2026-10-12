@@ -1,0 +1,33 @@
+{
+  "AutoDownloadPhotos": true,
+  "AutoDownloadVideos": false,
+  "AutoDownloadDocuments": false,
+  "AutoDownloadVoice": false,
+  "AutoDownloadAudio": false,
+  "AutoDownloadGifs": false,
+  "AutoPlayGifs": false,
+  "MaxAutoDownloadSizeMB": 17,
+  "AnimateWebmStickers": false,
+  "EnableNotifications": false,
+  "SendKey": "CtrlEnter",
+  "NotificationPreviews": false,
+  "LegacyTrayBalloon": true,
+  "FileLogging": true,
+  "ResizeForKeyboard": false,
+  "KbdDiag": true,
+  "CompositedScroll": false,
+  "FolderSidebar": true,
+  "DpiUnaware": true,
+  "WarmConnections": false,
+  "ProxyEnabled": true,
+  "ProxyList": [
+    "tg://proxy?server=a.example&port=1&secret=dd00",
+    "tg://proxy?server=b.example&port=2&secret=ee11"
+  ],
+  "ProxyActive": 1,
+  "ThemeMode": "Dark",
+  "MediaCacheFolder": "Z:\\TelegArm-fixture\\Cache",
+  "DefaultSaveFolder": "C:\\x\\saves",
+  "MediaCacheRetentionDays": 3,
+  "LastCacheCleanup": "0001-01-01T00:00:00"
+}

@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Redesign step 0.6: TelegArm.SelfTest - a plain console runner of checks against the app's own code.
+     The sources under test are LINKED from ..\TelegArm (compiled into this exe), so a test sees exactly the
+     shipped code without loading the app or its UI. Never packaged: installer\anycpu\build.ps1 stages only
+     TelegArm\bin\Release. Same toolchain rails as the app: .NET 4.7, C# 7.3, VS2017 / MSBuild 15. -->
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{6D96FAF6-3F93-40DE-84E4-FC8A597F4BC4}</ProjectGuid>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>TelegArm.SelfTest</RootNamespace>
+    <AssemblyName>TelegArm.SelfTest</AssemblyName>
+    <TargetFrameworkVersion>v4.7</TargetFrameworkVersion>
+    <FileAlignment>512</FileAlignment>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <Deterministic>true</Deterministic>
+    <LangVersion>7.3</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="Check.cs" />
+    <Compile Include="V19Settings.cs" />
+    <Compile Include="SettingsTests.cs" />
+  </ItemGroup>
+  <!-- The app sources under test. Add a file here when a test needs it (and whatever it depends on). -->
+  <ItemGroup>
+    <Compile Include="..\TelegArm\Core\AppSettings.cs"><Link>Linked\Core\AppSettings.cs</Link></Compile>
+    <Compile Include="..\TelegArm\Core\StoragePaths.cs"><Link>Linked\Core\StoragePaths.cs</Link></Compile>
+    <Compile Include="..\TelegArm\Helpers\Logger.cs"><Link>Linked\Helpers\Logger.cs</Link></Compile>
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Fixtures\settings-1.9.0.json"><LogicalName>settings-1.9.0.json</LogicalName></EmbeddedResource>
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json">
+      <Version>13.0.4</Version>
+    </PackageReference>
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>
