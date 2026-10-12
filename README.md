@@ -27,9 +27,8 @@ Windows' own error message never says why.
 - **Windows 8.1 / 10 / 11 (x86 / x64 / ARM64)** — usually already present; install from the link above
   if TelegArm refuses to start.
 
-The installer checks for 4.7 before installing and stops with an explanation if it is missing, rather
-than installing something that cannot run — and there is a **Check requirements** button you can press
-first. The portable build cannot perform that check (it is itself compiled against 4.7, so it fails
+The installer checks for 4.7 when you install and tells you, with the right download link, if it is
+missing or older — and there is a **Check requirements** button you can press first. The portable build cannot perform that check (it is itself compiled against 4.7, so it fails
 before any of its own code runs), so install .NET first if you are using it.
 
 ## Features
