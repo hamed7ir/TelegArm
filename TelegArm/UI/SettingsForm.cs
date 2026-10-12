@@ -424,7 +424,7 @@ namespace TelegArm.UI
             y = SectionLabel(p, "DIAGNOSTICS", y);
             bool logsExist = false;
             try { logsExist = FileLog.LogsDirectory != null && Directory.Exists(FileLog.LogsDirectory); } catch { }
-            var diag = Card(p, y, logsExist ? 5 : 4); y += diag.Height + SecGap;   // +composited-scroll A/B +proportional-scaling rows
+            var diag = Card(p, y, logsExist ? 6 : 5); y += diag.Height + SecGap;   // +composited-scroll A/B +proportional-scaling +copy-diagnostics rows
             RowTitle(diag, 0, "Enable diagnostic logging", "Writes session logs for troubleshooting. Leave off for best performance.");
             var logSw = RowSwitch(diag, 0, s.FileLogging);
             logSw.CheckedChanged += (snd, ev) =>
@@ -491,6 +491,23 @@ namespace TelegArm.UI
             var dpiSw = RowSwitch(diag, dpiRow, s.DpiUnaware);
             dpiSw.CheckedChanged += (snd, ev) => { s.DpiUnaware = dpiSw.Checked; s.Save(); };
             RowClickable(diag, dpiRow, () => dpiSw.Flip());
+
+            // STEP 0.1 — one tap collects what a bug report needs and nothing private (DiagReport says what and
+            // why). Shown as well as copied: the user should see what they are about to paste into an issue.
+            int copyRow = dpiRow + 1;
+            Divider(diag, dpiRow);
+            RowTitle(diag, copyRow, "Copy diagnostics", "Version, Windows build, DPI and connection mode, for a bug report");
+            var copyBtn = new MaterialButton { Text = "Copy", Width = 92, Type = MaterialButton.MaterialButtonType.Text };
+            copyBtn.Click += (snd, ev) =>
+            {
+                string report = DiagReport.Build();
+                bool copied = false;
+                try { Clipboard.SetText(report); copied = true; } catch { /* clipboard held by another app */ }
+                ThemedDialog.Show(this, "Copy diagnostics",
+                    (copied ? "Copied to the clipboard:" : "The clipboard is busy. Select the text below and press Ctrl+C:")
+                    + "\n\n" + report, "OK");
+            };
+            PlaceRight(diag, copyRow, copyBtn);
 
             diag.Controls.Add(viewBtn);
             diag.Controls.Add(clearBtn);

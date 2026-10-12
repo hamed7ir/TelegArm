@@ -53,6 +53,11 @@ namespace TelegArm
         /// (and reads 96 when already unaware, since the process is DPI-virtualized → the rescue then hides).</summary>
         public static int SystemDpi { get; private set; } = 96;
 
+        /// <summary>STEP 0.1 — the EFFECTIVE awareness read back after the declaration ("unaware" / "system" /
+        /// "per-monitor"), for Copy diagnostics and the --shoot report. The [DPI] line that carries the same fact
+        /// is Debug.WriteLine, i.e. absent from every Release log, so until step 1.1 this is the only way to see it.</summary>
+        internal static string DpiAwareness { get; private set; } = "not read";
+
         // PROCESS_SYSTEM_DPI_AWARE = 1. MaterialSkin.2 does not support
         // per-monitor DPI, so we deliberately use system-DPI awareness.
         [DllImport("shcore.dll")]
@@ -127,6 +132,12 @@ namespace TelegArm
                 else if (string.Equals(arg, "-Embedding", StringComparison.OrdinalIgnoreCase)
                       || string.Equals(arg, "/Embedding", StringComparison.OrdinalIgnoreCase)) ComEmbedding = true;
             }
+
+            // STEP 0.1 — the hidden "--shoot <dir>" screenshot rig. Taken BEFORE the single-instance mutex on
+            // purpose: it never touches a real account (RunShoot isolates every writable root first) and never
+            // shows a window, so it may run beside a live TelegArm without either one noticing the other.
+            string shootDir = ShotRig.ParseDir(Environment.GetCommandLineArgs());
+            if (shootDir != null) { RunShoot(shootDir); return; }
 
             Mutex mutex;
             try
@@ -277,32 +288,7 @@ namespace TelegArm
             // below is file-only on every path (AppSettings.Load + StoragePaths probe files, never UI/Screen
             // — verified DPI-MODE-TOGGLE 0.1; AppSettings.Instance already resolves above for FileLog.Init).
             // Must run before any window is created.
-            try
-            {
-                if (AppSettings.Instance.DpiUnaware)
-                    SetProcessDpiAwareness(0);   // opt-in: proportional (unaware — uniform DWM stretch)
-                else
-                    SetProcessDpiAwareness(1);   // DEFAULT: system-aware (today's exact call, unchanged)
-            }
-            catch { /* shcore unavailable */ }
-            // DPI truth line (permanent): the EFFECTIVE awareness + system DPI + the touch threshold that
-            // derives from it — a manifest, compat-flag layer, or library call can silently override the
-            // declaration above, and that class of regression must be diagnosable from the log alone.
-            try
-            {
-                int aw;
-                if (GetProcessDpiAwareness(IntPtr.Zero, out aw) == 0)
-                {
-                    int dpi = 96;
-                    IntPtr dc = GetDC(IntPtr.Zero);
-                    if (dc != IntPtr.Zero) { dpi = GetDeviceCaps(dc, LOGPIXELSX); ReleaseDC(IntPtr.Zero, dc); }
-                    SystemDpi = dpi;   // exposed to the login DPI-rescue affordance (aware → real DPI; unaware → 96)
-                    System.Diagnostics.Debug.WriteLine("[DPI] awareness=" + (aw == 0 ? "unaware" : aw == 1 ? "system" : "per-monitor")
-                        + " systemDpi=" + dpi
-                        + " moveThreshold=" + TelegArm.UI.Controls.TouchScroller.MoveThresholdPx + "px");
-                }
-            }
-            catch { /* shcore unavailable (RT 8.1 has it; pre-8.1 would not) */ }
+            DeclareDpiAwareness();
 
             // Point the native-DLL search at the matching per-arch folder (rlottie x86 / ARM32).
             NativeLibraries.Init();
@@ -390,6 +376,59 @@ namespace TelegArm
                 Application.Run(new MainForm(service, StartupLaunch));   // STARTUP: silent tray start when launched with --startup
             else
                 Application.Run(new LoginForm(service));
+        }
+
+        /// <summary>The DPI declaration Run() has always made, moved here unchanged so the --shoot rig declares
+        /// exactly the same thing before it builds a form. Records the read-back in <see cref="DpiAwareness"/>.</summary>
+        private static void DeclareDpiAwareness()
+        {
+            try
+            {
+                if (AppSettings.Instance.DpiUnaware)
+                    SetProcessDpiAwareness(0);   // opt-in: proportional (unaware — uniform DWM stretch)
+                else
+                    SetProcessDpiAwareness(1);   // DEFAULT: system-aware (today's exact call, unchanged)
+            }
+            catch { /* shcore unavailable */ }
+            // DPI truth line (permanent): the EFFECTIVE awareness + system DPI + the touch threshold that
+            // derives from it — a manifest, compat-flag layer, or library call can silently override the
+            // declaration above, and that class of regression must be diagnosable from the log alone.
+            try
+            {
+                int aw;
+                if (GetProcessDpiAwareness(IntPtr.Zero, out aw) == 0)
+                {
+                    int dpi = 96;
+                    IntPtr dc = GetDC(IntPtr.Zero);
+                    if (dc != IntPtr.Zero) { dpi = GetDeviceCaps(dc, LOGPIXELSX); ReleaseDC(IntPtr.Zero, dc); }
+                    SystemDpi = dpi;   // exposed to the login DPI-rescue affordance (aware → real DPI; unaware → 96)
+                    DpiAwareness = aw == 0 ? "unaware" : aw == 1 ? "system" : "per-monitor";
+                    System.Diagnostics.Debug.WriteLine("[DPI] awareness=" + (aw == 0 ? "unaware" : aw == 1 ? "system" : "per-monitor")
+                        + " systemDpi=" + dpi
+                        + " moveThreshold=" + TelegArm.UI.Controls.TouchScroller.MoveThresholdPx + "px");
+                }
+            }
+            catch { /* shcore unavailable (RT 8.1 has it; pre-8.1 would not) */ }
+        }
+
+        /// <summary>STEP 0.1 — runs the screenshot rig, then exits the process.
+        /// ⚠ ORDER IS THE SAFETY: UseIsolatedRoot runs before ANYTHING resolves a path (AppSettings, AccountStore,
+        ///   logs, crash.log), and throws if something already did. Everything after it — settings, accounts, the
+        ///   forms — sees an empty throwaway folder, never the user's profile.
+        /// Deliberately skipped versus Run(): the mutex, ShellNotify/ToastActivator (registry + COM), file logging,
+        /// the daily cache prune and VlcBootstrap (writes outside the isolated root). None of them draws anything.</summary>
+        private static void RunShoot(string dir)
+        {
+            string iso = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+                                                "TelegArm-shoot-" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            StoragePaths.UseIsolatedRoot(iso);
+            DeclareDpiAwareness();
+            NativeLibraries.Init();
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            int code = ShotRig.Run(dir, iso);
+            try { System.IO.Directory.Delete(iso, true); } catch { }
+            Environment.Exit(code);
         }
     }
 }

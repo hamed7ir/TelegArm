@@ -25,6 +25,24 @@ namespace TelegArm.Core
         /// INSTALLED build resolves a different base than the dev box, this is where it shows. Null until resolved.</summary>
         public static string CacheVia { get { return _cacheVia; } }
 
+        /// <summary>STEP 0.1 — point EVERY writable root (accounts\, settings.json, Cache\, logs, crash.log) at
+        /// <paramref name="root"/>, for tool runs such as --shoot. With it in force no code path can reach a real
+        /// account's session file, so a tool run cannot break one-live-client-per-session (R5) even if something
+        /// unexpected did start a client: that client would find an empty folder.
+        /// ⚠ Must run before the first Resolve*. It THROWS if one already ran, so an edit that resolves a path
+        ///   earlier fails loudly instead of quietly shooting the user's real profile.</summary>
+        internal static void UseIsolatedRoot(string root)
+        {
+            if (_cacheRoot != null || _dataRoot != null || _appDir != null)
+                throw new InvalidOperationException("StoragePaths already resolved; isolation has to come first");
+            Directory.CreateDirectory(root);
+            _dataRoot = root;
+            _appDir = root;
+            _cacheRoot = Path.Combine(root, CacheSub);
+            _cacheVia = "isolated";
+            Directory.CreateDirectory(_cacheRoot);
+        }
+
         /// <summary>The resolved, WRITABLE cache root for the CURRENT user. Prefers %LOCALAPPDATA% (the
         /// conventional cache/temp location); RT 8.1's AppData reliability is unknown, so every candidate is
         /// write-TESTED and we fall back to Documents (proven on RT), then beside-exe, then temp. Every path is
