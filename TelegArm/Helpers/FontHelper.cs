@@ -25,18 +25,28 @@ namespace TelegArm.Helpers
 
         /// <summary>Vazirmatn renders LARGER per point than Roboto — scale Persian text DOWN so it VISUALLY
         /// matches Latin at the same nominal size. ONE knob for all Persian text (bubbles + list + titles);
-        /// tune by eye. (Bold Persian uses the real Vazirmatn-Bold face at this scaled size — not faux-bold.)</summary>
+        /// tune by eye. (Bold Persian drawn by TextRenderer/GDI uses the real Vazirmatn-Bold face; GDI+ DrawString
+        /// synthesizes bold from Regular — see the static constructor for why.)</summary>
         private const float PersianScale = 0.85f;
 
         static FontHelper()
         {
             try
             {
-                AddFont("TelegArm.Fonts.Roboto-Regular.ttf");
-                AddFont("TelegArm.Fonts.Roboto-Medium.ttf");
-                AddFont("TelegArm.Fonts.Roboto-Bold.ttf");
-                AddFont("TelegArm.Fonts.Vazirmatn-Regular.ttf");
-                AddFont("TelegArm.Fonts.Vazirmatn-Bold.ttf");
+                // ⚠ STEP 0.1b — THE BOLD FACES GO TO GDI ONLY, NEVER INTO THE GDI+ COLLECTION.
+                //   Regular and Bold share one family name ("Roboto", "Vazirmatn"), and GDI+ does not keep them
+                //   apart inside one PrivateFontCollection: both land in the same style slot, and which file serves
+                //   a REGULAR request is not stable from run to run. Measured with the --shoot rig: the same
+                //   Font object (Vazirmatn, Regular, 10.2pt) measured 315.29 px in five runs and 320.51 in one —
+                //   the real Bold face (Bold/Regular = 1.015 measured in isolation) — so a Persian bubble came out
+                //   bold and re-wrapped in 2 launches of 10. GDI picks by weight correctly in every probe,
+                //   so TextRenderer keeps the real Bold faces. GDI+ now holds Regular only and synthesizes bold
+                //   from it — exactly what it already did on the launches that came out right.
+                AddFont("TelegArm.Fonts.Roboto-Regular.ttf", gdiPlus: true);
+                AddFont("TelegArm.Fonts.Roboto-Medium.ttf", gdiPlus: true);   // its own family ("Roboto Medium") — no clash
+                AddFont("TelegArm.Fonts.Roboto-Bold.ttf", gdiPlus: false);
+                AddFont("TelegArm.Fonts.Vazirmatn-Regular.ttf", gdiPlus: true);
+                AddFont("TelegArm.Fonts.Vazirmatn-Bold.ttf", gdiPlus: false);
 
                 _ui = Find("Roboto");
                 _persian = Find("Vazirmatn") ?? FirstNonRoboto();   // Vazirmatn for Persian/RTL (falls back to any non-Roboto private family, then Segoe UI)
@@ -48,7 +58,7 @@ namespace TelegArm.Helpers
         public static Font Ui(float size, FontStyle style = FontStyle.Regular) => Make(_ui, size, style);
 
         /// <summary>A Vazirmatn (Persian/RTL) font, auto-scaled to match Latin's visual size, or Segoe UI if
-        /// unavailable. Bold uses the real Vazirmatn-Bold face.</summary>
+        /// unavailable. Bold is the real Vazirmatn-Bold face under TextRenderer, synthesized under GDI+.</summary>
         public static Font Persian(float size, FontStyle style = FontStyle.Regular) => Make(_persian, size * PersianScale, style);
 
         /// <summary>Script-aware: Vazirmatn (slightly larger) for Persian/Arabic text, else Roboto.</summary>
@@ -73,7 +83,7 @@ namespace TelegArm.Helpers
             return new Font("Segoe UI", size, style);
         }
 
-        private static void AddFont(string resourceName)
+        private static void AddFont(string resourceName, bool gdiPlus)
         {
             try
             {
@@ -93,7 +103,7 @@ namespace TelegArm.Helpers
                     // lifetime (the static collection), so we intentionally never free it.
                     IntPtr p = Marshal.AllocCoTaskMem(data.Length);
                     Marshal.Copy(data, 0, p, data.Length);
-                    _pfc.AddMemoryFont(p, data.Length);   // GDI+ (Graphics.DrawString)
+                    if (gdiPlus) _pfc.AddMemoryFont(p, data.Length);   // GDI+ (Graphics.DrawString)
                     // ALSO register with GDI so TextRenderer/GDI (which the app uses for Persian) can see the
                     // font WITHOUT installing it — otherwise `new Font("Vazirmatn",…)` handed to TextRenderer
                     // resolves to a SYSTEM substitute (the "Persian still system font" bug). Shares the same
@@ -104,10 +114,15 @@ namespace TelegArm.Helpers
             catch { }
         }
 
-        private static FontFamily Find(string namePart)
+        /// <summary>The family named exactly <paramref name="name"/>, else the first whose name contains it. Exact
+        /// first because "Roboto Medium" also contains "Roboto", and the collection does not promise an order.</summary>
+        private static FontFamily Find(string name)
         {
-            foreach (var f in _pfc.Families)
-                if (f.Name.IndexOf(namePart, StringComparison.OrdinalIgnoreCase) >= 0) return f;
+            var all = _pfc.Families;
+            foreach (var f in all)
+                if (string.Equals(f.Name, name, StringComparison.OrdinalIgnoreCase)) return f;
+            foreach (var f in all)
+                if (f.Name.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0) return f;
             return null;
         }
 
