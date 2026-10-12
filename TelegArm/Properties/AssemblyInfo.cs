@@ -32,8 +32,12 @@ using System.Runtime.InteropServices;
 // You can specify all the values or you can default the Build and Revision Numbers
 // by using the '*' as shown below:
 // [assembly: AssemblyVersion("1.0.*")]
-// v1.9.0 (BATCH-TA-34/D1). THE source of truth: Program.Version reads it, TelegramService reports it to
-// Telegram as app_version, and installer/anycpu/build.ps1 derives the package name from the built exe's
-// FileVersion. ⚠ ONE hardcoded copy still exists — Setup.cs's AppVersion — and must be bumped with this.
-[assembly: AssemblyVersion("1.9.0.0")]
-[assembly: AssemblyFileVersion("1.9.0.0")]
+// THE source of truth for the version: Program.Version reads Major.Minor.Build from AssemblyVersion,
+// TelegramService reports that to Telegram as app_version, and installer/anycpu/build.ps1 names the packages
+// (and stamps Setup.exe) from the built exe — there is no second copy to keep in sync any more.
+// 2.0.0 = the redesign line (MaterialSkin removed, per-monitor DPI). Device TEST builds keep the numeric
+// version at 2.0.0 (app_version must stay numeric) and say which test build they are in the informational
+// version, "2.0.0-alpha.N", which the package names and Copy diagnostics show. Drop the suffix to release.
+[assembly: AssemblyVersion("2.0.0.0")]
+[assembly: AssemblyFileVersion("2.0.0.0")]
+[assembly: AssemblyInformationalVersion("2.0.0-alpha.1")]
