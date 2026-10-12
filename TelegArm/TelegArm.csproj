@@ -131,6 +131,28 @@
     <Compile Include="UI\MainForm.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="UI\MainForm.Layout.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
+    <Compile Include="UI\MainForm.Dock.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
+    <Compile Include="UI\MainForm.Theme.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
+    <Compile Include="UI\MainForm.Proxy.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
+    <Compile Include="UI\MainForm.Keyboard.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
+    <Compile Include="UI\MainForm.Drawer.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
+    <Compile Include="UI\MainForm.MessageExtras.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
+    <Compile Include="UI\MainForm.Session.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
+    <Compile Include="UI\MainForm.Overlays.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
+    <Compile Include="UI\MainForm.Updates.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
+    <Compile Include="UI\MainForm.ChatList.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
+    <Compile Include="UI\MainForm.Search.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
+    <Compile Include="UI\MainForm.Folders.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
+    <Compile Include="UI\MainForm.ChatOpen.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
+    <Compile Include="UI\MainForm.Presence.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
+    <Compile Include="UI\MainForm.History.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
+    <Compile Include="UI\MainForm.Bubbles.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
+    <Compile Include="UI\MainForm.Media.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
+    <Compile Include="UI\MainForm.Scroll.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
+    <Compile Include="UI\MainForm.Composer.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
+    <Compile Include="UI\MainForm.MessageActions.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
+    <Compile Include="UI\MainForm.Tray.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
     <Compile Include="UI\MediaViewerForm.cs">
       <SubType>Form</SubType>
     </Compile>
