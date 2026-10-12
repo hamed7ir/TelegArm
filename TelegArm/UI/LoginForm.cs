@@ -520,13 +520,13 @@ namespace TelegArm.UI
                 StopQr();
                 AppSettings.Instance.DpiMode = "Unaware";   // STEP 0.4: the source of truth; Save mirrors DpiUnaware
                 AppSettings.Instance.Save();   // synchronous flush; settings.json is under the user-writable data root
-                System.Diagnostics.Debug.WriteLine("[DPI] rescue -> DpiUnaware=true persisted; relaunching (--restarted)");
+                Logger.Diag("[DPI] rescue -> DpiMode=Unaware persisted; relaunching (--restarted)");   // R7: visible in a Release log
                 System.Diagnostics.Process.Start(Application.ExecutablePath, "--restarted");
                 Application.Exit();
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine("[DPI] rescue restart FAILED: " + ex.Message);
+                Logger.Diag("[DPI] rescue restart FAILED: " + ex.Message);
                 try { MessageBox.Show(this, "Couldn't restart automatically - please close and reopen TelegArm to apply the larger UI.",
                     "TelegArm", MessageBoxButtons.OK, MessageBoxIcon.Information); } catch { }
             }

@@ -7,7 +7,7 @@
 # Raise -Step's default as the plan advances. Exit code 0 = every enforced gate passed and SelfTest passed.
 #
 # ASCII only: Windows PowerShell 5.1 reads a BOM-less script as ANSI.
-param([string]$Step = '0.6', [switch]$NoSelfTest)
+param([string]$Step = '1.1', [switch]$NoSelfTest)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $app = Join-Path $root 'TelegArm'
@@ -15,12 +15,17 @@ $all = @(Get-ChildItem -LiteralPath $app -Recurse -Filter *.cs | Where-Object { 
 $ui = @($all | Where-Object { $_.FullName -like (Join-Path $app 'UI\*') })
 function Rel([string]$p) { $p.Substring($root.Length + 1) }
 
-# file:line: text for every line of $files matching $pattern, minus files whose names match $exceptFiles.
+# file:line: text for every line of $files whose CODE matches $pattern, minus files whose names match
+# $exceptFiles. A // comment is cut off first: the gates judge code, and the comments that warn against a
+# construct name it (step 1.1's "never read Control.DeviceDpi" tripped the DeviceDpi gate).
 function Hits($files, [string]$pattern, [string]$exceptFiles) {
     $out = @()
     foreach ($f in $files) {
         if ($exceptFiles -and $f.Name -match $exceptFiles) { continue }
-        foreach ($m in Select-String -LiteralPath $f.FullName -Pattern $pattern) { $out += (Rel $f.FullName) + ':' + $m.LineNumber + ': ' + $m.Line.Trim() }
+        foreach ($m in Select-String -LiteralPath $f.FullName -Pattern $pattern) {
+            if (($m.Line -replace '//.*$', '') -notmatch $pattern) { continue }
+            $out += (Rel $f.FullName) + ':' + $m.LineNumber + ': ' + $m.Line.Trim()
+        }
     }
     return $out
 }

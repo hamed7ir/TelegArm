@@ -57,6 +57,48 @@ namespace TelegArm.Helpers
         /// <summary>A Roboto (UI) font, or Segoe UI if unavailable.</summary>
         public static Font Ui(float size, FontStyle style = FontStyle.Regular) => Make(_ui, size, style);
 
+        // ── Redesign step 1.1: shared, pixel-unit fonts for a known DPI (see FontCache) ─────────────────────────
+        // ⚠ These are SHARED and must never be disposed — the opposite of Ui/Persian/For above, which return a
+        //   fresh font the caller owns. New and rewritten UI code uses these, with the DPI of its window (Dpi.Of).
+
+        /// <summary>The shared Roboto font at <paramref name="pt"/> points for a <paramref name="dpi"/> display.</summary>
+        public static Font UiAt(float pt, int dpi, FontStyle style = FontStyle.Regular)
+            => FontCache.Get(_ui != null ? _ui.Name : "Segoe UI", pt, style, dpi);
+
+        /// <summary>The shared Vazirmatn font, scaled by <see cref="PersianScale"/> like <see cref="Persian"/>.</summary>
+        public static Font PersianAt(float pt, int dpi, FontStyle style = FontStyle.Regular)
+            => FontCache.Get(_persian != null ? _persian.Name : "Segoe UI", pt * PersianScale, style, dpi);
+
+        /// <summary>Script-aware like <see cref="For"/>: Vazirmatn (+2 pt) for Persian/Arabic text, else Roboto.</summary>
+        public static Font ForAt(string text, float pt, int dpi, FontStyle style = FontStyle.Regular)
+            => IsPersian(text) ? PersianAt(pt + 2f, dpi, style) : UiAt(pt, dpi, style);
+
+        private static readonly System.Collections.Generic.Dictionary<string, FontFamily> _families =
+            new System.Collections.Generic.Dictionary<string, FontFamily>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>The family called <paramref name="name"/>: the BUNDLED one when TelegArm ships a family by that
+        /// name, else the installed one, else null. Bundled wins on purpose — this dev box also has Roboto
+        /// installed, and "Roboto" in TelegArm always means the copy it carries. Cached; never disposed.</summary>
+        internal static FontFamily Family(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return null;
+            lock (_families)
+            {
+                FontFamily f;
+                if (_families.TryGetValue(name, out f)) return f;
+                if (_ui != null && string.Equals(_ui.Name, name, StringComparison.OrdinalIgnoreCase)) f = _ui;
+                else if (_persian != null && string.Equals(_persian.Name, name, StringComparison.OrdinalIgnoreCase)) f = _persian;
+                else
+                {
+                    foreach (var p in _pfc.Families)
+                        if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) { f = p; break; }
+                    if (f == null) { try { f = new FontFamily(name); } catch (ArgumentException) { f = null; } }
+                }
+                _families[name] = f;
+                return f;
+            }
+        }
+
         /// <summary>A Vazirmatn (Persian/RTL) font, auto-scaled to match Latin's visual size, or Segoe UI if
         /// unavailable. Bold is the real Vazirmatn-Bold face under TextRenderer, synthesized under GDI+.</summary>
         public static Font Persian(float size, FontStyle style = FontStyle.Regular) => Make(_persian, size * PersianScale, style);

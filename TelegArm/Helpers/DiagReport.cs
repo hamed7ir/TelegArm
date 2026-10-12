@@ -26,8 +26,7 @@ namespace TelegArm.Helpers
             sb.AppendLine("Windows: " + Safe(OsLine));
             sb.AppendLine("Arch: " + Safe(ArchLine));
             sb.AppendLine(".NET: " + Safe(NetLine));
-            sb.AppendLine("DPI: awareness=" + Program.DpiAwareness + " systemDpi=" + Program.SystemDpi
-                          + " dpiMode=" + Safe(() => AppSettings.Instance.DpiMode == "" ? "(build default)" : AppSettings.Instance.DpiMode));
+            sb.AppendLine("DPI: " + Dpi.ProbeSummary);
             sb.Append(Safe(MonitorLines));
             sb.AppendLine("Theme: " + Safe(() => ThemeHelper.Mode + (ThemeHelper.IsDark ? " (dark)" : " (light)")
                           + " accent=#" + (ThemeHelper.GetWindowsAccentColor().ToArgb() & 0xFFFFFF).ToString("X6")));

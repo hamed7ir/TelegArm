@@ -424,7 +424,7 @@ namespace TelegArm.UI
             y = SectionLabel(p, "DIAGNOSTICS", y);
             bool logsExist = false;
             try { logsExist = FileLog.LogsDirectory != null && Directory.Exists(FileLog.LogsDirectory); } catch { }
-            var diag = Card(p, y, logsExist ? 6 : 5); y += diag.Height + SecGap;   // +composited-scroll A/B +proportional-scaling +copy-diagnostics rows
+            var diag = Card(p, y, logsExist ? 7 : 6); y += diag.Height + SecGap;   // +composited-scroll A/B +proportional-scaling +display-scaling +copy-diagnostics rows
             RowTitle(diag, 0, "Enable diagnostic logging", "Writes session logs for troubleshooting. Leave off for best performance.");
             var logSw = RowSwitch(diag, 0, s.FileLogging);
             logSw.CheckedChanged += (snd, ev) =>
@@ -433,6 +433,9 @@ namespace TelegArm.UI
                 s.FileLogging = logSw.Checked;
                 s.Save();
                 FileLog.SetEnabled(logSw.Checked);
+                // Step 1.1: the [DPI] summary was logged at startup only if logging was on THEN — replay it into
+                // a log started now, so a log turned on mid-session still says how the process is scaled.
+                if (logSw.Checked) Logger.Diag("[DPI] " + Dpi.ProbeSummary);
             };
             RowClickable(diag, 0, () => logSw.Flip());   // UI-FIX-T1: whole row flips the switch (Flip raises CheckedChanged → live toggle)
             Divider(diag, 0);
@@ -493,10 +496,19 @@ namespace TelegArm.UI
             dpiSw.CheckedChanged += (snd, ev) => { s.DpiMode = dpiSw.Checked ? "Unaware" : ""; s.Save(); };
             RowClickable(diag, dpiRow, () => dpiSw.Flip());
 
+            // STEP 1.1 — how the process is actually scaled: the mode in force (read back, not just requested), the
+            // system DPI, and why. Tap for the full probe summary (what Windows offers, what was called, monitors).
+            int scaleRow = dpiRow + 1;
+            Divider(diag, dpiRow);
+            RowTitle(diag, scaleRow, "Display scaling", Dpi.Mode + " · " + Dpi.SystemDpi + " dpi — tap for details");
+            Chevron(diag, scaleRow);
+            RowClickable(diag, scaleRow, () => ThemedDialog.Show(this, "Display scaling", Dpi.ProbeSummary.Replace(" request=", "\nrequest=")
+                .Replace(" call=", "\ncall=").Replace(" mode=", "\nmode=").Replace(" monitors=", "\nmonitors="), "OK"));
+
             // STEP 0.1 — one tap collects what a bug report needs and nothing private (DiagReport says what and
             // why). Shown as well as copied: the user should see what they are about to paste into an issue.
-            int copyRow = dpiRow + 1;
-            Divider(diag, dpiRow);
+            int copyRow = scaleRow + 1;
+            Divider(diag, scaleRow);
             RowTitle(diag, copyRow, "Copy diagnostics", "Version, Windows build, DPI and connection mode, for a bug report");
             var copyBtn = new MaterialButton { Text = "Copy", Width = 92, Type = MaterialButton.MaterialButtonType.Text };
             copyBtn.Click += (snd, ev) =>

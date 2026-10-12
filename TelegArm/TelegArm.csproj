@@ -199,6 +199,10 @@
     <Compile Include="Helpers\ToastActivator.cs" />
     <Compile Include="Helpers\DiagReport.cs" />
     <Compile Include="Helpers\ShotRig.cs" />
+    <Compile Include="Helpers\Dpi.cs" />
+    <Compile Include="Helpers\IDpiAware.cs" />
+    <Compile Include="Helpers\DpiScaler.cs" />
+    <Compile Include="Helpers\FontCache.cs" />
     <Compile Include="UI\Controls\SendButton.cs" />
     <Compile Include="UI\EditContactForm.cs" />
     <Compile Include="UI\ProfilePhotoViewer.cs" />

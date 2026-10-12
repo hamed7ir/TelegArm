@@ -49,30 +49,12 @@ namespace TelegArm
         }
 
         /// <summary>Physical system DPI captured at startup (96 = 100%). The login screen reads this to offer the
-        /// "switch to larger UI" (DPI-unaware) rescue on a scaled display. Stays 96 until the [DPI] probe runs
-        /// (and reads 96 when already unaware, since the process is DPI-virtualized → the rescue then hides).</summary>
-        public static int SystemDpi { get; private set; } = 96;
+        /// "switch to larger UI" (DPI-unaware) rescue on a scaled display. 96 when unaware (DPI-virtualized → the
+        /// rescue then hides). Step 1.1: a wrapper over <see cref="Dpi.SystemDpi"/>, kept for its callers.</summary>
+        public static int SystemDpi { get { return Dpi.SystemDpi; } }
 
-        /// <summary>STEP 0.1 — the EFFECTIVE awareness read back after the declaration ("unaware" / "system" /
-        /// "per-monitor"), for Copy diagnostics and the --shoot report. The [DPI] line that carries the same fact
-        /// is Debug.WriteLine, i.e. absent from every Release log, so until step 1.1 this is the only way to see it.</summary>
-        internal static string DpiAwareness { get; private set; } = "not read";
-
-        // PROCESS_SYSTEM_DPI_AWARE = 1. MaterialSkin.2 does not support
-        // per-monitor DPI, so we deliberately use system-DPI awareness.
-        [DllImport("shcore.dll")]
-        private static extern int SetProcessDpiAwareness(int value);
-
-        [System.Runtime.InteropServices.DllImport("shcore.dll")]
-        private static extern int GetProcessDpiAwareness(IntPtr hProcess, out int value);
-
-        [System.Runtime.InteropServices.DllImport("user32.dll")]
-        private static extern IntPtr GetDC(IntPtr hWnd);
-        [System.Runtime.InteropServices.DllImport("user32.dll")]
-        private static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
-        [System.Runtime.InteropServices.DllImport("gdi32.dll")]
-        private static extern int GetDeviceCaps(IntPtr hdc, int nIndex);
-        private const int LOGPIXELSX = 88;
+        /// <summary>The EFFECTIVE awareness read back after the declaration — a wrapper over <see cref="Dpi.Mode"/>.</summary>
+        internal static string DpiAwareness { get { return Dpi.Mode; } }
 
         /// <summary>
         /// The main entry point for the application. Checks for an existing
@@ -276,14 +258,10 @@ namespace TelegArm
             try { System.Diagnostics.Debug.WriteLine("[CACHE] active cache root = " + AppSettings.Instance.MediaCacheFolder); } catch { }
             PerfLog.Boot("Program.Run (logging up)");
 
-            // DPI: declared HERE at runtime (no manifest), TOGGLE-CONTROLLED as of v0.9.0 (DPI-MODE-TOGGLE):
-            //  • DEFAULT (DpiUnaware=false): SYSTEM-aware — sharp everywhere, but on a scaled display
-            //    point-fonts scale while raw-pixel layout doesn't (the mixed look). The historical rationale
-            //    stands: MaterialSkin.2 has no per-monitor support (per-monitor + manual math double-scales;
-            //    see LESSONS_LEARNED), and RT 8.1 @100% renders pixel-identical in both modes.
-            //  • OPT-IN (Settings→Advanced "Proportional scaling"): DPI-UNAWARE — the DWM stretches the whole
-            //    UI uniformly on scaled displays (proportional, slightly blurry). The REAL fix is the
-            //    INTERFACE-SCALE internal metrics slider (Telegram-Desktop style) — BANKED for v1.x.
+            // DPI: declared HERE at runtime (no manifest) by Dpi.Init — see Helpers/Dpi.cs for the modes, the probe
+            // chain and why. The build default is still SYSTEM-aware (1.x's exact call on 8.1+; see Dpi.Declare for Win7/8.0) until redesign
+            // step 3.7: MaterialSkin.2 has no per-monitor support, and per-monitor needs the AppForm/WindowDpi work
+            // of steps 1.3–3.x first. Settings → Advanced "Proportional scaling" = DpiMode "Unaware".
             // INVARIANT: nothing before this call may create UI or read Screen metrics. The settings read
             // below is file-only on every path (AppSettings.Load + StoragePaths probe files, never UI/Screen
             // — verified DPI-MODE-TOGGLE 0.1; AppSettings.Instance already resolves above for FileLog.Init).
@@ -378,37 +356,14 @@ namespace TelegArm
                 Application.Run(new LoginForm(service));
         }
 
-        /// <summary>The DPI declaration Run() has always made, moved here unchanged so the --shoot rig declares
-        /// exactly the same thing before it builds a form. Records the read-back in <see cref="DpiAwareness"/>.</summary>
+        /// <summary>The one DPI declaration, shared by Run() and the --shoot rig so both declare exactly the same thing
+        /// before any form exists. Dpi.Init logs the [DPI] probe summary; the touch threshold derives from the DPI
+        /// just declared, so it is logged here, after it (DPI truth line: a manifest, a compat shim or a library can
+        /// silently override the declaration, and that must be diagnosable from the log alone).</summary>
         private static void DeclareDpiAwareness()
         {
-            try
-            {
-                if (AppSettings.Instance.DpiUnaware)
-                    SetProcessDpiAwareness(0);   // opt-in: proportional (unaware — uniform DWM stretch)
-                else
-                    SetProcessDpiAwareness(1);   // DEFAULT: system-aware (today's exact call, unchanged)
-            }
-            catch { /* shcore unavailable */ }
-            // DPI truth line (permanent): the EFFECTIVE awareness + system DPI + the touch threshold that
-            // derives from it — a manifest, compat-flag layer, or library call can silently override the
-            // declaration above, and that class of regression must be diagnosable from the log alone.
-            try
-            {
-                int aw;
-                if (GetProcessDpiAwareness(IntPtr.Zero, out aw) == 0)
-                {
-                    int dpi = 96;
-                    IntPtr dc = GetDC(IntPtr.Zero);
-                    if (dc != IntPtr.Zero) { dpi = GetDeviceCaps(dc, LOGPIXELSX); ReleaseDC(IntPtr.Zero, dc); }
-                    SystemDpi = dpi;   // exposed to the login DPI-rescue affordance (aware → real DPI; unaware → 96)
-                    DpiAwareness = aw == 0 ? "unaware" : aw == 1 ? "system" : "per-monitor";
-                    System.Diagnostics.Debug.WriteLine("[DPI] awareness=" + (aw == 0 ? "unaware" : aw == 1 ? "system" : "per-monitor")
-                        + " systemDpi=" + dpi
-                        + " moveThreshold=" + TelegArm.UI.Controls.TouchScroller.MoveThresholdPx + "px");
-                }
-            }
-            catch { /* shcore unavailable (RT 8.1 has it; pre-8.1 would not) */ }
+            Dpi.Init();
+            Logger.Diag("[DPI] touch moveThreshold=" + TelegArm.UI.Controls.TouchScroller.MoveThresholdPx + "px");
         }
 
         /// <summary>STEP 0.1 — runs the screenshot rig, then exits the process.
