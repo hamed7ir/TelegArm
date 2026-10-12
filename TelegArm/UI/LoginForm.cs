@@ -518,7 +518,7 @@ namespace TelegArm.UI
             try
             {
                 StopQr();
-                AppSettings.Instance.DpiUnaware = true;
+                AppSettings.Instance.DpiMode = "Unaware";   // STEP 0.4: the source of truth; Save mirrors DpiUnaware
                 AppSettings.Instance.Save();   // synchronous flush; settings.json is under the user-writable data root
                 System.Diagnostics.Debug.WriteLine("[DPI] rescue -> DpiUnaware=true persisted; relaunching (--restarted)");
                 System.Diagnostics.Process.Start(Application.ExecutablePath, "--restarted");

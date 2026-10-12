@@ -489,7 +489,8 @@ namespace TelegArm.UI
             Divider(diag, compRow);
             RowTitle(diag, dpiRow, "Proportional scaling on high-DPI displays", "Fixes mismatched sizes on scaled screens; blurry. Restart to apply.");
             var dpiSw = RowSwitch(diag, dpiRow, s.DpiUnaware);
-            dpiSw.CheckedChanged += (snd, ev) => { s.DpiUnaware = dpiSw.Checked; s.Save(); };
+            // STEP 0.4: DpiMode is the source of truth ("" = build default); Save mirrors it into DpiUnaware.
+            dpiSw.CheckedChanged += (snd, ev) => { s.DpiMode = dpiSw.Checked ? "Unaware" : ""; s.Save(); };
             RowClickable(diag, dpiRow, () => dpiSw.Flip());
 
             // STEP 0.1 — one tap collects what a bug report needs and nothing private (DiagReport says what and

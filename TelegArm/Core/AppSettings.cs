@@ -105,8 +105,25 @@ namespace TelegArm.Core
         /// <summary>DPI-MODE-TOGGLE: opt-in DPI-UNAWARE declaration ("proportional scaling") — Windows
         /// stretches the whole UI uniformly on scaled displays (slightly blurry) instead of the system-aware
         /// mixed look (2× fonts over 1× layout). No effect at 100% scale (RT identical either way). Read at
-        /// the very top of startup, BEFORE any UI — restart to apply. Default FALSE = today's system-aware.</summary>
+        /// the very top of startup, BEFORE any UI — restart to apply. Default FALSE = today's system-aware.
+        /// ⚠ STEP 0.4: A MIRROR NOW — DO NOT WRITE IT. <see cref="DpiMode"/> is the source of truth; Load and
+        ///   Save set this to (DpiMode == "Unaware"). It stays in the file only so a 1.9.x build that the user
+        ///   rolls back to still sees their choice. A write here is overwritten on the next Save.</summary>
         public bool DpiUnaware { get; set; } = false;
+
+        /// <summary>STEP 0.4 — DPI awareness mode: "" = the BUILD DEFAULT, resolved in code (system-aware until
+        /// redesign step 3.7 flips it), or "Auto" / "System" / "Unaware". Stored as "" rather than the default's
+        /// name because Save writes every property: an explicit value could never be re-defaulted by a later
+        /// build, so "" is how "the user never chose" survives on disk. Read at startup (Program), restart to apply.</summary>
+        public string DpiMode { get; set; } = "";
+
+        /// <summary>STEP 0.4 — schema version of this file. ⚠ NO INITIALIZER, ON PURPOSE: a 1.x file has no such
+        /// field, and Json.NET leaves an absent property at its initializer — "= 2" would make every old file look
+        /// already migrated. Absent ⇒ 0 ⇒ <see cref="Migrate"/> runs once.</summary>
+        public int SettingsVersion { get; set; }
+
+        /// <summary>The schema this build writes. 2 = the 2.x line (adds DpiMode).</summary>
+        internal const int CurrentSettingsVersion = 2;
 
         /// <summary>ACCOUNT-SWITCH STEP 1: keep every NON-active account connected in the background (a headless warm
         /// WTC client per account, ~1 MB each) so switching REUSES the live connection (skips the MTProto handshake).
@@ -177,18 +194,86 @@ namespace TelegArm.Core
         public static AppSettings Load()
         {
             AppSettings settings = null;
+            string path = SettingsPath;
             try
             {
-                if (File.Exists(SettingsPath))
-                    settings = JsonConvert.DeserializeObject<AppSettings>(File.ReadAllText(SettingsPath));
+                if (File.Exists(path))
+                {
+                    string json = File.ReadAllText(path);
+                    try { settings = JsonConvert.DeserializeObject<AppSettings>(json); }
+                    catch (Exception ex) { settings = null; Helpers.Logger.Diag("[SETTINGS] unreadable: " + ex.Message); }
+                    // ⚠ STEP 0.4 — a file that exists but does not parse is MOVED ASIDE, never overwritten. Until
+                    //   now the defaults were simply saved over it (the cache-path self-heal below saves on every
+                    //   first run), silently losing the user's proxies and choices to one bad byte.
+                    if (settings == null && !string.IsNullOrWhiteSpace(json)) MoveAside(path);
+                }
             }
-            catch
-            {
-                // Corrupt/unreadable file → fall back to defaults.
-            }
+            catch (Exception ex) { Helpers.Logger.Diag("[SETTINGS] load failed: " + ex.Message); }
             if (settings == null) settings = new AppSettings();
+            settings.RestoreNullDefaults();
+            settings.Migrate(path);      // ⚠ BEFORE NormalizeCachePath: that may Save, and the 1.x backup must come first
             settings.NormalizeCachePath();
             return settings;
+        }
+
+        /// <summary>STEP 0.4 — Json.NET assigns an explicit <c>null</c> over a property initializer, so a
+        /// hand-edited (or older) file can null out anything reference-typed. Re-establish every default.
+        /// ⚠ A new reference-typed setting MUST be added here.</summary>
+        private void RestoreNullDefaults()
+        {
+            if (SendKey == null) SendKey = "Enter";
+            if (ProxyList == null) ProxyList = new System.Collections.Generic.List<string>();
+            if (ThemeMode == null) ThemeMode = "System";
+            if (DefaultSaveFolder == null)
+                DefaultSaveFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "TelegArm");
+            if (DpiMode == null) DpiMode = "";
+            // MediaCacheFolder: null is meaningful (unresolved) — NormalizeCachePath resolves it.
+        }
+
+        /// <summary>STEP 0.4 — one-time upgrade of an older file. Idempotent: rolling back to 1.9.x and saving
+        /// drops the fields 1.9 does not know (SettingsVersion included), so this simply runs again, and every
+        /// step below is safe to repeat.</summary>
+        private void Migrate(string path)
+        {
+            if (SettingsVersion < CurrentSettingsVersion)
+            {
+                // Keep the 1.x file exactly as it was, once, so a rollback can restore it by hand.
+                try
+                {
+                    string backup = Path.Combine(Path.GetDirectoryName(path), "settings.v1.9.json");
+                    if (File.Exists(path) && !File.Exists(backup)) File.Copy(path, backup);
+                }
+                catch (Exception ex) { Helpers.Logger.Diag("[SETTINGS] v1.9 backup failed: " + ex.Message); }
+
+                // The old proportional-scaling switch becomes DpiMode — unless a DpiMode is already there.
+                if (DpiUnaware && string.IsNullOrEmpty(DpiMode)) DpiMode = "Unaware";
+
+                Helpers.Logger.Diag("[SETTINGS] migrated v" + SettingsVersion + " -> v" + CurrentSettingsVersion);
+                SettingsVersion = CurrentSettingsVersion;
+                SyncLegacyMirrors();
+                Save();
+                return;
+            }
+            SyncLegacyMirrors();
+        }
+
+        /// <summary>Fields kept only for an older build to read: derived, never the other way round.</summary>
+        private void SyncLegacyMirrors()
+        {
+            DpiUnaware = string.Equals(DpiMode, "Unaware", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static void MoveAside(string path)
+        {
+            string dest = Path.Combine(Path.GetDirectoryName(path),
+                                       "settings.corrupt-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".json");
+            try { File.Move(path, dest); }
+            catch
+            {
+                // Could not move (locked?) — a copy still preserves it; the later Save then replaces the original.
+                try { File.Copy(path, dest, true); } catch (Exception ex) { Helpers.Logger.Diag("[SETTINGS] could not preserve the unreadable file: " + ex.Message); return; }
+            }
+            Helpers.Logger.Diag("[SETTINGS] unreadable settings.json preserved as " + Path.GetFileName(dest) + "; starting from defaults");
         }
 
         /// <summary>Moves the cache root off %APPDATA% (RT 8.1 unreliable) to the Documents-first probed root.
@@ -211,17 +296,40 @@ namespace TelegArm.Core
             if (MediaCacheFolder != before) { try { Save(); } catch { /* best-effort self-heal of settings.json */ } }
         }
 
-        /// <summary>Writes the given settings to disk (best-effort).</summary>
+        private static readonly object SaveLock = new object();
+
+        /// <summary>Writes the given settings to disk (best-effort).
+        /// ⚠ STEP 0.4 — LOCKED AND ATOMIC (temp file, then File.Replace; ported from DroidFinestra). The daily cache
+        ///   prune saves from a pool thread while the UI saves too, and a crash or power loss in the middle of
+        ///   File.WriteAllText left a truncated settings.json — which the next Load then replaced with defaults.</summary>
         public static void Save(AppSettings settings)
         {
-            try
+            lock (SaveLock)
             {
-                var json = JsonConvert.SerializeObject(settings, Formatting.Indented);
-                File.WriteAllText(SettingsPath, json);
-            }
-            catch
-            {
-                // Non-fatal — settings just won't persist this time.
+                string path = null, tmp = null;
+                try
+                {
+                    settings.SyncLegacyMirrors();
+                    var json = JsonConvert.SerializeObject(settings, Formatting.Indented);
+                    path = SettingsPath;
+                    tmp = path + ".tmp";
+                    File.WriteAllText(tmp, json);
+                    if (!File.Exists(path)) { File.Move(tmp, path); return; }
+                    try { File.Replace(tmp, path, null); }
+                    catch (IOException)
+                    {
+                        // ReplaceFile can refuse where a plain overwrite works (some file systems, a scanner
+                        // holding the file). Not atomic, but never worse than the old direct write.
+                        File.Copy(tmp, path, true);
+                        File.Delete(tmp);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Non-fatal — settings just won't persist this time.
+                    Helpers.Logger.Diag("[SETTINGS] save failed: " + ex.Message);
+                    try { if (tmp != null && File.Exists(tmp)) File.Delete(tmp); } catch { }
+                }
             }
         }
 
