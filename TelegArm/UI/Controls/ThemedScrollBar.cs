@@ -32,13 +32,17 @@ namespace TelegArm.UI.Controls
         private const int RestyledThumb = 8;     // the pill's cross-axis size; (12 - 8) / 2 = 2 px of lane each side
         private const int MinThumb = 28;         // shortest thumb along the track (1.x: 28 px, unscaled)
 
-        /// <summary>Selects the 2.x look for every bar CREATED AFTER it is set. Defaults to false: the 1.x look,
-        /// untouched. It is read once, in the constructor, and kept for the life of the bar — so a bar's lane width
-        /// and its painting can never disagree, and a gallery can show both looks side by side by flipping the flag
-        /// between two constructions. Set it once at startup (before any window builds its scrollbars).
+        /// <summary>Selects the 2.x look for every bar CREATED AFTER it is set. ON since redesign step 2.0 (built in 1.6,
+        /// off until 1.7's zero-diff check had run against the 1.x bar). It is read once, in the constructor, and kept for
+        /// the life of the bar — so a bar's lane width and its painting can never disagree, and the gallery shows both
+        /// looks side by side by flipping the flag around one construction.
         /// When on, colours come from <see cref="ThemeHelper.Palette"/> (and the bar repaints itself on
         /// ThemeChanged), so <see cref="IsDark"/> and <see cref="AccentColor"/> are no longer consulted.</summary>
-        public static bool Restyled { get; set; }
+        public static bool Restyled { get; set; } = true;
+
+        /// <summary>The width (height, horizontal) a bar created NOW takes at <paramref name="dpi"/> — for layout that
+        /// must leave room for one (the Info dock hands ProfileForm its width minus the bar). 1.x: 11, unscaled.</summary>
+        public static int LaneWidth(int dpi) { return Restyled ? Dpi.Px(RestyledLane, dpi) : Thickness; }
 
         private readonly ScrollableControl _target;
         private readonly bool _horz;

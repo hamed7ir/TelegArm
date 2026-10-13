@@ -170,7 +170,8 @@ namespace TelegArm.UI
             // ⚠ contentWidth is the dock MINUS its own scrollbar strip: ProfileForm docks a ThemedScrollBar
             //   Right inside itself, and handing it the full width would overflow the flow by that strip and
             //   arm a horizontal scroll.
-            var pf = new ProfileForm(_service, entry, GetCachedAvatar(entry.PeerId), DockWidth - 12)
+            // Step 2.0: the bar's real width (the restyled lane is 12 logical px — 18 at 150%), not 1.x's 11 + 1.
+            var pf = new ProfileForm(_service, entry, GetCachedAvatar(entry.PeerId), DockWidth - ThemedScrollBar.LaneWidth(Dpi.Of(this)) - 1)
             {
                 TopLevel = false,
                 FormBorderStyle = FormBorderStyle.None,

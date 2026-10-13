@@ -19,9 +19,9 @@ namespace TelegArm.UI
     public class ThemedContextMenuStrip : ContextMenuStrip
     {
         /// <summary>Redesign step 1.6 — the 2.x menu: colours from <see cref="ThemeHelper.Palette"/> and the row padding /
-        /// icon slot in logical pixels at the DPI of the control the menu opens over. OFF until step 2.0 (a visible
-        /// change; 1.7's zero-diff check runs against today's menus). Read when a menu opens and when it paints.</summary>
-        public static bool Restyled { get; set; }
+        /// icon slot in logical pixels at the DPI of the control the menu opens over. ON since step 2.0 (built in 1.6, off
+        /// until 1.7's zero-diff check had run). Read when a menu opens and when it paints.</summary>
+        public static bool Restyled { get; set; } = true;
 
         static ThemedContextMenuStrip()
         {
@@ -38,13 +38,17 @@ namespace TelegArm.UI
             ThemeHelper.ThemeChanged += OnThemeChanged;
             // Just before the menu shows: touch-size the rows + give each known action an emoji icon (moving any
             // text-emoji prefix into the icon slot). Centralized here → EVERY themed menu in the app is enhanced.
-            Opening += (s, e) =>
-            {
-                int dpi = Restyled ? Dpi.Of(SourceControl ?? (Control)this) : Dpi.Logical;
-                if (Restyled) { BackColor = ThemedMenuColors.Background; ForeColor = ThemedMenuColors.Text; }
-                ImageScalingSize = new Size(Dpi.Px(MenuIcons.IconSize, dpi), Dpi.Px(MenuIcons.IconSize, dpi));
-                MenuIcons.Decorate(this, dpi);
-            };
+            Opening += (s, e) => Prepare(SourceControl);
+        }
+
+        /// <summary>What every opening does: colours, the icon slot and touch-sized rows at the DPI of the control the menu
+        /// opens over. Internal so the --shoot rig can render a menu without opening one on the user's screen.</summary>
+        internal void Prepare(Control over)
+        {
+            int dpi = Restyled ? Dpi.Of(over ?? (Control)this) : Dpi.Logical;
+            if (Restyled) { BackColor = ThemedMenuColors.Background; ForeColor = ThemedMenuColors.Text; }
+            ImageScalingSize = new Size(Dpi.Px(MenuIcons.IconSize, dpi), Dpi.Px(MenuIcons.IconSize, dpi));
+            MenuIcons.Decorate(this, dpi);
         }
 
         private void OnThemeChanged()
