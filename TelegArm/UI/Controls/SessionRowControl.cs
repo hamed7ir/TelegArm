@@ -1,87 +1,130 @@
 using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
-using System.Drawing.Text;
 using System.Windows.Forms;
 using TelegArm.Helpers;
 
 namespace TelegArm.UI.Controls
 {
     /// <summary>
-    /// One active-session row in Settings → Devices (owner-painted single control — the RT-safe pattern).
-    /// Shows the app/device title, platform/system line, and location · last-active line. Non-current rows
-    /// draw a red ✕ that raises <see cref="TerminateClicked"/>; the current session draws no ✕.
+    /// One active-session row in Settings → Devices: the app/device title, the platform/system line, and the
+    /// location · last-active line. Non-current rows draw a red ✕ that raises <see cref="TerminateClicked"/> (also Delete,
+    /// and the accessible default action); the current session draws an accent bar and no ✕.
+    /// Step 2.6: a <see cref="SettingRow"/> now — palette inks, logical sizes (was 70 px and fixed RGB), and it sits in a
+    /// SettingGroup card with the rounded ends like every other row.
     /// </summary>
-    public sealed class SessionRowControl : Control
+    public sealed class SessionRowControl : SettingRow
     {
         public long Hash { get; private set; }
-        public bool IsCurrent { get; set; }
-        public Color AccentColor { get; set; } = Color.DodgerBlue;
+
+        private bool _current;
+        /// <summary>The session of this device: no ✕, not a tab stop.</summary>
+        public bool IsCurrent
+        {
+            get { return _current; }
+            set
+            {
+                _current = value;
+                SetStyle(ControlStyles.Selectable, !value);
+                TabStop = !value;
+                Invalidate();
+            }
+        }
+
+        // Kept for callers' initializers; the row paints from ThemeHelper.Palette so a live theme change recolours it.
+        public Color AccentColor { get; set; }
         public bool IsDark { get; set; }
 
         public event Action<long> TerminateClicked;
 
-        private readonly string _title, _line2, _line3;
-        private Rectangle _xRect;
+        private readonly string _line2, _line3;
+        private const int RowH = 76, XSize = 32;
 
-        public SessionRowControl(long hash, string title, string line2, string line3)
+        public SessionRowControl(long hash, string title, string line2, string line3) : base(title ?? "", true)
         {
             Hash = hash;
-            _title = title ?? "";
             _line2 = line2 ?? "";
             _line3 = line3 ?? "";
-            Height = 70;
-            Margin = new Padding(0);
-            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer
-                     | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+            Cursor = Cursors.Default;   // only the ✕ is a hand
+            AccessibleRole = AccessibleRole.ListItem;
+            AccessibleDescription = (_line2 + " " + _line3).Trim();
+            Refit();
+        }
+
+        public override int HeightFor(int width, int dpi) { return Dpi.Px(RowH, dpi); }
+
+        private Rectangle XRect(int dpi)
+        {
+            int s = Dpi.Px(XSize, dpi);
+            return new Rectangle(Width - Dpi.Px(PadX, dpi) - s + Dpi.Px(6, dpi), (Height - s) / 2, s, s);
+        }
+
+        private void Terminate()
+        {
+            if (_current || !Enabled) return;
+            var h = TerminateClicked;
+            if (h != null) h(Hash);
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            var c = !_current && XRect(Dpi.Of(this)).Contains(e.Location) ? Cursors.Hand : Cursors.Default;
+            if (Cursor != c) Cursor = c;
         }
 
         protected override void OnMouseClick(MouseEventArgs e)
         {
             base.OnMouseClick(e);
-            if (!IsCurrent && e.Button == MouseButtons.Left && _xRect.Contains(e.Location))
-                TerminateClicked?.Invoke(Hash);
+            if (e.Button == MouseButtons.Left && XRect(Dpi.Of(this)).Contains(e.Location)) Terminate();
         }
+
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+            if (e.KeyCode == Keys.Delete) { e.Handled = true; Terminate(); }
+        }
+
+        protected override string AccessibleAction { get { return _current ? null : "Terminate"; } }
+        protected override void AccessibleInvoke() { Terminate(); }
 
         protected override void OnPaint(PaintEventArgs e)
         {
+            var p = ThemeHelper.Palette;
             var g = e.Graphics;
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
-            g.Clear(IsDark ? Color.FromArgb(38, 38, 41) : Color.FromArgb(248, 248, 250));
+            int dpi = Dpi.Of(this), padX = Dpi.Px(PadX, dpi);
+            PaintBack(g, p);
 
-            Color titleColor = IsDark ? Color.FromArgb(230, 230, 235) : Color.FromArgb(30, 30, 34);
-            Color subColor = IsDark ? Color.FromArgb(165, 165, 170) : Color.FromArgb(110, 110, 115);
+            if (_current)
+                using (var ab = new SolidBrush(p.Accent))
+                    g.FillRectangle(ab, Dpi.Px(4, dpi), Dpi.Px(14, dpi), Dpi.Px(3, dpi), Math.Max(4, Height - Dpi.Px(28, dpi)));
 
-            using (var ab = new SolidBrush(AccentColor))
-                g.FillRectangle(ab, 0, 10, 3, Math.Max(4, Height - 20));   // accent left bar
+            var x = XRect(dpi);
+            int right = _current ? Width - padX : x.X - Dpi.Px(8, dpi);
+            int w = Math.Max(1, right - padX);
+            var tf = FontHelper.ForAt(Text, CaptionPt, dpi, FontStyle.Bold);
+            var f2 = FontHelper.ForAt(_line2, 8.75f, dpi);
+            var f3 = FontHelper.ForAt(_line3, 8.5f, dpi);
+            int h1 = LineHeight(tf), h2 = LineHeight(f2), h3 = LineHeight(f3), gap = Dpi.Px(2, dpi);
+            int top = Math.Max(0, (Height - h1 - h2 - h3 - 2 * gap) / 2);
+            Color dim = Enabled ? p.TextDim : p.TextDisabled;
+            DrawTextLine(g, Text, tf, Enabled ? p.Text : p.TextDisabled, new Rectangle(padX, top, w, h1), false, true);
+            DrawTextLine(g, _line2, f2, dim, new Rectangle(padX, top + h1 + gap, w, h2), false, true);
+            DrawTextLine(g, _line3, f3, dim, new Rectangle(padX, top + h1 + h2 + 2 * gap, w, h3), false, true);
 
-            int x = 14;
-            int reserveX = IsCurrent ? 14 : 44;       // leave room for the ✕ on non-current rows
-            int cw = Math.Max(20, Width - x - reserveX);
-
-            const TextFormatFlags flags = TextFormatFlags.Left | TextFormatFlags.VerticalCenter
-                                        | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
-            using (var tf = FontHelper.Ui(9.5f, FontStyle.Bold))
-                TextRenderer.DrawText(g, _title, tf, new Rectangle(x, 7, cw, 20), titleColor, flags);
-            using (var f = FontHelper.Ui(8.25f))
-                TextRenderer.DrawText(g, _line2, f, new Rectangle(x, 28, cw, 18), subColor, flags);
-            using (var f = FontHelper.Ui(8f))
-                TextRenderer.DrawText(g, _line3, f, new Rectangle(x, 46, cw, 18), subColor, flags);
-
-            if (!IsCurrent)
+            if (!_current)
             {
-                _xRect = new Rectangle(Width - 40, (Height - 28) / 2, 28, 28);
-                using (var pen = new Pen(IsDark ? Color.FromArgb(200, 95, 95) : Color.FromArgb(205, 70, 70), 1.8f)
-                { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                var old = g.SmoothingMode;
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                int u = Dpi.Px(9, dpi);
+                using (var pen = new Pen(Enabled ? p.Danger : p.TextDisabled, Dpi.F(1.8f, dpi)) { StartCap = LineCap.Round, EndCap = LineCap.Round })
                 {
-                    g.DrawLine(pen, _xRect.X + 9, _xRect.Y + 9, _xRect.Right - 9, _xRect.Bottom - 9);
-                    g.DrawLine(pen, _xRect.Right - 9, _xRect.Y + 9, _xRect.X + 9, _xRect.Bottom - 9);
+                    g.DrawLine(pen, x.X + u, x.Y + u, x.Right - u, x.Bottom - u);
+                    g.DrawLine(pen, x.Right - u, x.Y + u, x.X + u, x.Bottom - u);
                 }
+                g.SmoothingMode = old;
+                PaintFocusRing(g, p, Rectangle.Inflate(x, -Dpi.Px(2, dpi), -Dpi.Px(2, dpi)), Dpi.Px(6, dpi), dpi);
             }
-
-            using (var p = new Pen(IsDark ? Color.FromArgb(52, 52, 56) : Color.FromArgb(232, 232, 236)))
-                g.DrawLine(p, x, Height - 1, Width - 14, Height - 1);
         }
     }
 }

@@ -352,6 +352,7 @@ namespace TelegArm.UI
                     ProbeCreateOnOtherDpi(check, s => log.AppendLine("INFO  " + s));
                     DialogProbe.Run(f, check, s => log.AppendLine("INFO  " + s));   // step 1.4: the dialogs' keyboard tests
                     TextBoxProbe.Run(check, s => log.AppendLine("INFO  " + s));      // step 1.5: ThemedTextBox's contract
+                    SettingsProbe.Run(f, check, s => log.AppendLine("INFO  " + s));  // step 2.6: Settings' apply models
                 }
                 catch (Exception ex) { check(false, "probe threw", ex.ToString()); }
                 f.Close();

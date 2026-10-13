@@ -10,10 +10,16 @@ namespace TelegArm.UI.Admin
     /// <summary>
     /// Generic, themed, SCROLLABLE checklist of boolean rights — reused for admin rights (ChatAdminRights) and
     /// default member permissions (ChatBannedRights-as-permissions). The caller passes labelled items with
-    /// initial states and reads <see cref="Result"/> on OK, then maps back to flags. Touch-sized rows; RT-dark
-    /// scrollbar via ScrollHost; accent title bar via ThemedChrome. No network here (the caller saves, bounded).
+    /// initial states and reads <see cref="Result"/> on OK, then maps back to flags. Touch-sized rows; the themed
+    /// scrollbar comes with the dialog body. No network here (the caller saves, bounded).
+    ///
+    /// Redesign step 2.6b: a <see cref="DialogForm"/> (was a plain Form + ThemedChrome.Apply + ScrollHost). Each right is a
+    /// <see cref="ToggleRow"/> (a switch, drawn — the 1.x CheckBox is gone), the optional subtitle a one-line dim row above
+    /// them, Save / Cancel the footer (Enter = Save, Esc = Cancel). The public surface is the 1.x one:
+    /// <see cref="Item"/>, the constructor and <see cref="Result"/> (one bool per item, in order, set on Save).
+    /// <paramref name="dark"/> and <paramref name="accent"/> are kept for the callers and no longer read.
     /// </summary>
-    public sealed class RightsChecklistForm : Form
+    public sealed class RightsChecklistForm : DialogForm
     {
         public sealed class Item
         {
@@ -21,51 +27,55 @@ namespace TelegArm.UI.Admin
             public Item(string label, bool initial) { Label = label; Initial = initial; }
         }
 
-        private readonly List<CheckBox> _boxes = new List<CheckBox>();
+        private readonly List<ToggleRow> _rows = new List<ToggleRow>();
         public bool[] Result { get; private set; }
 
         public RightsChecklistForm(string title, string subtitle, IList<Item> items, bool dark, Color accent)
+            : base(title, 380, 460)
         {
-            Color bg = dark ? Color.FromArgb(40, 40, 44) : Color.FromArgb(248, 248, 250);
-            Color fg = dark ? Color.FromArgb(235, 235, 235) : Color.FromArgb(20, 20, 20);
-            Color sub = dark ? Color.FromArgb(155, 155, 155) : Color.FromArgb(120, 120, 120);
-            Color field = dark ? Color.FromArgb(54, 54, 58) : Color.White;
-
-            Text = title;
-            StartPosition = FormStartPosition.CenterParent;
-            MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
-            ClientSize = new Size(380, 460 + ThemedChrome.BarH);
-            var content = ThemedChrome.Apply(this, title, accent, dark);
-
-            var scroll = ScrollHost.Wrap(content, dark, accent);   // RT-dark scrollbar; scrolls when rights overflow
-
-            // Bottom action bar (added after the scroll host so it docks first and claims the bottom strip).
-            var bottom = new Panel { Dock = DockStyle.Bottom, Height = 56, BackColor = bg };
-            var save = new RoundedButton { Text = "Save", Left = content.Width - 102, Top = 10, Width = 90, Height = 38, Kind = RoundedButtonKind.Primary, Font = FontHelper.Ui(10.5f, FontStyle.Bold) };
-            save.Click += (s, e) => { Result = _boxes.ConvertAll(b => b.Checked).ToArray(); DialogResult = DialogResult.OK; Close(); };
-            var cancel = new RoundedButton { Text = "Cancel", Left = content.Width - 196, Top = 10, Width = 84, Height = 38, Kind = RoundedButtonKind.Secondary };
-            cancel.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
-            bottom.Controls.Add(save); bottom.Controls.Add(cancel);
-            content.Controls.Add(bottom);
-
-            int y = 12;
-            if (!string.IsNullOrEmpty(subtitle))
-            {
-                scroll.Controls.Add(new Label { Text = subtitle, Left = 14, Top = y, Width = 332, Height = 36, ForeColor = sub, Font = FontHelper.Ui(9f) });
-                y += 42;
-            }
+            var body = new List<Control>();
+            if (!string.IsNullOrEmpty(subtitle)) body.Add(new SubtitleRow(subtitle));
             foreach (var it in items)
             {
-                var cb = new CheckBox
-                {
-                    Text = it.Label, Checked = it.Initial,
-                    Left = 14, Top = y, Width = 338, Height = 34,
-                    ForeColor = fg, BackColor = bg, FlatStyle = FlatStyle.Flat,
-                    Font = FontHelper.Ui(10.5f), TextAlign = ContentAlignment.MiddleLeft
-                };
-                _boxes.Add(cb);
-                scroll.Controls.Add(cb);
-                y += 38;
+                var row = new ToggleRow(it.Label, it.Initial);
+                _rows.Add(row);
+                body.Add(row);
+            }
+            PopulateBody(body.ToArray());
+
+            var save = AddFooterButton("Save", RoundedButtonKind.Primary, DialogResult.None);   // first added = rightmost
+            save.Click += (s, e) => { Result = _rows.ConvertAll(r => r.On).ToArray(); DialogResult = DialogResult.OK; Close(); };
+            CancelButton = AddFooterButton("Cancel", RoundedButtonKind.Neutral, DialogResult.Cancel);
+            AcceptButton = save;
+            FitToContent(400);   // taller lists scroll in the body
+        }
+
+        /// <summary>One line of quiet text above the switches (the member's name, or what the list is for). Drawn through
+        /// the row kit's emoji-aware line, so a display name with emoji keeps its colour images on RT 8.1; a name that
+        /// is too long ends in an ellipsis.</summary>
+        private sealed class SubtitleRow : SettingRow
+        {
+            private const int PadY = 6;
+
+            public SubtitleRow(string text) : base(text, false)
+            {
+                AccessibleRole = AccessibleRole.StaticText;
+                Refit();
+            }
+
+            public override int HeightFor(int width, int dpi)
+            {
+                return LineHeight(TextRoles.Font(TextRole.Field, dpi, Text)) + 2 * Dpi.Px(PadY, dpi);
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                var p = ThemeHelper.Palette;
+                int dpi = Dpi.Of(this), padX = Dpi.Px(PadX, dpi), padY = Dpi.Px(PadY, dpi);
+                PaintBack(e.Graphics, p);
+                if (Text.Length == 0) return;
+                var font = TextRoles.Font(TextRole.Field, dpi, Text);
+                DrawTextLine(e.Graphics, Text, font, p.TextDim, new Rectangle(padX, padY, Math.Max(1, Width - 2 * padX), LineHeight(font)), false, true);
             }
         }
     }

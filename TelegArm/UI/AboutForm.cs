@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
@@ -12,11 +13,25 @@ namespace TelegArm.UI
     /// <summary>
     /// The "About TelegArm" screen — app identity + version, a PROMINENTLY FEATURED acknowledgment of
     /// WTelegramClient and its author Wizou (wiz0u) — the pure-C# MTProto library the whole app is built on —
-    /// plus the source/license links and the open-source credits. Plain Form + ThemedChrome (accent title bar
-    /// + ✕ + drag + app icon), card layout, dark/accent themed — matching the app's other windows. Links open
-    /// in the browser (RT-safe: Process.Start wrapped in try/catch).
+    /// plus the Open-RT thanks, the source/license links and the open-source credits. Links open in the browser
+    /// (RT-safe: Process.Start wrapped in try/catch), except the Telegram group, which is handed to the caller
+    /// (<see cref="PendingInAppLink"/>) to open IN-APP.
+    ///
+    /// Redesign step 2.6b: a <see cref="DialogForm"/> (was a plain Form + ThemedChrome.Apply), laid out the way
+    /// DroidFinestra's AboutForm is: cards on the dialog body, every block MEASURED at its width and at the window's
+    /// DPI, so the layout flows from the measured heights and no text is ever cut off (the 1.x version placed text at
+    /// fixed pixel heights). <paramref name="dark"/> and <paramref name="accent"/> are kept for the caller and no
+    /// longer read: the palette follows the theme live.
+    ///
+    /// HOW IT IS BUILT. Each block of the screen (header, cards, footer) is one owner-drawn row (<see cref="Block"/>, a
+    /// SettingRow) that lays out and paints its own text, picture and links from a list of parts — so there is no
+    /// child control to recolour on a theme change, no font stored on a control for DpiScaler to scale twice, and the
+    /// height of a block is simply HeightFor(width, dpi). DialogForm stacks the blocks and scrolls them.
+    /// ⚠ The two link arrows and the sponsor heart are DRAWN, not typed: the bundled Roboto (Regular and Bold) has
+    ///   neither U+2192 nor U+2665 (FACT: read from the font files' character maps), so 1.x showed whatever the
+    ///   system fell back to — which is how tofu starts on RT 8.1.
     /// </summary>
-    public sealed class AboutForm : Form
+    public sealed class AboutForm : DialogForm
     {
         private const string RepoUrl = "https://github.com/hamed7ir/TelegArm";
         private const string WtcUrl = "https://github.com/wiz0u/WTelegramClient";
@@ -24,86 +39,41 @@ namespace TelegArm.UI
         private const string SponsorUrl = "https://github.com/sponsors/wiz0u";
         private const string LicenseUrl = "https://github.com/hamed7ir/TelegArm/blob/main/LICENSE";
 
-        private readonly Color _card, _border, _title, _sub, _accent;
-
         private string _pendingLink;
         /// <summary>A Telegram chat/group the user tapped in About — the caller opens it IN-APP after this
         /// modal dialog closes (About can't reach the chat view itself). Null if nothing in-app was tapped.</summary>
         public string PendingInAppLink => _pendingLink;
 
-        public AboutForm(bool dark, Color accent)
+        public AboutForm(bool dark, Color accent) : base("About TelegArm", 480, 640)
         {
-            _accent = accent;
-            Text = "About TelegArm";
-            StartPosition = FormStartPosition.CenterParent;
-            MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
-            KeyPreview = true;
-            KeyDown += (s, e) => { if (e.KeyCode == Keys.Escape) Close(); };
-            ClientSize = new Size(468, 556 + ThemedChrome.BarH);
-
-            var content = ThemedChrome.Apply(this, "About TelegArm", accent, dark);
-            var scroll = ScrollHost.Wrap(content, dark, accent);
-
-            Color bg = dark ? Color.FromArgb(40, 40, 44) : Color.FromArgb(248, 248, 250);
-            scroll.BackColor = bg;
-            _card = dark ? Color.FromArgb(50, 50, 55) : Color.White;
-            _border = dark ? Color.FromArgb(62, 62, 68) : Color.FromArgb(226, 226, 230);
-            _title = dark ? Color.FromArgb(236, 236, 240) : Color.FromArgb(33, 33, 38);
-            _sub = dark ? Color.FromArgb(158, 158, 165) : Color.FromArgb(110, 110, 116);
-            Color featBg = Blend(accent, _card, 0.16f);
-            Color featBrd = Blend(accent, _card, 0.55f);
-
-            const int M = 22, CW = 424;   // left margin, content width
-            int y = 24;
-
             // ── Header: icon + name + version + description (centered) ──
-            var pic = new PictureBox
-            {
-                Size = new Size(100, 100), Location = new Point(M + (CW - 100) / 2, y),
-                SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.Transparent
-            };
-            pic.Image = LoadAppImage(200);
-            scroll.Controls.Add(pic);
-            y += 100 + 10;
-
-            scroll.Controls.Add(Text2("TelegArm", M, y, CW, _title, FontHelper.Ui(20f, FontStyle.Bold), 34, bg, ContentAlignment.MiddleCenter)); y += 34;
-            scroll.Controls.Add(Text2("Version " + Program.Version, M, y, CW, _sub, FontHelper.Ui(9.5f), 20, bg, ContentAlignment.MiddleCenter)); y += 22;
-            scroll.Controls.Add(Text2("A pure-managed Telegram client for legacy ARM32 Windows.", M, y, CW, _sub, FontHelper.Ui(9f), 34, bg, ContentAlignment.TopCenter)); y += 42;
+            var header = new Block(BlockStyle.Plain, "TelegArm", 0, 24, 4, 12)
+                .Add(Part.Pic(LoadAppImage(200), 100, 0))
+                .Add(Part.Line("TelegArm", 20f, FontStyle.Bold, LabelRole.Body, 10, HorizontalAlignment.Center))
+                .Add(Part.Line("Version " + Program.Version, 9.5f, FontStyle.Regular, LabelRole.Dim, 2, HorizontalAlignment.Center))
+                .Add(Part.Line("A pure-managed Telegram client for legacy ARM32 Windows.", 9f, FontStyle.Regular, LabelRole.Dim, 8, HorizontalAlignment.Center));
 
             // ── FEATURED — WTelegramClient / Wizou (accent-tinted, emphasized) ──
-            var feat = Card(M, y, CW, 196, featBg, featBrd);
-            scroll.Controls.Add(feat);
-            feat.Controls.Add(Text2("Built on WTelegramClient", 16, 14, CW - 32, accent, FontHelper.Ui(12f, FontStyle.Bold), 24, featBg, ContentAlignment.MiddleLeft));
-            feat.Controls.Add(Text2("TelegArm is built entirely on WTelegramClient — the pure-C# MTProto library by Wizou (wiz0u), developed and maintained by one person. Please consider supporting his work.",
-                16, 42, CW - 32, _title, FontHelper.Ui(9f), 58, featBg, ContentAlignment.TopLeft));
-            feat.Controls.Add(Link("→  github.com/wiz0u/WTelegramClient", 16, 108, CW - 32, WtcUrl, FontHelper.Ui(9.5f, FontStyle.Bold), featBg));
-            feat.Controls.Add(InAppLink("→  @WTelegramClient — Telegram group", 16, 134, CW - 32, WtcGroupUrl, FontHelper.Ui(9.5f, FontStyle.Bold), featBg));
-            feat.Controls.Add(Link("♥  Support Wizou — GitHub Sponsors", 16, 160, CW - 32, SponsorUrl, FontHelper.Ui(9.5f, FontStyle.Bold), featBg));
-            y += 196 + 14;
+            var wtc = new Block(BlockStyle.Feature, "Built on WTelegramClient", 16, 14, 10, 14)
+                .Add(Part.Line("Built on WTelegramClient", 12f, FontStyle.Bold, LabelRole.Accent, 0))
+                .Add(Part.Line("TelegArm is built entirely on WTelegramClient — the pure-C# MTProto library by Wizou (wiz0u), developed and maintained by one person. Please consider supporting his work.",
+                               9f, FontStyle.Regular, LabelRole.Body, 6))
+                .Add(Part.Link("github.com/wiz0u/WTelegramClient", GlyphKind.Arrow, () => OpenUrl(WtcUrl), 8))
+                .Add(Part.Link("@WTelegramClient — Telegram group", GlyphKind.Arrow, () => OpenInApp(WtcGroupUrl), 0))
+                .Add(Part.Link("Support Wizou — GitHub Sponsors", GlyphKind.Heart, () => OpenUrl(SponsorUrl), 0));
 
-            // ── Open-RT community tribute (mirrors the WTC card's style; adds the openrt.png logo) ──
-            const int orH = 160, orTx = 16 + 72 + 14, orTw = CW - (16 + 72 + 14) - 16;   // logo box + text column
-            var orCard = Card(M, y, CW, orH, _card, _border);
-            scroll.Controls.Add(orCard);
-            var orPic = new PictureBox
-            {
-                Size = new Size(72, 72), Location = new Point(16, 24),
-                SizeMode = PictureBoxSizeMode.Zoom, BackColor = _card
-            };
-            orPic.Image = LoadImageFile("openrt.png", 144);   // shipped next to the exe (Content, PreserveNewest)
-            orCard.Controls.Add(orPic);
-            orCard.Controls.Add(Text2("Open-RT Community", orTx, 18, orTw, accent, FontHelper.Ui(12f, FontStyle.Bold), 24, _card, ContentAlignment.MiddleLeft));
-            orCard.Controls.Add(Text2("Thanks to the Open-RT community for bringing TelegArm to Windows RT:", orTx, 46, orTw, _sub, FontHelper.Ui(9f), 34, _card, ContentAlignment.TopLeft));
-            orCard.Controls.Add(Text2("samyryu · RHLM fan · Artus100 · Keith · jeybee · die Oberfläche knacken", orTx, 84, orTw, _title, FontHelper.Ui(9.5f, FontStyle.Bold), 64, _card, ContentAlignment.TopLeft));
-            y += orH + 14;
+            // ── Open-RT community tribute (mirrors the WTC card's layout; adds the openrt.png logo) ──
+            var openRt = new Block(BlockStyle.Card, "Open-RT Community", 16, 16, 16, 14)
+                .WithSideImage(LoadImageFile("openrt.png", 144))   // shipped next to the exe (Content, PreserveNewest)
+                .Add(Part.Line("Open-RT Community", 12f, FontStyle.Bold, LabelRole.Accent, 0))
+                .Add(Part.Line("Thanks to the Open-RT community for bringing TelegArm to Windows RT:", 9f, FontStyle.Regular, LabelRole.Dim, 4))
+                .Add(Part.Line("samyryu · RHLM fan · Artus100 · Keith · jeybee · die Oberfläche knacken", 9.5f, FontStyle.Bold, LabelRole.Body, 6));
 
             // ── Source + license ──
-            var meta = Card(M, y, CW, 92, _card, _border);
-            scroll.Controls.Add(meta);
-            MetaRow(meta, 0, "Source code", "github.com/hamed7ir/TelegArm", RepoUrl, CW);
-            meta.Controls.Add(new Panel { Location = new Point(14, 46), Size = new Size(CW - 28, 1), BackColor = _border });
-            MetaRow(meta, 46, "License", "GPL-3.0-only", LicenseUrl, CW);
-            y += 92 + 14;
+            var meta = new Block(BlockStyle.Card, "Source code and license", 16, 0, 0, 14)
+                .Add(Part.Row("Source code", 9.5f, "github.com/hamed7ir/TelegArm", 9.5f, FontStyle.Bold, LabelRole.Accent, () => OpenUrl(RepoUrl), 0, 46, 0))
+                .Add(Part.Rule())
+                .Add(Part.Row("License", 9.5f, "GPL-3.0-only", 9.5f, FontStyle.Bold, LabelRole.Accent, () => OpenUrl(LicenseUrl), 0, 46, 0));
 
             // ── Open-source credits ──
             string[][] credits =
@@ -111,6 +81,7 @@ namespace TelegArm.UI
                 // BATCH-TA-2 — WTelegramClient was missing entirely: the MTProto library the whole app
                 // is built on. Concentus.OggFile is a separate package from Concentus and was also absent.
                 new[] { "WTelegramClient", "MIT" },
+                // The old UI skin library still ships until plan step 2.8 removes the package — its credit goes then, not before.
                 new[] { "MaterialSkin.2", "MIT" },
                 // One row used to cover both as "LGPL-2.1". True for the C# bindings and for
                 // libvlc/libvlccore, but NOT for what we actually ship: both bundled zips carry plugins
@@ -137,86 +108,55 @@ namespace TelegArm.UI
                 new[] { "Roboto (Medium)", "Apache-2.0" },
                 new[] { "Noto Emoji", "SIL OFL 1.1" },
             };
-            int ch = 40 + credits.Length * 24 + 8;
-            var cr = Card(M, y, CW, ch, _card, _border);
-            scroll.Controls.Add(cr);
-            cr.Controls.Add(Text2("OPEN-SOURCE CREDITS", 16, 12, CW - 32, accent, FontHelper.Ui(8.25f, FontStyle.Bold), 18, _card, ContentAlignment.MiddleLeft));
-            int ry = 38;
+            var cr = new Block(BlockStyle.Card, "Open-source credits", 16, 12, 10, 14)
+                .Add(Part.Line("OPEN-SOURCE CREDITS", 8.25f, FontStyle.Bold, LabelRole.Accent, 0));
+            bool firstCredit = true;
             foreach (var row in credits)
             {
-                cr.Controls.Add(Text2(row[0], 16, ry, CW - 170, _title, FontHelper.Ui(9f), 22, _card, ContentAlignment.MiddleLeft));
-                cr.Controls.Add(Text2(row[1], CW - 152, ry, 136, _sub, FontHelper.Ui(8.5f), 22, _card, ContentAlignment.MiddleRight));
-                ry += 24;
+                cr.Add(Part.Row(row[0], 9f, row[1], 8.5f, FontStyle.Regular, LabelRole.Dim, null, 136, 22, firstCredit ? 8 : 0));
+                firstCredit = false;
             }
-            y += ch + 14;
 
             // ── Footer ──
             // BATCH-TA-2/L1 — was "(in the repo root)", which was false for every installed copy: neither
             // installer shipped the file at all. Both now drop LICENSE.txt + THIRD-PARTY-NOTICES.txt into
             // the install directory, so point at where the user can actually find them.
-            scroll.Controls.Add(Text2("Full license texts: LICENSE.txt and THIRD-PARTY-NOTICES.txt, beside the app.", M, y, CW, _sub, FontHelper.Ui(8.25f), 18, bg, ContentAlignment.MiddleCenter)); y += 20;
-            scroll.Controls.Add(Text2("© 2026 TelegArm · Licensed under GPL-3.0-only", M, y, CW, _sub, FontHelper.Ui(8.25f), 18, bg, ContentAlignment.MiddleCenter)); y += 30;
+            var foot = new Block(BlockStyle.Plain, "License notices", 0, 0, 14, 0)
+                .Add(Part.Line("Full license texts: LICENSE.txt and THIRD-PARTY-NOTICES.txt, beside the app.", 8.25f, FontStyle.Regular, LabelRole.Dim, 0, HorizontalAlignment.Center))
+                .Add(Part.Line("© 2026 TelegArm · Licensed under GPL-3.0-only", 8.25f, FontStyle.Regular, LabelRole.Dim, 2, HorizontalAlignment.Center));
 
-            scroll.Controls.Add(new Panel { Location = new Point(0, y), Size = new Size(4, 8), BackColor = bg });   // extend the scroll extent
+            PopulateBody(header, wtc, openRt, meta, cr, foot);
+
+            // Close is both the Esc and the Enter button. Its result is Cancel: a plain close is what 1.x returned (a tap on
+            // the in-app group link is the only OK, set in OpenInApp), and the caller reads PendingInAppLink, not the result.
+            var close = AddFooterButton("Close", RoundedButtonKind.Primary, DialogResult.Cancel);
+            CancelButton = close;
+            AcceptButton = close;
+            FitToContent(MaxBodyLogical());
         }
 
-        private void MetaRow(Panel card, int cy, string left, string linkText, string url, int cw)
+        /// <summary>The tallest body the dialog may have, in logical px: the 640-high About of 1.x less the title bar and the
+        /// footer, and never more than 90% of the work area (the content is taller than that and scrolls).</summary>
+        private int MaxBodyLogical()
         {
-            card.Controls.Add(Text2(left, 16, cy, 150, _title, FontHelper.Ui(9.5f), 46, _card, ContentAlignment.MiddleLeft));
-            var link = Link(linkText, 160, cy, cw - 176, url, FontHelper.Ui(9.5f, FontStyle.Bold), _card);
-            link.Height = 46; link.TextAlign = ContentAlignment.MiddleRight;
-            card.Controls.Add(link);
-        }
-
-        private static Label Text2(string text, int x, int y, int w, Color color, Font font, int h, Color parentBg, ContentAlignment align)
-        {
-            return new Label
+            int body = 540;
+            try
             {
-                Text = text, Location = new Point(x, y), AutoSize = false, Size = new Size(w, h),
-                ForeColor = color, BackColor = parentBg, Font = font, TextAlign = align
-            };
-        }
-
-        private Label StyledLink(string text, int x, int y, int w, Font font, Color parentBg)
-        {
-            return new Label
-            {
-                Text = text, Location = new Point(x, y), AutoSize = false, Size = new Size(w, 22),
-                ForeColor = _accent, BackColor = parentBg, Font = font, Cursor = Cursors.Hand,
-                TextAlign = ContentAlignment.MiddleLeft
-            };
-        }
-
-        /// <summary>A web link — opens in the browser (Process.Start).</summary>
-        private Label Link(string text, int x, int y, int w, string url, Font font, Color parentBg)
-        {
-            var l = StyledLink(text, x, y, w, font, parentBg);
-            l.Click += (s, e) => OpenUrl(url);
-            return l;
+                int dpi = Math.Max(1, WindowDpiValue);
+                int room = (int)(Screen.PrimaryScreen.WorkingArea.Height * 0.9) - Bar.Height - Px(FooterHeight) - 1;
+                body = Math.Min(body, room * Dpi.Logical / dpi);
+            }
+            catch { /* no screen to ask: keep the default */ }
+            return Math.Max(240, body);
         }
 
         /// <summary>A Telegram chat/group link — closes About and hands the link to the caller to open IN-APP
         /// (the chat view), instead of the browser.</summary>
-        private Label InAppLink(string text, int x, int y, int w, string url, Font font, Color parentBg)
+        private void OpenInApp(string url)
         {
-            var l = StyledLink(text, x, y, w, font, parentBg);
-            l.Click += (s, e) => { _pendingLink = url; DialogResult = DialogResult.OK; Close(); };
-            return l;
-        }
-
-        private Panel Card(int x, int y, int w, int h, Color fill, Color brd)
-        {
-            var p = new Panel { Location = new Point(x, y), Size = new Size(w, h), BackColor = fill };
-            using (var path = DrawHelper.RoundedRect(new Rectangle(0, 0, w, h), 12))
-                p.Region = new Region(path);
-            p.Paint += (s, e) =>
-            {
-                var g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
-                using (var pen = new Pen(brd))
-                using (var pa = DrawHelper.RoundedRect(new Rectangle(0, 0, w - 1, h - 1), 12))
-                    g.DrawPath(pen, pa);
-            };
-            return p;
+            _pendingLink = url;
+            DialogResult = DialogResult.OK;
+            Close();
         }
 
         private static void OpenUrl(string url)
@@ -242,7 +182,7 @@ namespace TelegArm.UI
                         {
                             g.InterpolationMode = InterpolationMode.HighQualityBicubic;
                             g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                            g.DrawImage(src, new Rectangle(0, 0, size, size));
+                            g.DrawImage(src, new Rectangle(Point.Empty, new Size(size, size)));
                         }
                         return bmp;
                     }
@@ -270,7 +210,7 @@ namespace TelegArm.UI
                     {
                         g.InterpolationMode = InterpolationMode.HighQualityBicubic;
                         g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                        g.DrawImage(src, new Rectangle(0, 0, size, size));
+                        g.DrawImage(src, new Rectangle(Point.Empty, new Size(size, size)));
                     }
                     return bmp;
                 }
@@ -278,12 +218,393 @@ namespace TelegArm.UI
             catch { return null; }
         }
 
-        private static Color Blend(Color a, Color b, float t)
+        // ── the screen's building blocks ─────────────────────────────────────────────────────────────────────────
+
+        private enum BlockStyle { Plain, Card, Feature }
+        private enum PartKind { Text, Link, Row, Divider, Picture }
+        private enum GlyphKind { None, Arrow, Heart }
+
+        /// <summary>One thing a <see cref="Block"/> shows. The factories say what is built; <see cref="Block.Place"/> fills in
+        /// the rectangles (R1, R2, Hit) for a width and a DPI. Every length here is LOGICAL (96 dpi).</summary>
+        private sealed class Part
         {
-            return Color.FromArgb(
-                (int)(a.R * t + b.R * (1 - t)),
-                (int)(a.G * t + b.G * (1 - t)),
-                (int)(a.B * t + b.B * (1 - t)));
+            public PartKind Kind;
+            public string Text, Text2;
+            public float Pt = 9f, Pt2 = 9f;
+            public FontStyle Style, Style2;
+            public LabelRole Ink = LabelRole.Body, Ink2 = LabelRole.Dim;
+            public HorizontalAlignment Align;
+            public int GapBefore, MinHeight, RightWidth, Size;
+            public GlyphKind Glyph;
+            public Action Click;
+            public Image Img;
+            public Rectangle R1, R2, Hit;   // set by Block.Place
+
+            /// <summary>Wrapped text.</summary>
+            public static Part Line(string text, float pt, FontStyle style, LabelRole ink, int gapBefore, HorizontalAlignment align = HorizontalAlignment.Left)
+            {
+                return new Part { Kind = PartKind.Text, Text = text, Pt = pt, Style = style, Ink = ink, GapBefore = gapBefore, Align = align };
+            }
+
+            /// <summary>A tappable link line (a glyph, then the text in the accent ink), at least 26 px tall for a finger.</summary>
+            public static Part Link(string text, GlyphKind glyph, Action click, int gapBefore)
+            {
+                return new Part { Kind = PartKind.Link, Text = text, Pt = 9.5f, Style = FontStyle.Bold, Ink = LabelRole.Accent, Glyph = glyph, Click = click, GapBefore = gapBefore, MinHeight = 26 };
+            }
+
+            /// <summary>A left text and a right-aligned text on one row; the right one is the link when <paramref name="click"/>
+            /// is set. <paramref name="rightWidth"/> fixes the right column (0 = whatever the left text leaves).</summary>
+            public static Part Row(string left, float pt1, string right, float pt2, FontStyle style2, LabelRole ink2, Action click, int rightWidth, int minHeight, int gapBefore)
+            {
+                return new Part { Kind = PartKind.Row, Text = left, Pt = pt1, Text2 = right, Pt2 = pt2, Style2 = style2, Ink2 = ink2, Click = click, RightWidth = rightWidth, MinHeight = minHeight, GapBefore = gapBefore };
+            }
+
+            /// <summary>A hairline across the card.</summary>
+            public static Part Rule() { return new Part { Kind = PartKind.Divider }; }
+
+            /// <summary>A square picture, centred. The block owns (and disposes) the image.</summary>
+            public static Part Pic(Image img, int size, int gapBefore) { return new Part { Kind = PartKind.Picture, Img = img, Size = size, GapBefore = gapBefore }; }
+        }
+
+        /// <summary>A card (or plain strip) of the About screen: owner-drawn, and as tall as its parts measure at its width.
+        /// It is a SettingRow only for the machinery that comes with one — the palette-backed clear, the refit when the width
+        /// or the window's DPI changes, the theme repaint, and the accessible name — it is not a setting.
+        ///
+        /// ★ MEASURED, NOT FIXED. <see cref="Place"/> measures every text with TextRenderer at the width it will be drawn at and
+        ///   stacks the parts from those heights; <see cref="HeightFor"/> is its result, and OnPaint and the hit test use the
+        ///   same placement (cached for one width and DPI). A card is 22 logical px in from each edge, 12 px round.
+        /// ★ LINKS. A part with a Click is a link: the hand cursor over it and a left click run it. (Not a tab stop — 1.x's links
+        ///   were not either.)
+        /// ★ INK comes from the palette at paint time; the accent text is nudged to read on the card it sits on
+        ///   (ColorMath.Ink against the card fill), which matters on the accent-tinted featured card.</summary>
+        private sealed class Block : SettingRow
+        {
+            private const int MarginX = 22, Radius = 12, GlyphCol = 22, DividerInset = 14, ColGap = 12;
+            private const int LinkPadY = 3, RowPadY = 3;
+            private const int SideImageSize = 72, SideImageGap = 14, SideImageTop = 20;
+
+            private readonly BlockStyle _style;
+            private readonly List<Part> _parts = new List<Part>();
+            private readonly int _padX, _topPad, _bottomPad, _gapAfter;
+            private Image _sideImage;
+            private Rectangle _card, _side;
+            private int _placedWidth = -1, _placedDpi = -1, _placedHeight;
+
+            /// <param name="padX">Logical padding between the card edge and its content.</param>
+            /// <param name="gapAfter">Logical blank space below the block (the gap to the next card).</param>
+            public Block(BlockStyle style, string caption, int padX, int topPad, int bottomPad, int gapAfter) : base(caption, false)
+            {
+                _style = style;
+                _padX = padX;
+                _topPad = topPad;
+                _bottomPad = bottomPad;
+                _gapAfter = gapAfter;
+                AccessibleRole = AccessibleRole.StaticText;
+                Refit();
+            }
+
+            public Block Add(Part part)
+            {
+                _parts.Add(part);
+                Reflow();
+                return this;
+            }
+
+            /// <summary>A picture in a column at the left of the card's text (the Open-RT logo). The block owns it.</summary>
+            public Block WithSideImage(Image img)
+            {
+                _sideImage = img;
+                Reflow();
+                return this;
+            }
+
+            private void Reflow()
+            {
+                _placedWidth = -1;
+                AccessibleName = SpokenText();
+                if (Parent != null) { Refit(); Invalidate(); }
+            }
+
+            /// <summary>What a screen reader announces for the block: every text it shows, in order (1.x's labels each exposed
+            /// their own text; a block draws its texts itself, so without this only the short caption would be read).</summary>
+            private string SpokenText()
+            {
+                var sb = new System.Text.StringBuilder();
+                foreach (var part in _parts)
+                {
+                    if (part.Kind == PartKind.Divider || part.Kind == PartKind.Picture) continue;
+                    if (sb.Length > 0) sb.Append(". ");
+                    sb.Append(part.Text);
+                    if (part.Kind == PartKind.Row && !string.IsNullOrEmpty(part.Text2)) sb.Append(' ').Append(part.Text2);
+                }
+                return sb.Length > 0 ? sb.ToString() : Text;
+            }
+
+            // ── placement ────────────────────────────────────────────────────────────────────────────────────
+
+            public override int HeightFor(int width, int dpi) { return Place(width, dpi); }
+
+            private static int TextHeight(string text, float pt, FontStyle style, int width, HorizontalAlignment align, int dpi)
+            {
+                return TextRenderer.MeasureText(text, FontHelper.UiAt(pt, dpi, style), new Size(Math.Max(1, width), 0), DrawFlags(align)).Height;
+            }
+
+            private static TextFormatFlags DrawFlags(HorizontalAlignment align)
+            {
+                var f = BaseFlags | TextFormatFlags.WordBreak | TextFormatFlags.Top;
+                if (align == HorizontalAlignment.Center) return f | TextFormatFlags.HorizontalCenter;
+                if (align == HorizontalAlignment.Right) return f | TextFormatFlags.Right;
+                return f | TextFormatFlags.Left;
+            }
+
+            /// <summary>Measures and places every part for an outer <paramref name="width"/> at <paramref name="dpi"/>; returns the
+            /// block's height (the card plus the gap below it). Cached for one width and DPI.</summary>
+            private int Place(int width, int dpi)
+            {
+                if (width == _placedWidth && dpi == _placedDpi) return _placedHeight;
+
+                int mx = Dpi.Px(MarginX, dpi);
+                int left = mx, right = Math.Max(mx + 1, width - mx);
+                int x0 = left + Dpi.Px(_padX, dpi);
+                int tx = x0 + (_sideImage != null ? Dpi.Px(SideImageSize + SideImageGap, dpi) : 0);   // the text column
+                int cw = Math.Max(1, right - Dpi.Px(_padX, dpi) - tx);
+                int y = Dpi.Px(_topPad, dpi);
+
+                foreach (var part in _parts)
+                {
+                    y += Dpi.Px(part.GapBefore, dpi);
+                    switch (part.Kind)
+                    {
+                        case PartKind.Text:
+                        {
+                            int h = TextHeight(part.Text, part.Pt, part.Style, cw, part.Align, dpi);
+                            part.R1 = new Rectangle(tx, y, cw, h);
+                            y += h;
+                            break;
+                        }
+                        case PartKind.Link:
+                        {
+                            int gw = part.Glyph == GlyphKind.None ? 0 : Dpi.Px(GlyphCol, dpi);
+                            int tw = Math.Max(1, cw - gw);
+                            int h = TextHeight(part.Text, part.Pt, part.Style, tw, HorizontalAlignment.Left, dpi);
+                            int rowH = Math.Max(Dpi.Px(part.MinHeight, dpi), h + 2 * Dpi.Px(LinkPadY, dpi));
+                            part.Hit = new Rectangle(tx, y, cw, rowH);
+                            part.R1 = new Rectangle(tx + gw, y + (rowH - h) / 2, tw, h);
+                            part.R2 = new Rectangle(tx, y, gw, rowH);   // the glyph's slot
+                            y += rowH;
+                            break;
+                        }
+                        case PartKind.Row:
+                        {
+                            int gap = Dpi.Px(ColGap, dpi);
+                            int w1, w2;
+                            if (part.RightWidth > 0)
+                            {
+                                w2 = Math.Min(Dpi.Px(part.RightWidth, dpi), cw * 3 / 4);
+                                w1 = Math.Max(1, cw - w2 - gap);
+                            }
+                            else
+                            {
+                                // the left text keeps its whole line (up to 40% of the row); the right one gets the rest
+                                int need = TextRenderer.MeasureText(part.Text, FontHelper.UiAt(part.Pt, dpi, part.Style), Size.Empty, BaseFlags | TextFormatFlags.SingleLine).Width + Dpi.Px(2, dpi);
+                                w1 = Math.Min(need, cw * 2 / 5);
+                                w2 = Math.Max(1, cw - w1 - gap);
+                            }
+                            int h1 = TextHeight(part.Text, part.Pt, part.Style, w1, HorizontalAlignment.Left, dpi);
+                            int h2 = TextHeight(part.Text2, part.Pt2, part.Style2, w2, HorizontalAlignment.Right, dpi);
+                            int rowH = Math.Max(Dpi.Px(part.MinHeight, dpi), Math.Max(h1, h2) + 2 * Dpi.Px(RowPadY, dpi));
+                            part.R1 = new Rectangle(tx, y + (rowH - h1) / 2, w1, h1);
+                            part.R2 = new Rectangle(tx + cw - w2, y + (rowH - h2) / 2, w2, h2);
+                            part.Hit = part.Click != null ? new Rectangle(part.R2.X, y, w2, rowH) : Rectangle.Empty;
+                            y += rowH;
+                            break;
+                        }
+                        case PartKind.Divider:
+                        {
+                            int inset = Dpi.Px(DividerInset, dpi);
+                            part.R1 = new Rectangle(left + inset, y, Math.Max(1, right - left - 2 * inset), 1);
+                            y += 1;
+                            break;
+                        }
+                        case PartKind.Picture:
+                        {
+                            int sz = Dpi.Px(part.Size, dpi);
+                            part.R1 = new Rectangle(left + (right - left - sz) / 2, y, sz, sz);
+                            y += sz;
+                            break;
+                        }
+                    }
+                }
+
+                y += Dpi.Px(_bottomPad, dpi);
+                if (_sideImage != null)
+                {
+                    int sz = Dpi.Px(SideImageSize, dpi);
+                    _side = new Rectangle(x0, Dpi.Px(SideImageTop, dpi), sz, sz);
+                    y = Math.Max(y, _side.Bottom + Dpi.Px(_bottomPad, dpi));
+                }
+                _card = _style == BlockStyle.Plain ? Rectangle.Empty : new Rectangle(left, 0, right - left, y);
+                _placedWidth = width;
+                _placedDpi = dpi;
+                _placedHeight = y + Dpi.Px(_gapAfter, dpi);
+                return _placedHeight;
+            }
+
+            // ── links ────────────────────────────────────────────────────────────────────────────────────────
+
+            private Part LinkAt(Point pt)
+            {
+                foreach (var part in _parts)
+                    if (part.Click != null && !part.Hit.IsEmpty && part.Hit.Contains(pt)) return part;
+                return null;
+            }
+
+            protected override void OnMouseMove(MouseEventArgs e)
+            {
+                base.OnMouseMove(e);
+                Cursor want = LinkAt(e.Location) != null ? Cursors.Hand : Cursors.Default;
+                if (Cursor != want) Cursor = want;
+            }
+
+            protected override void OnMouseLeave(EventArgs e)
+            {
+                base.OnMouseLeave(e);
+                if (Cursor != Cursors.Default) Cursor = Cursors.Default;
+            }
+
+            protected override void OnMouseClick(MouseEventArgs e)
+            {
+                base.OnMouseClick(e);
+                if (e.Button != MouseButtons.Left) return;
+                var part = LinkAt(e.Location);
+                if (part != null) part.Click();
+            }
+
+            // ── painting ─────────────────────────────────────────────────────────────────────────────────────
+
+            private static Color InkOf(LabelRole role, Palette p, Color accent)
+            {
+                switch (role)
+                {
+                    case LabelRole.Dim: return p.TextDim;
+                    case LabelRole.Faint: return p.TextFaint;
+                    case LabelRole.Accent: return accent;
+                    case LabelRole.Danger: return p.Danger;
+                    default: return p.Text;
+                }
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                var p = ThemeHelper.Palette;
+                var g = e.Graphics;
+                int dpi = Dpi.Of(this);
+                PaintBack(g, p);
+                Place(Width, dpi);
+
+                // The card: the palette's card colour, or the accent washed into it (the featured card: DF's 16% fill, 55% edge).
+                Color fill = p.Window, edge = p.Divider;
+                if (_style == BlockStyle.Feature) { fill = ColorMath.Mix(p.Card, p.Accent, 0.16f); edge = ColorMath.Mix(p.Card, p.Accent, 0.55f); }
+                else if (_style == BlockStyle.Card) fill = p.Card;
+                if (_style != BlockStyle.Plain && _card.Width > 2 && _card.Height > 2)
+                {
+                    g.SmoothingMode = SmoothingMode.AntiAlias;
+                    using (var path = DrawHelper.RoundedRect(new Rectangle(_card.X, _card.Y, _card.Width - 1, _card.Height - 1), Dpi.Px(Radius, dpi)))
+                    {
+                        using (var b = new SolidBrush(fill)) g.FillPath(b, path);
+                        using (var pen = new Pen(edge, 1f)) g.DrawPath(pen, path);
+                    }
+                    g.SmoothingMode = SmoothingMode.None;
+                }
+                Color accent = ColorMath.Ink(p.Accent, fill);
+
+                if (_sideImage != null) DrawPicture(g, _sideImage, _side);
+                foreach (var part in _parts)
+                {
+                    switch (part.Kind)
+                    {
+                        case PartKind.Text:
+                            TextRenderer.DrawText(g, part.Text, FontHelper.UiAt(part.Pt, dpi, part.Style), part.R1, InkOf(part.Ink, p, accent), DrawFlags(part.Align));
+                            break;
+                        case PartKind.Link:
+                            DrawGlyph(g, part.Glyph, part.R2, accent, dpi);
+                            TextRenderer.DrawText(g, part.Text, FontHelper.UiAt(part.Pt, dpi, part.Style), part.R1, InkOf(part.Ink, p, accent), DrawFlags(HorizontalAlignment.Left));
+                            break;
+                        case PartKind.Row:
+                            TextRenderer.DrawText(g, part.Text, FontHelper.UiAt(part.Pt, dpi, part.Style), part.R1, InkOf(part.Ink, p, accent), DrawFlags(HorizontalAlignment.Left));
+                            TextRenderer.DrawText(g, part.Text2, FontHelper.UiAt(part.Pt2, dpi, part.Style2), part.R2, InkOf(part.Ink2, p, accent), DrawFlags(HorizontalAlignment.Right));
+                            break;
+                        case PartKind.Divider:
+                            using (var pen = new Pen(p.Divider, 1f)) g.DrawLine(pen, part.R1.Left, part.R1.Top, part.R1.Right - 1, part.R1.Top);
+                            break;
+                        case PartKind.Picture:
+                            DrawPicture(g, part.Img, part.R1);
+                            break;
+                    }
+                }
+            }
+
+            private static void DrawPicture(Graphics g, Image img, Rectangle r)
+            {
+                if (img == null || r.Width < 2 || r.Height < 2) return;
+                var interpolation = g.InterpolationMode;
+                var offset = g.PixelOffsetMode;
+                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                try { g.DrawImage(img, r); }
+                catch (Exception) { /* a bitmap GDI+ will not draw: leave the space empty rather than fail a paint */ }
+                g.InterpolationMode = interpolation;
+                g.PixelOffsetMode = offset;
+            }
+
+            /// <summary>The arrow or the heart in front of a link, drawn with GDI+ in the slot's left part, centred on the row
+            /// (a font glyph would be tofu on RT 8.1 — see the class notes of AboutForm).</summary>
+            private static void DrawGlyph(Graphics g, GlyphKind kind, Rectangle slot, Color ink, int dpi)
+            {
+                if (kind == GlyphKind.None || slot.Width < 1) return;
+                var smoothing = g.SmoothingMode;
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                float u = Dpi.F(1f, dpi), x = slot.X + u, cy = slot.Y + slot.Height / 2f;
+                if (kind == GlyphKind.Arrow)
+                {
+                    using (var pen = new Pen(ink, Dpi.F(1.7f, dpi)) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+                    {
+                        g.DrawLine(pen, x, cy, x + 11 * u, cy);
+                        g.DrawLines(pen, new[] { new PointF(x + 7 * u, cy - 4 * u), new PointF(x + 11 * u, cy), new PointF(x + 7 * u, cy + 4 * u) });
+                    }
+                }
+                else
+                {
+                    // A heart on a 20 x 18.35 unit grid (x 2..22, y 3..21.35), scaled to 12 logical px wide and centred.
+                    float k = 12 * u / 20f, ox = x, oy = cy - 9.175f * k;
+                    Func<float, float, PointF> h = (px, py) => new PointF(ox + (px - 2f) * k, oy + (py - 3f) * k);
+                    using (var path = new GraphicsPath())
+                    {
+                        path.AddLine(h(12f, 21.35f), h(10.55f, 20.03f));
+                        path.AddBezier(h(10.55f, 20.03f), h(5.4f, 15.36f), h(2f, 12.28f), h(2f, 8.5f));
+                        path.AddBezier(h(2f, 8.5f), h(2f, 5.42f), h(4.42f, 3f), h(7.5f, 3f));
+                        path.AddBezier(h(7.5f, 3f), h(9.24f, 3f), h(10.91f, 3.81f), h(12f, 5.09f));
+                        path.AddBezier(h(12f, 5.09f), h(13.09f, 3.81f), h(14.76f, 3f), h(16.5f, 3f));
+                        path.AddBezier(h(16.5f, 3f), h(19.58f, 3f), h(22f, 5.42f), h(22f, 8.5f));
+                        path.AddBezier(h(22f, 8.5f), h(22f, 12.28f), h(18.6f, 15.36f), h(13.45f, 20.04f));
+                        path.AddLine(h(13.45f, 20.04f), h(12f, 21.35f));
+                        path.CloseFigure();
+                        using (var b = new SolidBrush(ink)) g.FillPath(b, path);
+                    }
+                }
+                g.SmoothingMode = smoothing;
+            }
+
+            protected override void Dispose(bool disposing)
+            {
+                if (disposing)
+                {
+                    if (_sideImage != null) { _sideImage.Dispose(); _sideImage = null; }
+                    foreach (var part in _parts)
+                        if (part.Img != null) { part.Img.Dispose(); part.Img = null; }
+                }
+                base.Dispose(disposing);
+            }
         }
     }
 }

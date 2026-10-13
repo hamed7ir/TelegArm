@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Linq;
-using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -24,9 +23,18 @@ namespace TelegArm.UI
     ///
     /// ⚠ SECRETS NEVER REACH A LOG. Every diagnostic here logs <see cref="ProxyUrl.SafeForLog"/>
     /// (host:port). See the rule in ProxyUrl's remarks.
+    ///
+    /// Redesign step 2.6b: a <see cref="DialogForm"/> (was a Form + ThemedChrome.Apply with hand-coloured WinForms
+    /// controls; mdfiles/PHASE2-CONVERSION-GUIDE.md). What did not change: every proxy operation, the per-row status and
+    /// test-result lines, the list behaviour, the Save-on-any-close rule and what the callers read afterwards
+    /// (<see cref="ConnectionSettingsChanged"/>). The page is laid out by hand (<see cref="LayoutPage"/>) inside
+    /// <see cref="DialogForm.UseOwnBody"/> rather than as stacked rows, because the proxy list scrolls by itself and a
+    /// scrolling list inside a scrolling body would fight over the finger.
     /// </summary>
-    public sealed class ProxyForm : Form
+    public sealed class ProxyForm : DialogForm
     {
+        private const int RowH = 68;                // one proxy row, logical px
+
         private readonly TelegramService _service;      // may be null (login screen)
         private readonly AppSettings _s;
 
@@ -35,22 +43,23 @@ namespace TelegArm.UI
         private int _active;
         private bool _changed;
 
-        private Panel _content;                 // ThemedChrome content host — EVERYTHING parents here
-        private RadioButton _rbOff, _rbCustom;
-        private Panel _listHost;
+        private Panel _page;                    // the dialog body: everything below parents here
+        private SegmentedRow _mode;             // "Don't use a proxy" | "Use a proxy" (was two RadioButtons)
+        private NoteRow _note;
+        private Panel _listHost;                // a 1 px Divider frame around the list
         private NoNativeScrollPanel _listPanel;
         private ThemedScrollBar _listBar;
-        private TextBox _pasteBox;
-        private Label _hint;
-
-        private Color _bg, _card, _fg, _sub, _border, _accent;
-        private bool _dark;
+        private ThemedTextBox _pasteBox;
+        private ThemedLabel _hint;
+        private RoundedButton _addBtn, _clipBtn, _doneBtn;
+        private bool _built, _rebuilding;       // our own flags: never lay out from Control.Visible
+        private int _rowsW = -1, _rowsH = -1;   // the row width / height (px) the rows were last placed at
 
         /// <summary>True when the user changed anything the connection depends on, so the caller knows
         /// whether a reconnect is warranted at all.</summary>
         public bool ConnectionSettingsChanged { get { return _changed; } }
 
-        public ProxyForm(TelegramService service = null)
+        public ProxyForm(TelegramService service = null) : base("Proxy", 460, 600)
         {
             _service = service;
             _s = AppSettings.Instance;
@@ -58,118 +67,182 @@ namespace TelegArm.UI
             _enabled = _s.ProxyEnabled;
             _active = _s.ProxyActive;
 
-            ComputeTheme();
             BuildUi();
             RebuildRows();
         }
 
-        private void ComputeTheme()
-        {
-            _dark = ThemeHelper.IsDark;
-            _accent = ThemeHelper.GetWindowsAccentColor();
-            _bg = _dark ? Color.FromArgb(40, 40, 44) : Color.FromArgb(248, 248, 250);
-            _card = _dark ? Color.FromArgb(50, 50, 55) : Color.White;
-            _fg = _dark ? Color.FromArgb(232, 232, 236) : Color.FromArgb(30, 30, 34);
-            _sub = _dark ? Color.FromArgb(150, 150, 156) : Color.FromArgb(120, 120, 126);
-            _border = _dark ? Color.FromArgb(70, 70, 76) : Color.FromArgb(220, 220, 226);
-        }
-
         private void BuildUi()
         {
-            // BATCH-TA-16e/E4 — the app's STANDARD chrome, the same one SettingsForm and the admin dialogs
-            // use (SettingsForm.cs:163 "no more MaterialForm caption"): an accent title bar with the app
-            // icon, a drag region and one ✕. Before this, ProxyForm was a bare FixedDialog and looked like a
-            // stray WinForms window next to the rest of the UI.
-            // ⚠ ThemedChrome sets FormBorderStyle = None and owns the caption, so DO NOT also set
-            //   FormBorderStyle / MaximizeBox here — and everything must be parented to the returned CONTENT
-            //   panel, not to the form, or it will sit under the title bar.
-            // ⚠ MaterialSkinManager's Accent slot is deliberately NOT written (LESSONS_LEARNED.md:163 — it is
-            //   one app-wide singleton and writing it re-poisons every other form). The accent comes from
-            //   ThemeHelper, exactly as SettingsForm does it.
-            // ⚠ MinimumSize is deliberately left UNSET: it silently clamps resize, and this dialog is fixed
-            //   size anyway — ClientSize is the single source of its geometry.
-            Text = "Proxy";
-            MaximizeBox = false; MinimizeBox = false;
-            StartPosition = FormStartPosition.CenterParent;
-            ClientSize = new Size(460, 600);
-            Font = FontHelper.Ui(9.5f);
-            _content = TelegArm.Helpers.ThemedChrome.Apply(this, "Proxy", _accent, _dark);
-            _content.BackColor = _bg;
+            // BATCH-TA-16e/E4 introduced the app's standard chrome here; since step 2.6b that chrome is DialogForm's: the
+            // accent title bar with ✕, a footer of action buttons, the palette following the theme live. Nothing in this
+            // method colours anything itself — every colour is a ThemeHelper.Palette token.
+            // ⚠ The page is attached to the dialog BEFORE its children are created, so each of them resolves its DPI
+            //   through the window it sits in (a child added to a parentless panel measures at the system DPI).
+            var p = ThemeHelper.Palette;
 
-            int y = 14;
-            _rbOff = new RadioButton
-            {
-                Text = "Don't use a proxy", Left = 18, Top = y, Width = 420, Height = 26,
-                ForeColor = _fg, BackColor = _bg, Checked = !_enabled, Font = FontHelper.Ui(10f)
-            };
-            _rbOff.CheckedChanged += (s, e) => { if (_rbOff.Checked) { _enabled = false; _changed = true; RebuildRows(); } };
-            _content.Controls.Add(_rbOff); y += 28;
+            _page = new Panel { BackColor = p.Window };
+            _page.SizeChanged += (s, e) => LayoutPage();
+            UseOwnBody(_page);
 
-            _rbCustom = new RadioButton
-            {
-                Text = "Use a proxy", Left = 18, Top = y, Width = 420, Height = 26,
-                ForeColor = _fg, BackColor = _bg, Checked = _enabled, Font = FontHelper.Ui(10f)
-            };
-            _rbCustom.CheckedChanged += (s, e) => { if (_rbCustom.Checked) { _enabled = true; _changed = true; RebuildRows(); } };
-            _content.Controls.Add(_rbCustom); y += 34;
+            _mode = new SegmentedRow("Proxy", new[] { "Don't use a proxy", "Use a proxy" }, _enabled ? 1 : 0);
+            _mode.SelectedIndexChanged += OnModeChanged;
+            _page.Controls.Add(_mode);
 
-            _content.Controls.Add(new Label
-            {
-                Text = "A proxy can help when Telegram is blocked on your network. Only MTProto proxies are supported.",
-                Left = 18, Top = y, Width = 424, Height = 34, ForeColor = _sub, BackColor = _bg,
-                Font = FontHelper.Ui(8.25f)
-            });
-            y += 40;
+            _note = new NoteRow("A proxy can help when Telegram is blocked on your network. Only MTProto proxies are supported.", 2);
+            _page.Controls.Add(_note);
 
-            // ── the list ────────────────────────────────────────────────────────────────────────────
-            // TA-15/X2 contract: add the TARGET FIRST so it docks LAST and fills the leftover space,
-            // then the themed bar docked Right. Native bars are suppressed structurally by the host type.
-            _listHost = new Panel { Left = 14, Top = y, Width = 432, Height = 300, BackColor = _card, BorderStyle = BorderStyle.None };
-            _listPanel = new NoNativeScrollPanel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = _card };
-            _listHost.Controls.Add(_listPanel);                       // FIRST
-            _listBar = new ThemedScrollBar(_listPanel, _dark, _accent) { Dock = DockStyle.Right };
-            _listHost.Controls.Add(_listBar);                         // then the bar
-            TouchScroller.RegisterControl(_listPanel);                // touch pan + momentum on RT
-            _content.Controls.Add(_listHost);
-            y += 308;
+            // ── the list ────────────────────────────────────────────────────────────────────────────────────
+            // TA-15/X2 contract, now ScrollHost's: the target is added FIRST so it docks LAST and fills the leftover
+            // space, then the themed bar docked Right; native bars are suppressed structurally by the panel type; touch
+            // pan + momentum come from TouchScroller (ScrollHost enables it — before this step only RegisterControl ran
+            // on the panel, so a finger could tap a row but not pan the list).
+            _listHost = new Panel { BackColor = p.Divider, Padding = new Padding(1) };   // the 1 px frame is the Divider colour showing through
+            _page.Controls.Add(_listHost);
+            _listPanel = ScrollHost.Wrap(_listHost, p.Dark, p.Accent);
+            _listPanel.BackColor = p.Card;
+            _listPanel.AccessibleName = "Saved proxies";
+            _listBar = _listHost.Controls.OfType<ThemedScrollBar>().FirstOrDefault();
+            _listPanel.ClientSizeChanged += (s, e) => FitRows();   // first layout, and the lane changing with the DPI
 
-            _hint = new Label { Left = 18, Top = y, Width = 424, Height = 18, ForeColor = _sub, BackColor = _bg, Font = FontHelper.Ui(8.25f) };
-            _content.Controls.Add(_hint); y += 22;
+            _hint = new ThemedLabel { Role = LabelRole.Dim, PointSize = TextRoles.Points(TextRole.Field), Ellipsis = true };
+            _page.Controls.Add(_hint);
 
-            _pasteBox = new TextBox
-            {
-                Left = 16, Top = y, Width = 300, Height = 26, BackColor = _card, ForeColor = _fg,
-                BorderStyle = BorderStyle.FixedSingle, Font = FontHelper.Ui(9f)
-            };
+            _pasteBox = new ThemedTextBox(false) { Hint = "Paste a tg:// or t.me/proxy link", AccessibleName = "Proxy link" };
+            _pasteBox.Inner.AccessibleName = "Proxy link";
             _pasteBox.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; AddFromBox(); } };
-            _content.Controls.Add(_pasteBox);
+            _page.Controls.Add(_pasteBox);
 
-            var addBtn = new RoundedButton { Text = "Add", Left = 322, Top = y - 2, Width = 58, Height = 30, Kind = RoundedButtonKind.Primary, Font = FontHelper.Ui(9f, FontStyle.Bold) };
-            addBtn.Click += (s, e) => AddFromBox();
-            _content.Controls.Add(addBtn);
+            _addBtn = BodyButton("Add", RoundedButtonKind.Primary);
+            _addBtn.Click += (s, e) => AddFromBox();
+            _page.Controls.Add(_addBtn);
 
-            var clipBtn = new RoundedButton { Text = "Paste", Left = 386, Top = y - 2, Width = 60, Height = 30, Kind = RoundedButtonKind.Secondary, Font = FontHelper.Ui(9f) };
-            clipBtn.Click += (s, e) => AddFromClipboard();
-            _content.Controls.Add(clipBtn);
-            y += 38;
+            _clipBtn = BodyButton("Paste", RoundedButtonKind.Secondary);
+            _clipBtn.Click += (s, e) => AddFromClipboard();
+            _page.Controls.Add(_clipBtn);
 
-            var delAll = new RoundedButton { Text = "Delete all", Left = 16, Top = y, Width = 92, Height = 30, Kind = RoundedButtonKind.Secondary, Font = FontHelper.Ui(9f) };
-            delAll.Click += (s, e) => DeleteAll();
-            _content.Controls.Add(delAll);
+            // ── the footer: first added = rightmost, so this reads  Delete all | Test all | Done ──────────────────
+            _doneBtn = AddFooterButton("Done", RoundedButtonKind.Primary, DialogResult.None, 96);
+            _doneBtn.Click += (s, e) => { Save(); DialogResult = DialogResult.OK; };
 
-            _testAllBtn = new RoundedButton { Text = "Test all", Left = 116, Top = y, Width = 84, Height = 30, Kind = RoundedButtonKind.Secondary, Font = FontHelper.Ui(9f) };
+            _testAllBtn = AddFooterButton("Test all", RoundedButtonKind.Secondary, DialogResult.None, 104);
             _testAllBtn.Click += (s, e) => { if (_testing) CancelTests(); else TestAll(); };
-            _content.Controls.Add(_testAllBtn);
 
-            var close = new RoundedButton { Text = "Done", Left = 356, Top = y, Width = 90, Height = 30, Kind = RoundedButtonKind.Primary, Font = FontHelper.Ui(9f, FontStyle.Bold) };
-            close.Click += (s, e) => { Save(); DialogResult = DialogResult.OK; Close(); };
-            _content.Controls.Add(close);
+            var delAll = AddFooterButton("Delete all", RoundedButtonKind.Secondary, DialogResult.None, 108);
+            delAll.Click += (s, e) => DeleteAll();
 
-            AcceptButton = null;   // Enter belongs to the paste box
+            // The footer flows right-to-left, so the default Tab order ran Done first; make it follow the screen.
+            delAll.TabIndex = 0; _testAllBtn.TabIndex = 1; _doneBtn.TabIndex = 2;
+
+            // AcceptButton stays null: Enter belongs to the paste box. Esc closes like ✕ does (DialogForm's default
+            // when there is no CancelButton) — and every close saves, see FormClosing below.
+            AcceptButton = null;
+            FocusOnShow(_pasteBox.Inner);   // hardware keyboard only; with touch alone nothing pops the keyboard unasked
             FormClosing += (s, e) => { CancelTests(); Save(); };
+
+            _built = true;
+            LayoutPage();
         }
 
-        // ── list ─────────────────────────────────────────────────────────────────────────────────────
+        /// <summary>A button that sits in the page (Add / Paste) — the footer's own are made by AddFooterButton.</summary>
+        private RoundedButton BodyButton(string text, RoundedButtonKind kind)
+        {
+            return new RoundedButton
+            {
+                Text = text,
+                Kind = kind,
+                Modern = true,
+                Font = TextRoles.Font(TextRole.Button, WindowDpiValue),
+            };
+        }
+
+        /// <summary>Places the page's pieces from its current size: the mode row and the note on top, the paste row and
+        /// the hint line at the bottom, and the list taking everything between. Cheap and idempotent — it runs on every
+        /// size change, on the DPI change and when the dialog is shown.
+        /// Not skipped while a DPI rescale runs (Dpi.Busy): the rescale's final layout happens INSIDE that window, and
+        /// this is what puts the page right after it.</summary>
+        private void LayoutPage()
+        {
+            if (!_built || _page == null) return;
+            int w = _page.ClientSize.Width, h = _page.ClientSize.Height;
+            if (w < Px(50) || h < Px(50)) return;
+
+            int dpi = WindowDpiValue;
+            int padX = Px(SettingRow.PadX), gap = Px(8);
+
+            int y = Px(RowGap);
+            int mh = _mode.HeightFor(w, dpi);
+            _mode.SetBounds(0, y, w, mh); y += mh;
+            int nh = _note.HeightFor(w, dpi);
+            _note.SetBounds(0, y, w, nh); y += nh;
+            int listTop = y + Px(4);
+
+            int rowH = Math.Max(_pasteBox.PreferredFieldHeight, Px(36));
+            int pasteTop = h - Px(12) - rowH;
+            int hintH = Px(20);
+            int hintTop = pasteTop - gap - hintH;
+            int listH = Math.Max(0, hintTop - gap - listTop);
+            int innerW = Math.Max(1, w - 2 * padX);
+
+            _listHost.SetBounds(padX, listTop, innerW, listH);
+            _hint.SetBounds(padX, hintTop, innerW, hintH);
+
+            int addW = Px(66), clipW = Px(76);
+            int fieldW = Math.Max(1, innerW - addW - clipW - 2 * gap);
+            _pasteBox.SetBounds(padX, pasteTop, fieldW, rowH);
+            _addBtn.SetBounds(padX + fieldW + gap, pasteTop, addW, rowH);
+            _clipBtn.SetBounds(padX + fieldW + gap + addW + gap, pasteTop, clipW, rowH);
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            LayoutPage();   // the page had no real size while the controls were being created
+            FitRows();
+        }
+
+        protected override void OnDpiChanged(int oldDpi, int newDpi)
+        {
+            base.OnDpiChanged(oldDpi, newDpi);
+            LayoutPage();
+            FitRows();
+        }
+
+        protected override void ApplyDialogTheme()
+        {
+            base.ApplyDialogTheme();
+            if (!_built) return;   // the base constructor calls this before our fields exist
+            var p = ThemeHelper.Palette;
+            _page.BackColor = p.Window;
+            _listHost.BackColor = p.Divider;
+            _listPanel.BackColor = p.Card;
+            _pasteBox.Recolor();
+            _listPanel.Invalidate(true);   // the rows read the palette when they paint
+            if (_listBar != null) _listBar.Invalidate();
+        }
+
+        // ── mode ─────────────────────────────────────────────────────────────────────────────────────────────
+
+        /// <summary>The user flipped Don't-use / Use (the two radio buttons' CheckedChanged, in one event).</summary>
+        private void OnModeChanged(object sender, EventArgs e)
+        {
+            // An arrow key off the first segment would leave the strip with nothing selected: put the real state back.
+            if (_mode.SelectedIndex < 0) { _mode.SetSelected(_enabled ? 1 : 0, false); return; }
+            _enabled = _mode.SelectedIndex == 1;
+            _changed = true;
+            RebuildRows();
+        }
+
+        /// <summary>Shows the mode WITHOUT raising <see cref="OnModeChanged"/> — the caller has already set _enabled,
+        /// _changed and calls <see cref="RebuildRows"/> itself (setting a RadioButton's Checked used to run its handler,
+        /// which rebuilt the rows a second time for nothing).</summary>
+        private void ShowMode(bool enabled)
+        {
+            if (_mode != null) _mode.SetSelected(enabled ? 1 : 0, false);
+        }
+
+        // ── list ─────────────────────────────────────────────────────────────────────────────────────────────
+
+        private int RowWidth() { return Math.Max(1, _listPanel.ClientSize.Width - Px(2)); }
 
         private void RebuildRows()
         {
@@ -195,37 +268,70 @@ namespace TelegArm.UI
             //
             // Placing in display space (originY + top) touches the scroll origin ZERO times, so it also
             // avoids the ScrollWindowEx blit that a home-then-restore would cost on the Tegra 3 device.
+            // (FitRows, which re-places the rows when the width or the DPI changes, follows the same rule.)
             TouchScroller.StopMomentum();   // a live coast must not scroll the content we are replacing
                                             // (same reason as MainForm.RenderChatList:5987)
+            _rebuilding = true;
             _listPanel.SuspendLayout();
-            foreach (Control c in _listPanel.Controls.Cast<Control>().ToArray()) c.Dispose();
-            _listPanel.Controls.Clear();
-
-            int originY = _listPanel.DisplayRectangle.Y;   // 0 when home, negative while scrolled
-            int top = 0;
-            for (int i = 0; i < _list.Count; i++)
+            try
             {
-                var row = new ProxyRowControl(_list[i], i)
+                foreach (Control c in _listPanel.Controls.Cast<Control>().ToArray()) c.Dispose();
+                _listPanel.Controls.Clear();
+
+                int originY = _listPanel.DisplayRectangle.Y;   // 0 when home, negative while scrolled
+                int w = RowWidth(), rh = Px(RowH);
+                int top = 0;
+                for (int i = 0; i < _list.Count; i++)
                 {
-                    Left = 0, Top = originY + top, Width = _listPanel.ClientSize.Width - 2, Height = 68,
-                    IsDark = _dark, AccentColor = _accent,
-                    Selected = _enabled && i == _active,
-                    Enabled = _enabled
-                };
-                row.ChooseClicked += OnChoose;
-                row.DeleteClicked += OnDelete;
-                row.MenuRequested += OnRowMenu;
-                string cached;
-                if (_testResults.TryGetValue(_list[i], out cached))
-                    row.SetTestResult(cached, cached.StartsWith("Works", StringComparison.Ordinal));
-                else
-                    row.SetStatus("Not tested", false);
-                _listPanel.Controls.Add(row);
-                top += row.Height;
+                    var row = new ProxyRowControl(_list[i], i)
+                    {
+                        Left = 0, Top = originY + top, Width = w, Height = rh,
+                        Selected = _enabled && i == _active,
+                        Enabled = _enabled
+                    };
+                    row.ChooseClicked += OnChoose;
+                    row.DeleteClicked += OnDelete;
+                    row.MenuRequested += OnRowMenu;
+                    string cached;
+                    if (_testResults.TryGetValue(_list[i], out cached))
+                        row.SetTestResult(cached, cached.StartsWith("Works", StringComparison.Ordinal));
+                    else
+                        row.SetStatus("Not tested", false);
+                    _listPanel.Controls.Add(row);
+                    top += row.Height;
+                }
+                _rowsW = w; _rowsH = rh;
             }
-            _listPanel.ResumeLayout();
+            finally
+            {
+                _rebuilding = false;
+                _listPanel.ResumeLayout();
+            }
+            FitRows();   // a no-op unless the list's width moved while the rows were being replaced
             UpdateHint();
             if (_listBar != null) _listBar.Invalidate();
+        }
+
+        /// <summary>Re-places the existing rows when the list's width or the row height changed — the first layout
+        /// (the rows are built in the constructor, before the list has its real width) and a DPI change. Nothing is
+        /// rebuilt, so a "Testing…" line in flight survives. Same display-space rule as <see cref="RebuildRows"/>.</summary>
+        private void FitRows()
+        {
+            if (_listPanel == null || _rebuilding) return;
+            int w = RowWidth(), rh = Px(RowH);
+            if (w == _rowsW && rh == _rowsH) return;
+            _rowsW = w; _rowsH = rh;
+
+            var rows = _listPanel.Controls.OfType<ProxyRowControl>().OrderBy(r => r.Index).ToList();
+            if (rows.Count == 0) return;
+            _listPanel.SuspendLayout();
+            try
+            {
+                int originY = _listPanel.DisplayRectangle.Y;   // 0 when home, negative while scrolled
+                int top = 0;
+                foreach (var r in rows) { r.SetBounds(0, originY + top, w, rh); top += rh; }
+            }
+            finally { _listPanel.ResumeLayout(); }
         }
 
         private void UpdateHint()
@@ -261,7 +367,7 @@ namespace TelegArm.UI
             if (index < 0 || index >= _list.Count) return;
             _active = index;
             _enabled = true;
-            _rbCustom.Checked = true;
+            ShowMode(true);
             _changed = true;
             RebuildRows();
         }
@@ -288,7 +394,7 @@ namespace TelegArm.UI
             _list.Clear();
             _active = -1;
             _enabled = false;
-            _rbOff.Checked = true;
+            ShowMode(false);
             _changed = true;
             if (Logger.Enabled) Logger.Diag("[PROXY] deleted all saved proxies");
             RebuildRows();
@@ -321,7 +427,7 @@ namespace TelegArm.UI
                 return;
             }
             _list.Add(norm);
-            if (_active < 0) { _active = _list.Count - 1; _enabled = true; _rbCustom.Checked = true; }
+            if (_active < 0) { _active = _list.Count - 1; _enabled = true; ShowMode(true); }
             _changed = true;
             _pasteBox.Text = "";
             if (Logger.Enabled) Logger.Diag("[PROXY] added " + ProxyUrl.SafeForLog(norm) + " (" + _list.Count + " total)");
@@ -470,14 +576,19 @@ namespace TelegArm.UI
         //  standing pattern in this app (CREATIVE_DECISIONS.md:79): child controls with transparent
         //  backgrounds paint black, and owner-painted children don't render inside toolbar rows.
         //  Nested here because nothing else uses it, the same way MainForm nests DrawerMenu.
+        //  Step 2.6b: every colour is a ThemeHelper.Palette token read at paint time (the row no longer carries an
+        //  IsDark / AccentColor of its own) and every length is logical px at the row's window DPI. The fonts are the
+        //  shared cached ones (FontHelper.UiAt) and are never disposed.
         // ─────────────────────────────────────────────────────────────────────────────────────────────
         private sealed class ProxyRowControl : Control
         {
+            // One line of text in a rectangle: left, centred vertically, ellipsis, no & mnemonics.
+            private const TextFormatFlags Line = TextFormatFlags.Left | TextFormatFlags.VerticalCenter
+                                               | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
+
             public string Url { get; private set; }
             public int Index { get; private set; }
             public bool Selected { get; set; }
-            public bool IsDark { get; set; }
-            public Color AccentColor { get; set; } = Color.DodgerBlue;
 
             public event Action<int> ChooseClicked;
             public event Action<int> DeleteClicked;
@@ -538,54 +649,53 @@ namespace TelegArm.UI
             protected override void OnPaint(PaintEventArgs e)
             {
                 var g = e.Graphics;
+                var pal = ThemeHelper.Palette;   // the cached tokens — never a registry read in a paint
+                int dpi = Dpi.Of(this);
                 g.SmoothingMode = SmoothingMode.AntiAlias;
-                Color card = IsDark ? Color.FromArgb(50, 50, 55) : Color.White;
-                g.Clear(card);
+                g.Clear(pal.Card);
 
-                Color fg = IsDark ? Color.FromArgb(232, 232, 236) : Color.FromArgb(30, 30, 34);
-                Color sub = IsDark ? Color.FromArgb(150, 150, 156) : Color.FromArgb(120, 120, 126);
+                Color fg = pal.Text;
+                Color sub = pal.TextDim;
                 if (!Enabled) { fg = sub; }
 
                 // selection dot
-                var dot = new Rectangle(14, Height / 2 - 8, 16, 16);
-                using (var p = new Pen(Selected ? AccentColor : (IsDark ? Color.FromArgb(96, 96, 102) : Color.FromArgb(190, 190, 196)), 1.6f))
+                int dd = Dpi.Px(16, dpi);
+                var dot = new Rectangle(Dpi.Px(14, dpi), Height / 2 - dd / 2, dd, dd);
+                using (var p = new Pen(Selected ? pal.Accent : pal.TextFaint, Dpi.F(1.6f, dpi)))
                     g.DrawEllipse(p, dot);
                 if (Selected)
-                    using (var b = new SolidBrush(AccentColor))
-                        g.FillEllipse(b, Rectangle.Inflate(dot, -4, -4));
+                    using (var b = new SolidBrush(pal.Accent))
+                        g.FillEllipse(b, Rectangle.Inflate(dot, -Dpi.Px(4, dpi), -Dpi.Px(4, dpi)));
 
-                _xRect = new Rectangle(Width - 40, Height / 2 - 14, 28, 28);
-                using (var xp = new Pen(_hover ? Color.FromArgb(214, 78, 78) : sub, 1.8f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                // the ✕ is two drawn lines (no font glyph: tofu on RT 8.1)
+                int xs = Dpi.Px(28, dpi);
+                _xRect = new Rectangle(Width - Dpi.Px(40, dpi), Height / 2 - xs / 2, xs, xs);
+                using (var xp = new Pen(_hover ? pal.Danger : sub, Dpi.F(1.8f, dpi)) { StartCap = LineCap.Round, EndCap = LineCap.Round })
                 {
-                    int cx = _xRect.X + _xRect.Width / 2, cy = _xRect.Y + _xRect.Height / 2;
-                    g.DrawLine(xp, cx - 5, cy - 5, cx + 5, cy + 5);
-                    g.DrawLine(xp, cx + 5, cy - 5, cx - 5, cy + 5);
+                    int cx = _xRect.X + _xRect.Width / 2, cy = _xRect.Y + _xRect.Height / 2, k = Dpi.Px(5, dpi);
+                    g.DrawLine(xp, cx - k, cy - k, cx + k, cy + k);
+                    g.DrawLine(xp, cx + k, cy - k, cx - k, cy + k);
                 }
 
-                var textRect = new Rectangle(dot.Right + 12, 8, _xRect.Left - dot.Right - 20, 20);
-                using (var f = FontHelper.Ui(9.5f, FontStyle.Bold))
-                    TextRenderer.DrawText(g, ProxyUrl.DisplayLabel(Url), f, textRect, fg,
-                        TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+                int tx = dot.Right + Dpi.Px(12, dpi), tw = Math.Max(1, _xRect.Left - dot.Right - Dpi.Px(20, dpi));
+                var textRect = new Rectangle(tx, Dpi.Px(8, dpi), tw, Dpi.Px(20, dpi));
+                TextRenderer.DrawText(g, ProxyUrl.DisplayLabel(Url), FontHelper.UiAt(9.5f, dpi, FontStyle.Bold), textRect, fg, Line);
 
-                Color st = _statusOk ? Color.FromArgb(74, 168, 92) : sub;
-                if (_status == "No response" || _status == "Bad link") st = Color.FromArgb(214, 78, 78);
-                var statusRect = new Rectangle(textRect.X, 30, textRect.Width, 18);
-                using (var f2 = FontHelper.Ui(8.25f))
-                    TextRenderer.DrawText(g, Selected && Enabled ? "In use · " + _status : _status, f2, statusRect, st,
-                        TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+                Color st = _statusOk ? pal.Success : sub;
+                if (_status == "No response" || _status == "Bad link") st = pal.Danger;
+                var statusRect = new Rectangle(tx, Dpi.Px(30, dpi), tw, Dpi.Px(18, dpi));
+                TextRenderer.DrawText(g, Selected && Enabled ? "In use · " + _status : _status, FontHelper.UiAt(8.25f, dpi), statusRect, st, Line);
 
                 if (_test.Length > 0)
                 {
-                    Color tc = _testOk ? Color.FromArgb(74, 168, 92) : Color.FromArgb(214, 78, 78);
+                    Color tc = _testOk ? pal.Success : pal.Danger;
                     if (_test == "Testing…") tc = sub;
-                    var testRect = new Rectangle(textRect.X, 46, textRect.Width, 16);
-                    using (var f3 = FontHelper.Ui(8.25f, FontStyle.Bold))
-                        TextRenderer.DrawText(g, _test, f3, testRect, tc,
-                            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+                    var testRect = new Rectangle(tx, Dpi.Px(46, dpi), tw, Dpi.Px(16, dpi));
+                    TextRenderer.DrawText(g, _test, FontHelper.UiAt(8.25f, dpi, FontStyle.Bold), testRect, tc, Line);
                 }
 
-                using (var p = new Pen(IsDark ? Color.FromArgb(62, 62, 68) : Color.FromArgb(232, 232, 238)))
-                    g.DrawLine(p, 12, Height - 1, Width - 12, Height - 1);
+                using (var p = new Pen(pal.Divider))
+                    g.DrawLine(p, Dpi.Px(12, dpi), Height - 1, Width - Dpi.Px(12, dpi), Height - 1);
             }
         }
     }

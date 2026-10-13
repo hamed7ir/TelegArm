@@ -5,8 +5,6 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
 using System.Windows.Forms;
-using MaterialSkin;
-using MaterialSkin.Controls;
 using TelegArm.Core;
 using TelegArm.Helpers;
 using TelegArm.UI.Controls;
@@ -19,36 +17,38 @@ namespace TelegArm.UI
     /// Follows the app theme (System/Light/Dark) via <see cref="ThemeHelper"/>.
     /// The video control bar lives in the form (a sibling of the video surface) so
     /// the native VLC window can never paint over it.
+    ///
+    /// Redesign step 2.3: an <see cref="AppForm"/> (was a MaterialForm). The title bar is TelegArm's own (✕ replaces the
+    /// old "✕" font-glyph button); the toolbar (file name, Save As, Save) and the bottom bar are DOCKED rows around the
+    /// content — never overlaid on the VLC child window, which paints over anything above it. 900×680 logical by default,
+    /// 560×420 minimum. Colours from the palette; errors and confirmations in ThemedDialog (was MessageBox).
     /// </summary>
-    public class MediaViewerForm : MaterialForm
+    public class MediaViewerForm : AppForm
     {
         private readonly List<MediaItem> _items;
         private readonly TelegramService _service;
-        private Color _accent;
         private int _index;
 
-        private TableLayoutPanel _formLayout;
-        private Control _toolbar, _content;
-        private MaterialLabel _fileLabel;
-        private MaterialButton _saveButton, _saveAsButton;
+        private Panel _toolbar, _content, _bottom;
+        private ThemedLabel _fileLabel;
+        private RoundedButton _saveButton, _saveAsButton;
         private ZoomableImagePanel _imagePanel;
         private VlcVideoControl _videoControl;
         private Panel _stubPanel;
-        private MaterialLabel _stubLabel;
+        private ThemedLabel _stubLabel;
         private Panel _docPanel;
-        private Button _docOpenBtn;
+        private RoundedButton _docOpenBtn;
 
         // Bottom bars (one row, toggled): photo nav vs. video controls.
         private Panel _navBar;
-        private MaterialLabel _navLabel;
+        private ThemedLabel _navLabel;
         private MediaControlButton _navPrev, _navNext;
         private VideoControlBar _videoBar;
         private System.Windows.Forms.Timer _playTimer;
 
         private Image _currentImage;
 
-        // Theme palette (recomputed in ApplyTheme).
-        private Color _bgColor, _barColor, _textColor, _subTextColor;
+        private const int BarHeight = 48;
 
         public MediaViewerForm(List<MediaItem> items, int index, TelegramService service)
         {
@@ -56,56 +56,36 @@ namespace TelegArm.UI
             _index = Math.Max(0, Math.Min(index, _items.Count - 1));
             _service = service;
 
-            MaterialSkinManager.Instance.AddFormToManage(this);
-
             BuildUi();
             ApplyTheme();
             ShowCurrent();
 
-            ThemeHelper.ThemeChanged += OnThemeChanged;
             FormClosed += (s, e) =>
             {
-                ThemeHelper.ThemeChanged -= OnThemeChanged;
                 _playTimer?.Stop();
                 _videoControl.StopPlayback();
                 DisposeCurrentImage();
             };
         }
 
-        private void OnThemeChanged()
-        {
-            if (IsDisposed) return;
-            try { BeginInvoke((Action)ApplyTheme); } catch { }
-        }
+        /// <summary>AppForm raises this on every theme change (it subscribes and unsubscribes ThemeHelper itself).</summary>
+        protected override void OnThemeChanged() { ApplyTheme(); }
 
-        /// <summary>Recomputes the palette from <see cref="ThemeHelper"/> and re-colors the UI.</summary>
+        /// <summary>Re-colours the UI from the palette.</summary>
         private void ApplyTheme()
         {
-            bool dark = ThemeHelper.IsDark;
-            _accent = ThemeHelper.GetWindowsAccentColor();
+            var p = ThemeHelper.Palette;
+            Color bg = p.SurfaceAlt, bar = p.Footer;
 
-            _bgColor = dark ? Color.FromArgb(18, 18, 18) : Color.FromArgb(245, 245, 245);
-            _barColor = dark ? Color.FromArgb(28, 28, 28) : Color.FromArgb(232, 232, 234);
-            _textColor = dark ? Color.White : Color.FromArgb(30, 30, 30);
-            _subTextColor = dark ? Color.FromArgb(170, 170, 170) : Color.FromArgb(110, 110, 110);
-
-            var skin = MaterialSkinManager.Instance;
-            skin.Theme = dark ? MaterialSkinManager.Themes.DARK : MaterialSkinManager.Themes.LIGHT;
-            var primary = (Primary)(uint)_accent.ToArgb();
-            var msAccent = (Accent)(uint)_accent.ToArgb();   // accent slot = Windows accent (shared singleton — no blue re-poison)
-            skin.ColorScheme = new ColorScheme(primary, primary, primary, msAccent, TextShade.WHITE);
-
-            if (_toolbar != null) _toolbar.BackColor = _barColor;
-            if (_content != null) _content.BackColor = _bgColor;
-            if (_fileLabel != null) _fileLabel.ForeColor = _textColor;
-            if (_stubLabel != null) _stubLabel.ForeColor = _textColor;
-            if (_docPanel != null) _docPanel.BackColor = _bgColor;
-            if (_navBar != null) _navBar.BackColor = _barColor;
-            if (_navLabel != null) _navLabel.ForeColor = _textColor;
-            if (_navPrev != null) _navPrev.BackColor = _barColor;
-            if (_navNext != null) _navNext.BackColor = _barColor;
-            if (_videoBar != null) { _videoBar.AccentColor = _accent; _videoBar.IsDark = dark; }
-            if (_docOpenBtn != null) { _docOpenBtn.BackColor = _accent; _docOpenBtn.ForeColor = Color.White; }
+            if (_toolbar != null) _toolbar.BackColor = bar;
+            if (_content != null) _content.BackColor = bg;
+            if (_bottom != null) _bottom.BackColor = bar;
+            if (_docPanel != null) _docPanel.BackColor = bg;
+            if (_stubPanel != null) _stubPanel.BackColor = bg;
+            if (_navBar != null) _navBar.BackColor = bar;
+            if (_navPrev != null) _navPrev.BackColor = bar;
+            if (_navNext != null) _navNext.BackColor = bar;
+            if (_videoBar != null) { _videoBar.AccentColor = p.Accent; _videoBar.IsDark = p.Dark; }
 
             Invalidate(true);
             _docPanel?.Invalidate();
@@ -113,66 +93,50 @@ namespace TelegArm.UI
 
         private void BuildUi()
         {
-            AutoScaleMode = AutoScaleMode.Font;
             Text = "TelegArm — Media";
-            TelegArm.Helpers.ThemedChrome.SetAppIcon(this);   // app icon in the taskbar / Alt-Tab
-            ClientSize = new Size(900, 680);
-            MinimumSize = new Size(560, 420);
+            Size = new Size(Px(900), Px(680));
+            LogicalMinimumSize = new Size(560, 420);
             StartPosition = FormStartPosition.CenterScreen;
 
-            _formLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
-            _formLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
-            _formLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            _formLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48)); // bottom bar (toggled)
-
-            _formLayout.Controls.Add(BuildToolbar(), 0, 0);
-            _formLayout.Controls.Add(BuildContent(), 0, 1);
-
-            // Bottom row holds both bars (overlapping); only one is visible at a time.
+            // Docked, not a TableLayoutPanel: DpiScaler scales docked heights, so the rows follow a monitor move.
+            _bottom = new Panel { Dock = DockStyle.Bottom, Height = Px(BarHeight), Visible = false };
             _navBar = BuildNavBar();
             _videoBar = BuildVideoBar();
-            _formLayout.Controls.Add(_navBar, 0, 2);
-            _formLayout.Controls.Add(_videoBar, 0, 2);
+            _bottom.Controls.Add(_navBar);
+            _bottom.Controls.Add(_videoBar);
 
             _playTimer = new System.Windows.Forms.Timer { Interval = 200 };
             _playTimer.Tick += (s, e) => UpdateVideoBar();
 
-            Controls.Add(_formLayout);
+            Content.Controls.Add(BuildContent());   // Fill first: docking takes the last-added first
+            Content.Controls.Add(_bottom);
+            Content.Controls.Add(BuildToolbar());
         }
 
         private Control BuildToolbar()
         {
-            var toolbar = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                ColumnCount = 4,
-                RowCount = 1,
-                Margin = new Padding(0)
-            };
+            var toolbar = new Panel { Dock = DockStyle.Top, Height = Px(BarHeight) };
             _toolbar = toolbar;
-            toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130));
-            toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100));
-            toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 50));
 
-            _fileLabel = new MaterialLabel
+            var buttons = new FlowLayoutPanel
             {
-                Dock = DockStyle.Fill,
-                TextAlign = ContentAlignment.MiddleLeft,
-                Padding = new Padding(14, 0, 0, 0),
-                AutoEllipsis = true
+                Dock = DockStyle.Right,
+                FlowDirection = FlowDirection.RightToLeft,
+                WrapContents = false,
+                AutoSize = true,
+                Padding = new Padding(0, Px(6), Px(8), Px(6)),
             };
-            _saveAsButton = new MaterialButton { Text = "Save As…", Dock = DockStyle.Fill, Margin = new Padding(2, 7, 2, 7), Type = MaterialButton.MaterialButtonType.Text };
-            _saveAsButton.Click += (s, e) => SaveAsCurrent();
-            _saveButton = new MaterialButton { Text = "Save", Dock = DockStyle.Fill, Margin = new Padding(2, 7, 2, 7), Type = MaterialButton.MaterialButtonType.Text };
+            _saveButton = new RoundedButton { Text = "Save", Kind = RoundedButtonKind.Neutral, Modern = true, Width = Px(96), Height = Px(36), Margin = new Padding(Px(6), 0, 0, 0), Font = TextRoles.Font(TextRole.Button, WindowDpiValue) };
             _saveButton.Click += (s, e) => SaveCurrent();
-            var closeButton = new MaterialButton { Text = "✕", Dock = DockStyle.Fill, Margin = new Padding(2, 7, 8, 7), Type = MaterialButton.MaterialButtonType.Text };
-            closeButton.Click += (s, e) => Close();
+            _saveAsButton = new RoundedButton { Text = "Save As…", Kind = RoundedButtonKind.Neutral, Modern = true, Width = Px(116), Height = Px(36), Margin = new Padding(Px(6), 0, 0, 0), Font = TextRoles.Font(TextRole.Button, WindowDpiValue) };
+            _saveAsButton.Click += (s, e) => SaveAsCurrent();
+            buttons.Controls.Add(_saveButton);     // RightToLeft: first added = rightmost
+            buttons.Controls.Add(_saveAsButton);
 
-            toolbar.Controls.Add(_fileLabel, 0, 0);
-            toolbar.Controls.Add(_saveAsButton, 1, 0);
-            toolbar.Controls.Add(_saveButton, 2, 0);
-            toolbar.Controls.Add(closeButton, 3, 0);
+            _fileLabel = new ThemedLabel { Dock = DockStyle.Fill, Ellipsis = true, Role = LabelRole.Body, Padding = new Padding(Px(14), 0, 0, 0) };
+
+            toolbar.Controls.Add(_fileLabel);   // Fill first
+            toolbar.Controls.Add(buttons);
             return toolbar;
         }
 
@@ -185,19 +149,21 @@ namespace TelegArm.UI
             _videoControl = new VlcVideoControl { Dock = DockStyle.Fill, Visible = false };
             _videoControl.Resize += (s, e) => ApplyRoundClip();   // keep the round-video circle centered on resize
             _stubPanel = new Panel { Dock = DockStyle.Fill, Visible = false };
-            _stubLabel = new MaterialLabel { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter };
+            _stubLabel = new ThemedLabel { Dock = DockStyle.Fill, Wrap = true, TextAlign = HorizontalAlignment.Center, Role = LabelRole.Body, Padding = new Padding(Px(24)) };
             _stubPanel.Controls.Add(_stubLabel);
 
             _docPanel = new Panel { Dock = DockStyle.Fill, Visible = false };
             _docPanel.Paint += PaintDoc;
-            _docPanel.Resize += (s, e) => _docPanel.Invalidate();
-            _docOpenBtn = new TelegArm.UI.Controls.RoundedButton
+            _docPanel.Resize += (s, e) => { PlaceDocButton(); _docPanel.Invalidate(); };
+            // Step 2.3: a button under the file's name (Telegram's layout), not 1.x's full-width bar docked at the bottom.
+            _docOpenBtn = new RoundedButton
             {
                 Text = "Open",
-                Dock = DockStyle.Bottom,
-                Height = 46,
-                Kind = TelegArm.UI.Controls.RoundedButtonKind.Primary,
-                Margin = new Padding(0)
+                Size = new Size(Px(180), Px(42)),
+                Kind = RoundedButtonKind.Primary,
+                Modern = true,
+                Margin = new Padding(0),
+                Font = TextRoles.Font(TextRole.Button, WindowDpiValue),
             };
             _docOpenBtn.Click += (s, e) => OpenDocument();
             _docPanel.Controls.Add(_docOpenBtn);
@@ -212,25 +178,32 @@ namespace TelegArm.UI
         private Panel BuildNavBar()
         {
             var bar = new Panel { Dock = DockStyle.Fill, Visible = false };
-            _navPrev = new MediaControlButton { Icon = MediaButtonIcon.Previous, Anchor = AnchorStyles.None };
-            _navNext = new MediaControlButton { Icon = MediaButtonIcon.Next, Anchor = AnchorStyles.None };
-            _navLabel = new MaterialLabel { TextAlign = ContentAlignment.MiddleCenter, AutoSize = false, Width = 110, Height = 36 };
+            _navPrev = new MediaControlButton { Icon = MediaButtonIcon.Previous, Size = new Size(Px(36), Px(36)), AccessibleName = "Previous" };
+            _navNext = new MediaControlButton { Icon = MediaButtonIcon.Next, Size = new Size(Px(36), Px(36)), AccessibleName = "Next" };
+            _navLabel = new ThemedLabel { TextAlign = HorizontalAlignment.Center, Width = Px(110), Height = Px(36), Role = LabelRole.Body };
             _navPrev.Click += (s, e) => Navigate(-1);
             _navNext.Click += (s, e) => Navigate(+1);
-
-            var row = new FlowLayoutPanel { Anchor = AnchorStyles.None, AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
-            row.Controls.Add(_navPrev);
-            row.Controls.Add(_navLabel);
-            row.Controls.Add(_navNext);
-            bar.Controls.Add(row);
-            bar.Resize += (s, e) => { row.Left = (bar.Width - row.Width) / 2; row.Top = (bar.Height - row.Height) / 2; };
+            bar.Controls.Add(_navPrev);
+            bar.Controls.Add(_navLabel);
+            bar.Controls.Add(_navNext);
+            // Placed by hand, centred both ways: an AutoSize FlowLayoutPanel was centred while it still had its default
+            // height, so the row sat at the top of the bar (and its items top-aligned within it).
+            bar.Resize += (s, e) =>
+            {
+                int gap = Px(8), x = (bar.Width - _navPrev.Width - _navLabel.Width - _navNext.Width - 2 * gap) / 2, cy = bar.Height / 2;
+                _navPrev.Location = new Point(x, cy - _navPrev.Height / 2);
+                x += _navPrev.Width + gap;
+                _navLabel.Location = new Point(x, cy - _navLabel.Height / 2);
+                x += _navLabel.Width + gap;
+                _navNext.Location = new Point(x, cy - _navNext.Height / 2);
+            };
             return bar;
         }
 
         private VideoControlBar BuildVideoBar()
         {
             // Owner-painted bar styled like MiniPlayerBar (accent circles + drawn seek).
-            // It lives in the bottom TableLayoutPanel row, below — not over — the VLC
+            // It lives in the docked bottom row, below — not over — the VLC
             // surface; the host's 200ms timer keeps it invalidated over VLC repaints.
             var bar = new VideoControlBar(_videoControl) { Dock = DockStyle.Fill, Visible = false };
             bar.PrevRequested += () => Navigate(-1);
@@ -303,13 +276,15 @@ namespace TelegArm.UI
                 _imagePanel.Visible = false;
             }
 
-            // Bottom bar: video controls for video (if VLC ready), else photo nav.
+            // Bottom bar: video controls for video (if VLC ready), else photo nav. The decision uses OUR flags, never
+            // Control.Visible (false for every child while the window is not shown yet).
             bool showVideoBar = isVideo && _videoControl.IsReady;
+            bool showNav = !showVideoBar && hasNav;
             _videoBar.CanPrev = _index > 0;
             _videoBar.CanNext = _index < _items.Count - 1;
             _videoBar.Visible = showVideoBar;
-            _navBar.Visible = !showVideoBar && hasNav;
-            _formLayout.RowStyles[2].Height = (showVideoBar || _navBar.Visible) ? 48 : 0;
+            _navBar.Visible = showNav;
+            _bottom.Visible = showVideoBar || showNav;
             if (showVideoBar) _playTimer.Start();
 
             bool hasData = item.Bytes != null || !string.IsNullOrEmpty(item.LocalPath);
@@ -349,27 +324,40 @@ namespace TelegArm.UI
             _videoBar.Invalidate();
         }
 
+        /// <summary>The file icon's box in the document panel; the name, size and Open button stack under it.</summary>
+        private Rectangle DocIconRect()
+        {
+            int cx = _docPanel.Width / 2, cy = _docPanel.Height / 2 - Px(70), r = Px(48);
+            return new Rectangle(cx - r, cy - r, 2 * r, 2 * r);
+        }
+
+        private void PlaceDocButton()
+        {
+            if (_docOpenBtn == null) return;
+            var icon = DocIconRect();
+            _docOpenBtn.Location = new Point((_docPanel.Width - _docOpenBtn.Width) / 2, icon.Bottom + Px(84));
+        }
+
         private void PaintDoc(object sender, PaintEventArgs e)
         {
             var item = _items[_index];
+            var p = ThemeHelper.Palette;
             var g = e.Graphics;
+            int dpi = WindowDpiValue;
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.Clear(_bgColor);
+            g.Clear(p.SurfaceAlt);
 
-            int cx = _docPanel.Width / 2;
-            int cy = _docPanel.Height / 2 - 60;
-            var iconRect = new Rectangle(cx - 48, cy - 48, 96, 96);
+            var iconRect = DocIconRect();
             DrawHelper.DrawFileIcon(g, iconRect, item.FileName);
 
-            using (var nf = new Font("Segoe UI", 12f, FontStyle.Bold))
-            using (var wb = new SolidBrush(_textColor))
-            using (var sf = new StringFormat { Alignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter })
-                g.DrawString(item.FileName ?? "File", nf, wb, new RectangleF(20, iconRect.Bottom + 14, _docPanel.Width - 40, 28), sf);
-
-            using (var f = new Font("Segoe UI", 9f))
-            using (var gb = new SolidBrush(_subTextColor))
-            using (var sf = new StringFormat { Alignment = StringAlignment.Center })
-                g.DrawString(DrawHelper.FormatSize(item.FileSize), f, gb, new RectangleF(20, iconRect.Bottom + 46, _docPanel.Width - 40, 22), sf);
+            // Shared role fonts (never disposed) instead of 1.x's per-paint new Font(...).
+            string name = item.FileName ?? "File";
+            TextRenderer.DrawText(g, name, TextRoles.Font(TextRole.DialogTitle, dpi, name),
+                new Rectangle(Px(20), iconRect.Bottom + Px(14), _docPanel.Width - Px(40), Px(28)), p.Text,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
+            TextRenderer.DrawText(g, DrawHelper.FormatSize(item.FileSize), TextRoles.Font(TextRole.Field, dpi),
+                new Rectangle(Px(20), iconRect.Bottom + Px(46), _docPanel.Width - Px(40), Px(22)), p.TextDim,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
         }
 
         private async void OpenDocument()
@@ -400,7 +388,7 @@ namespace TelegArm.UI
                 if (IsDisposed) return;
                 _docOpenBtn.Enabled = true;
                 _docOpenBtn.Text = "Open";
-                MessageBox.Show(this, "Open failed: " + ex.Message, "TelegArm", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                ThemedDialog.Show(this, "Open", "Open failed: " + ex.Message, "OK");
             }
         }
 
@@ -522,11 +510,11 @@ namespace TelegArm.UI
                 MediaCache.EnsureFolder(folder);
                 string target = Path.Combine(folder, SafeName(item.FileName ?? ("media_" + item.Id)));
                 if (!WriteItem(item, target)) return;
-                MessageBox.Show(this, "Saved to:\n" + target, "TelegArm", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                ThemedDialog.Show(this, "Saved", "Saved to:\n" + target, "OK");
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, "Save failed: " + ex.Message, "TelegArm", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                ThemedDialog.Show(this, "Save", "Save failed: " + ex.Message, "OK");
             }
         }
 
@@ -544,11 +532,11 @@ namespace TelegArm.UI
                 try
                 {
                     if (!WriteItem(item, dlg.FileName)) return;
-                    MessageBox.Show(this, "Saved to:\n" + dlg.FileName, "TelegArm", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    ThemedDialog.Show(this, "Saved", "Saved to:\n" + dlg.FileName, "OK");
                 }
                 catch (Exception ex)
                 {
-                    MessageBox.Show(this, "Save failed: " + ex.Message, "TelegArm", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    ThemedDialog.Show(this, "Save", "Save failed: " + ex.Message, "OK");
                 }
             }
         }

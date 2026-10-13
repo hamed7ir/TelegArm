@@ -13,15 +13,17 @@ using TelegArm.UI.Controls;
 namespace TelegArm.UI
 {
     /// <summary>
-    /// "Forward to…" picker — themed accent title bar (ThemedChrome), an RT-dark-scrollbar ThemedListBox of the
-    /// user's chats with REAL avatars (the chat-list cached path, async + initials fallback), MULTI-SELECT
-    /// (forward to several chats at once), and ONLY chats the user can POST to (read-only broadcast channels
-    /// excluded). The selected set is exposed via <see cref="SelectedChats"/> with DialogResult.OK.
+    /// "Forward to…" picker — a <see cref="DialogForm"/> (redesign step 2.6b; was a plain Form + ThemedChrome) holding a
+    /// <see cref="ThemedTextBox"/> search and an RT-dark-scrollbar ThemedListBox of the user's chats with REAL avatars
+    /// (the chat-list cached path, async + initials fallback), MULTI-SELECT (forward to several chats at once), and ONLY
+    /// chats the user can POST to (read-only broadcast channels excluded). The selected set is exposed via
+    /// <see cref="SelectedChats"/> with DialogResult.OK. <paramref name="dark"/> and <paramref name="accent"/> are kept for
+    /// the callers and no longer read: the palette follows the theme live.
     /// </summary>
-    public sealed class ForwardPickerDialog : Form
+    public sealed class ForwardPickerDialog : DialogForm
     {
-        private readonly bool _dark;
-        private readonly Color _accent, _bg, _fg;
+        private const int RowLogical = 56;   // one row, logical px — the list takes it at the window's DPI
+
         private readonly Func<long, Image> _cachedAvatar;
         private readonly Func<long, IPeerInfo, Task<Image>> _loadAvatar;
         private readonly List<ChatEntry> _all;
@@ -29,45 +31,88 @@ namespace TelegArm.UI
         private readonly HashSet<long> _checked = new HashSet<long>();
         private readonly HashSet<long> _avatarRequested = new HashSet<long>();
 
-        private readonly TextBox _search;
+        private readonly Panel _host, _searchHost;
+        private readonly ThemedTextBox _search;
         private readonly ThemedListBox _list;
-        private readonly Button _confirm;
+        private readonly RoundedButton _confirm;
+        private readonly bool _built;   // ApplyDialogTheme is first called from the base constructor, before the controls exist
 
         public List<ChatEntry> SelectedChats { get; private set; } = new List<ChatEntry>();
 
         public ForwardPickerDialog(List<ChatEntry> chats, bool dark, Color accent,
                                    Func<long, Image> cachedAvatar = null, Func<long, IPeerInfo, Task<Image>> loadAvatar = null)
+            : base("Forward to…", 380, 580)
         {
-            _dark = dark; _accent = accent; _cachedAvatar = cachedAvatar; _loadAvatar = loadAvatar;
-            _bg = dark ? Color.FromArgb(40, 40, 44) : Color.FromArgb(248, 248, 250);
-            _fg = dark ? Color.FromArgb(235, 235, 235) : Color.FromArgb(20, 20, 20);
-            Color field = dark ? Color.FromArgb(54, 54, 58) : Color.White;
+            _cachedAvatar = cachedAvatar; _loadAvatar = loadAvatar;
+            var p = ThemeHelper.Palette;
 
             _all = (chats ?? new List<ChatEntry>()).Where(CanPost).ToList();   // only chats you can post to
             _view = _all;
 
-            Text = "Forward to…";
-            StartPosition = FormStartPosition.CenterParent;
-            MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
-            ClientSize = new Size(380, 520 + ThemedChrome.BarH);
-            var content = ThemedChrome.Apply(this, "Forward to…", accent, dark);
-
-            _search = new TextBox { Left = 12, Top = 12, Width = 356, Height = 28, BackColor = field, ForeColor = _fg, BorderStyle = BorderStyle.FixedSingle, Font = FontHelper.Ui(10f) };
+            _search = new ThemedTextBox(false) { Hint = "Search", AccessibleName = "Search" };
+            _search.Inner.AccessibleName = "Search";
             _search.TextChanged += (s, e) => ApplyFilter();
-            content.Controls.Add(_search);
+            _searchHost = new Panel { Dock = DockStyle.Top, BackColor = p.Window };
+            _searchHost.Controls.Add(_search);
+            _searchHost.SizeChanged += (s, e) => LayoutSearch();
 
-            _list = new ThemedListBox(dark, accent) { Left = 12, Top = 48, Width = 356, Height = 414, RowHeight = 56, CanvasBackColor = _bg };
+            _list = new ThemedListBox(p.Dark, p.Accent) { Dock = DockStyle.Fill, RowHeight = Px(RowLogical), CanvasBackColor = p.Window };
             _list.DrawRow += DrawRow;
             _list.ItemClicked += OnRowClicked;
-            content.Controls.Add(_list);
 
-            _confirm = new RoundedButton { Text = "Forward (0)", Left = 184, Top = 470, Width = 104, Height = 38, Kind = RoundedButtonKind.Primary, Font = FontHelper.Ui(10f, FontStyle.Bold), Enabled = false };
+            _host = new Panel { BackColor = p.Window };
+            _host.Controls.Add(_list);
+            _host.Controls.Add(_searchHost);    // added last = docked first: the Top strip
+            UseOwnBody(_host);
+            LayoutSearch();
+
+            _confirm = AddFooterButton("Forward (0)", RoundedButtonKind.Primary, DialogResult.None);   // first added = rightmost
+            _confirm.Enabled = false;
             _confirm.Click += (s, e) => { SelectedChats = _all.Where(c => _checked.Contains(c.PeerId)).ToList(); DialogResult = DialogResult.OK; Close(); };
-            var cancel = new RoundedButton { Text = "Cancel", Left = 294, Top = 470, Width = 74, Height = 38, Kind = RoundedButtonKind.Secondary };
-            cancel.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
-            content.Controls.Add(_confirm); content.Controls.Add(cancel);
+            CancelButton = AddFooterButton("Cancel", RoundedButtonKind.Neutral, DialogResult.Cancel);
+            AcceptButton = _confirm;
+            FocusOnShow(_search.Inner);
 
             _list.SetItems(_view.Count);
+            _built = true;
+        }
+
+        /// <summary>The search field sits in a strip of its own: padded, and as tall as the field wants at the window's DPI.</summary>
+        private void LayoutSearch()
+        {
+            if (_search == null || _searchHost == null) return;
+            int padX = Px(12), padTop = Px(10), padBottom = Px(8);
+            int h = _search.PreferredFieldHeight;
+            _search.SetBounds(padX, padTop, Math.Max(1, _searchHost.Width - 2 * padX), h);
+            int total = padTop + h + padBottom;
+            if (_searchHost.Height != total) _searchHost.Height = total;
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            LayoutSearch();   // the DPI of the window is only known once it is placed
+        }
+
+        protected override void OnDpiChanged(int oldDpi, int newDpi)
+        {
+            base.OnDpiChanged(oldDpi, newDpi);
+            if (!_built) return;
+            _list.RowHeight = Px(RowLogical);
+            _list.SetItems(_view.Count);   // the canvas height follows the row height
+            LayoutSearch();
+        }
+
+        protected override void ApplyDialogTheme()
+        {
+            base.ApplyDialogTheme();
+            if (!_built) return;
+            var p = ThemeHelper.Palette;
+            _host.BackColor = p.Window;
+            _searchHost.BackColor = p.Window;
+            _search.Recolor();
+            _list.CanvasBackColor = p.Window;
+            _list.Invalidate(true);
         }
 
         private void ApplyFilter()
@@ -92,10 +137,12 @@ namespace TelegArm.UI
         {
             if (index < 0 || index >= _view.Count) return;
             var e = _view[index];
+            var p = ThemeHelper.Palette;
+            int dpi = WindowDpiValue;
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            using (var bb = new SolidBrush(_bg)) g.FillRectangle(bb, r);
+            using (var bb = new SolidBrush(p.Window)) g.FillRectangle(bb, r);
 
-            int d = 40, ax = r.Left + 10, ay = r.Top + (r.Height - d) / 2;
+            int d = Px(40), ax = r.Left + Px(10), ay = r.Top + (r.Height - d) / 2;
             var avatarRect = new Rectangle(ax, ay, d, d);
             Image av = _cachedAvatar != null ? _cachedAvatar(e.PeerId) : null;
             if (av != null) DrawHelper.DrawCircularImage(g, avatarRect, av);
@@ -104,26 +151,39 @@ namespace TelegArm.UI
                 using (var ab = new SolidBrush(DrawHelper.AvatarColor(e.PeerId))) g.FillEllipse(ab, avatarRect);
                 string nm = e.Title ?? "";
                 string initial = nm.Length > 0 ? nm.Substring(0, 1).ToUpperInvariant() : "?";
-                TextRenderer.DrawText(g, initial, FontHelper.Ui(14f, FontStyle.Bold), avatarRect, Color.White,
+                TextRenderer.DrawText(g, initial, FontHelper.UiAt(14f, dpi, FontStyle.Bold), avatarRect, Color.White,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
                 EnsureAvatar(e);
             }
 
-            int tx = ax + d + 12, tw = r.Right - tx - 40;
-            TextRenderer.DrawText(g, e.Title ?? "", FontHelper.Ui(11f, FontStyle.Bold),
-                new Rectangle(tx, r.Top + (r.Height - 22) / 2, tw, 22), _fg,
+            // Font without the text argument = the Roboto face, as in 1.x: GDI substitutes Persian glyphs, and the taller
+            // Vazirmatn line would not fit the fixed title band.
+            int tx = ax + d + Px(12), tw = r.Right - tx - Px(40), th = Px(22);
+            TextRenderer.DrawText(g, e.Title ?? "", TextRoles.Font(TextRole.Section, dpi),
+                new Rectangle(tx, r.Top + (r.Height - th) / 2, tw, th), p.Text,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
 
             if (_checked.Contains(e.PeerId))
             {
-                int cd = 22, cx = r.Right - cd - 10, cy = r.Top + (r.Height - cd) / 2;
-                using (var cbk = new SolidBrush(_accent)) g.FillEllipse(cbk, cx, cy, cd, cd);
-                TextRenderer.DrawText(g, "✓", FontHelper.Ui(9f, FontStyle.Bold), new Rectangle(cx, cy, cd, cd), Color.White,
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                int cd = Px(22), cx = r.Right - cd - Px(10), cy = r.Top + (r.Height - cd) / 2;
+                DrawCheckBadge(g, new Rectangle(cx, cy, cd, cd), p.Accent, p.OnAccent, dpi);
             }
 
-            using (var sep = new Pen(_dark ? Color.FromArgb(54, 54, 58) : Color.FromArgb(230, 230, 232)))
-                g.DrawLine(sep, r.Left + 10, r.Bottom - 1, r.Right - 10, r.Bottom - 1);
+            using (var sep = new Pen(p.Divider))
+                g.DrawLine(sep, r.Left + Px(10), r.Bottom - 1, r.Right - Px(10), r.Bottom - 1);
+        }
+
+        /// <summary>The "selected" mark: an accent disc with a tick drawn in lines (a font tick is tofu on RT 8.1).</summary>
+        private static void DrawCheckBadge(Graphics g, Rectangle b, Color fill, Color ink, int dpi)
+        {
+            using (var fb = new SolidBrush(fill)) g.FillEllipse(fb, b);
+            using (var pen = new Pen(ink, Math.Max(1.5f, Dpi.F(2f, dpi))) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+                g.DrawLines(pen, new[]
+                {
+                    new PointF(b.X + b.Width * 0.27f, b.Y + b.Height * 0.52f),
+                    new PointF(b.X + b.Width * 0.44f, b.Y + b.Height * 0.69f),
+                    new PointF(b.X + b.Width * 0.74f, b.Y + b.Height * 0.33f),
+                });
         }
 
         // Request the real avatar once per peer (bounded/async in MainForm); repaint the row when it arrives.

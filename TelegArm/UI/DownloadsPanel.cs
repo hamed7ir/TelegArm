@@ -130,7 +130,7 @@ namespace TelegArm.UI
             KeyPreview = true;
             KeyDown += (s, e) => { if (e.KeyCode == Keys.Escape) Close(); };
             Deactivate += (s, e) => { try { Close(); } catch { } };
-            TelegArm.Helpers.ThemedChrome.SetAppIcon(this);
+            TelegArm.Helpers.AppIcon.Set(this);
 
             var header = new Panel { Dock = DockStyle.Top, Height = 42, BackColor = dark ? Color.FromArgb(50, 50, 54) : Color.FromArgb(236, 236, 240) };
             header.Controls.Add(MakeLabel("Downloads", 12, 10, 120, true));

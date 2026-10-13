@@ -9,6 +9,7 @@ using TL;
 using TelegArm.Core;
 using TelegArm.Core.Camera;
 using TelegArm.Helpers;
+using TelegArm.UI.Controls;
 
 namespace TelegArm.UI
 {
@@ -17,22 +18,31 @@ namespace TelegArm.UI
     /// MediaCapture by default, libVLC fallback) — no backend branches here. A circular live preview (or a
     /// recording indicator if the backend can't preview), tap-to-start/tap-to-stop record, Front/Back flip,
     /// a duration counter (≤60s), and Send/Retake/Cancel. The camera is released on close/cancel.
+    ///
+    /// Redesign step 2.6b: a <see cref="DialogForm"/> (was a plain Form + ThemedChrome.Apply). The camera / recorder
+    /// lifecycle is the 1.x one, statement for statement: create on Shown, start / stop with the same ordering, the camera
+    /// released before the upload and again (idempotently) in FormClosed. Layout: the circle, the duration and the hint
+    /// are one <see cref="RecorderStage"/> row in the dialog body; Flip / Record(Stop, Retake) / Send / Cancel are the
+    /// footer, added so that the left-to-right order is the 1.x one (Flip, Record, Cancel; Retake, Send, Cancel once a
+    /// clip exists) — the 1.x SetBounds juggling is the footer's flow now. The button labels lost their symbol glyphs
+    /// (tofu on RT 8.1): "Record", "Stop", "Retake"; the placeholder's "Recording" keeps its drawn red dot.
+    /// ⚠ EVERY exit goes through Close(): Cancel sets DialogResult THEN calls Close() (as in 1.x), and Esc is the Cancel
+    /// button's own click (CancelButton) — a bare DialogResult would hide the dialog without FormClosed, and the camera
+    /// would stay held.
     /// </summary>
-    public sealed class RoundRecorderForm : Form
+    public sealed class RoundRecorderForm : DialogForm
     {
         private readonly TelegramService _service;
         private readonly InputPeer _peer;
-        private readonly bool _dark;
-        private readonly Color _accent;
 
         private ICameraRecorder _rec;
         private Panel _previewHost;
-        private Label _hint, _duration;
-        private Button _recordBtn, _flipBtn, _sendBtn, _cancelBtn;
+        private ThemedLabel _hint, _duration;
+        private RoundedButton _recordBtn, _flipBtn, _sendBtn, _cancelBtn;
         private System.Windows.Forms.Timer _timer;
         private int _seconds;
         private const int MaxSeconds = 60;
-        private const int Circle = 280;
+        private const int Circle = 280;   // logical px
 
         private string _tempPath, _recordedPath;
         private bool _hasPreview, _sending;
@@ -42,11 +52,9 @@ namespace TelegArm.UI
         private enum St { Init, Idle, Recording, Recorded }
         private St _state = St.Init;
 
-        public RoundRecorderForm(TelegramService service, InputPeer peer)
+        public RoundRecorderForm(TelegramService service, InputPeer peer) : base("Round video", 360, 480)
         {
             _service = service; _peer = peer;
-            _dark = ThemeHelper.IsDark;
-            _accent = ThemeHelper.GetWindowsAccentColor();
             BuildUi();
             Shown += OnShownAsync;
             FormClosed += (s, e) => Cleanup();
@@ -54,42 +62,35 @@ namespace TelegArm.UI
 
         private void BuildUi()
         {
-            Text = "Round video";
-            StartPosition = FormStartPosition.CenterParent;
-            MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
-            ClientSize = new Size(360, 470 + ThemedChrome.BarH);
-            var content = ThemedChrome.Apply(this, "Round video", _accent, _dark);   // accent title bar + dark chrome
-            Color fg = _dark ? Color.White : Color.FromArgb(20, 20, 20);
+            _previewHost = new Panel { BackColor = Color.Black };   // the video's own surround; the stage places and sizes it
+            _previewHost.SizeChanged += (s, e) => RoundPreview();
+            _previewHost.Paint += PaintPlaceholder;   // shown until/unless a live preview is attached
 
-            _previewHost = new Panel { Left = (360 - Circle) / 2, Top = 24, Width = Circle, Height = Circle, BackColor = Color.Black };
-            using (var p = new GraphicsPath()) { p.AddEllipse(0, 0, Circle, Circle); _previewHost.Region = new Region(p); }
-            _previewHost.Paint += (s, e) =>   // shown until/unless a live preview is attached
+            _duration = new ThemedLabel
             {
-                if (_hasPreview) return;
-                var g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
-                using (var b = new SolidBrush(Color.FromArgb(50, 50, 54))) g.FillEllipse(b, 0, 0, Circle, Circle);
-                bool rec = _state == St.Recording;
-                using (var rb = new SolidBrush(rec ? Color.FromArgb(230, 60, 60) : Color.FromArgb(120, 120, 128)))
-                    g.FillEllipse(rb, Circle / 2 - 12, Circle / 2 - 28, 24, 24);
-                TextRenderer.DrawText(g, rec ? "● Recording" : "Camera", FontHelper.Ui(11f, FontStyle.Bold),
-                    new Rectangle(0, Circle / 2 + 6, Circle, 28), Color.White, TextFormatFlags.HorizontalCenter);
+                Role = LabelRole.Title, PointSize = TextRoles.Points(TextRole.Title),
+                TextAlign = HorizontalAlignment.Center, Text = ""
             };
-            content.Controls.Add(_previewHost);
+            _hint = new ThemedLabel
+            {
+                Role = LabelRole.Dim, PointSize = TextRoles.Points(TextRole.Field),
+                TextAlign = HorizontalAlignment.Center, Ellipsis = true, Text = "Preparing camera…"
+            };
+            PopulateBody(new RecorderStage(_previewHost, _duration, _hint));
 
-            _duration = new Label { Left = 0, Top = 312, Width = 360, Height = 26, ForeColor = fg, Font = FontHelper.Ui(13f, FontStyle.Bold), TextAlign = ContentAlignment.MiddleCenter, Text = "" };
-            _hint = new Label { Left = 20, Top = 340, Width = 320, Height = 22, ForeColor = _dark ? Color.FromArgb(160, 160, 160) : Color.FromArgb(110, 110, 110), Font = FontHelper.Ui(9f), TextAlign = ContentAlignment.MiddleCenter, Text = "Preparing camera…" };
-            content.Controls.Add(_duration); content.Controls.Add(_hint);
-
-            _flipBtn = MakeBtn("Flip", 20, 376, 96);
-            _flipBtn.Click += async (s, e) => { try { _hint.Text = "Switching camera…"; await _rec.SwitchCameraAsync(); _hint.Text = ""; } catch { } };
-            _recordBtn = MakeBtn("● Record", 132, 376, 96, accent: true);
-            _recordBtn.Click += OnRecordClick;
-            _cancelBtn = MakeBtn("Cancel", 244, 376, 96);
+            // Footer: the first added is the RIGHTMOST, so this order reads Flip | Record | Send | Cancel from the left.
+            // Hidden buttons take no room, so the visible ones keep the 1.x order in each state.
+            _cancelBtn = AddFooterButton("Cancel", RoundedButtonKind.Neutral, DialogResult.None, 96);
             _cancelBtn.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
-            _sendBtn = MakeBtn("Send", 132, 376, 96, accent: true);
+            _sendBtn = AddFooterButton("Send", RoundedButtonKind.Primary, DialogResult.None, 96);
             _sendBtn.Click += OnSendClick;
             _sendBtn.Visible = false;
-            content.Controls.Add(_flipBtn); content.Controls.Add(_recordBtn); content.Controls.Add(_sendBtn); content.Controls.Add(_cancelBtn);
+            _recordBtn = AddFooterButton("Record", RoundedButtonKind.Primary, DialogResult.None, 96);
+            _recordBtn.Click += OnRecordClick;
+            _flipBtn = AddFooterButton("Flip", RoundedButtonKind.Secondary, DialogResult.None, 96);
+            _flipBtn.Click += async (s, e) => { try { _hint.Text = "Switching camera…"; await _rec.SwitchCameraAsync(); _hint.Text = ""; } catch { } };
+            _flipBtn.TabIndex = 0; _recordBtn.TabIndex = 1; _sendBtn.TabIndex = 2; _cancelBtn.TabIndex = 3;   // Tab runs left to right
+            CancelButton = _cancelBtn;   // Esc = Cancel, through Close() (see the class notes)
 
             _timer = new System.Windows.Forms.Timer { Interval = 1000 };
             _timer.Tick += (s, e) =>
@@ -98,16 +99,46 @@ namespace TelegArm.UI
                 _duration.Text = TimeSpan.FromSeconds(_seconds).ToString(@"m\:ss");
                 if (_seconds >= MaxSeconds) { var ignore = StopRecordingAsync(); }
             };
+
+            FitToContent();
         }
 
-        private Button MakeBtn(string text, int x, int y, int w, bool accent = false)
+        /// <summary>The preview is a circle: re-cut the host's window region whenever its size changes (first layout, a DPI
+        /// change) — the 1.x code cut it once, at a fixed 280 px.</summary>
+        private void RoundPreview()
         {
-            return new TelegArm.UI.Controls.RoundedButton
+            int w = _previewHost.Width, h = _previewHost.Height;
+            if (w < 2 || h < 2) return;
+            using (var p = new GraphicsPath())
             {
-                Text = text, Left = x, Top = y, Width = w, Height = 40,
-                Kind = accent ? TelegArm.UI.Controls.RoundedButtonKind.Primary : TelegArm.UI.Controls.RoundedButtonKind.Secondary,
-                Font = FontHelper.Ui(10f, FontStyle.Bold)
-            };
+                p.AddEllipse(0, 0, w, h);
+                _previewHost.Region = new Region(p);
+            }
+        }
+
+        /// <summary>The disc shown while no live preview is attached: a camera dark in either theme, with a dot (red while
+        /// recording) and a word. Painted only until/unless the backend attaches a preview.</summary>
+        private void PaintPlaceholder(object sender, PaintEventArgs e)
+        {
+            if (_hasPreview) return;
+            var p = ThemeHelper.Palette;
+            var g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
+            int w = _previewHost.Width, h = _previewHost.Height;
+            using (var b = new SolidBrush(ColorMath.Mix(Color.Black, Color.White, 0.2f))) g.FillEllipse(b, 0, 0, w, h);
+            bool rec = _state == St.Recording;
+            int dot = Px(24);
+            using (var rb = new SolidBrush(rec ? p.Danger : ColorMath.Mix(Color.Black, Color.White, 0.5f)))
+                g.FillEllipse(rb, w / 2 - dot / 2, h / 2 - Px(28), dot, dot);
+            string label = rec ? "Recording" : "Camera";
+            int textTop = h / 2 + Px(6);
+            TextRenderer.DrawText(g, label, TextRoles.Font(TextRole.Section, WindowDpiValue, label),
+                Rectangle.FromLTRB(0, textTop, w, textTop + Px(28)), Color.White, TextFormatFlags.HorizontalCenter);
+        }
+
+        protected override void ApplyDialogTheme()
+        {
+            base.ApplyDialogTheme();   // first called from DialogForm's constructor, before the controls exist
+            if (_previewHost != null) _previewHost.Invalidate();   // the recording dot is the palette's Danger
         }
 
         private async void OnShownAsync(object sender, EventArgs e)
@@ -122,7 +153,7 @@ namespace TelegArm.UI
                 _hint.Text = _hasPreview ? "Tap Record to start." : "Live preview unavailable — tap Record.";
                 _state = St.Idle;
             }
-            catch (Exception ex) { _hint.Text = "Camera init failed: " + ex.Message; System.Diagnostics.Debug.WriteLine("[ROUND-REC] init failed: " + ex.Message); }
+            catch (Exception ex) { _hint.Text = "Camera init failed: " + ex.Message; Logger.Diag("[ROUND-REC] init failed: " + ex.Message); }
         }
 
         private async void OnRecordClick(object sender, EventArgs e)
@@ -139,12 +170,12 @@ namespace TelegArm.UI
                 _tempPath = Path.Combine(AppSettings.Instance.MediaCacheFolder, "round_" + Guid.NewGuid().ToString("N") + ".mp4");
                 Directory.CreateDirectory(Path.GetDirectoryName(_tempPath));
                 _state = St.Recording; _seconds = 0; _duration.Text = "0:00"; _hint.Text = "Recording… tap to stop.";
-                _recordBtn.Text = "■ Stop"; _flipBtn.Enabled = false; _previewHost.Invalidate();
-                System.Diagnostics.Debug.WriteLine("[ROUND-REC] record start");
+                _recordBtn.Text = "Stop"; _flipBtn.Enabled = false; _previewHost.Invalidate();
+                Logger.Diag("[ROUND-REC] record start");
                 await _rec.StartAsync(_tempPath);
                 _timer.Start();
             }
-            catch (Exception ex) { _hint.Text = "Couldn't start: " + ex.Message; _state = St.Idle; _recordBtn.Text = "● Record"; _flipBtn.Enabled = true; }
+            catch (Exception ex) { _hint.Text = "Couldn't start: " + ex.Message; _state = St.Idle; _recordBtn.Text = "Record"; _flipBtn.Enabled = true; }
         }
 
         private async Task StopRecordingAsync()
@@ -155,13 +186,14 @@ namespace TelegArm.UI
             try
             {
                 _recordedPath = await _rec.StopAsync();
-                System.Diagnostics.Debug.WriteLine("[ROUND-REC] record stop duration=" + _seconds + "s → " + _recordedPath);
+                Logger.Diag("[ROUND-REC] record stop duration=" + _seconds + "s → " + _recordedPath);
 
                 // FINALIZATION CHECK: probe the file — a truncated MP4 (no moov) is unplayable even though it exists.
                 var info = await VideoProbe.ProbeAsync(_recordedPath, CancellationToken.None);
                 long bytes = 0; try { bytes = new FileInfo(_recordedPath).Length; } catch { }
                 bool playable = info != null && info.DurationSec > 0 && bytes > 0;
-                System.Diagnostics.Debug.WriteLine("[ROUND-REC] recording finalized, MP4 " + (playable ? "playable (moov present)" : "NOT playable") + ", " + bytes + " bytes, " + info.Width + "x" + info.Height);
+                // ⚠ Logger.Diag (unlike the Debug.WriteLine it replaces) evaluates its argument in Release too: info may be null.
+                Logger.Diag("[ROUND-REC] recording finalized, MP4 " + (playable ? "playable (moov present)" : "NOT playable") + ", " + bytes + " bytes, " + (info != null ? info.Width + "x" + info.Height : "no probe"));
                 if (!playable) { _hint.Text = "Recording failed (incomplete file). Retake."; ShowRetake(); return; }
 
                 _hint.Text = "Tap Send, or Retake."; ShowSendRetake();
@@ -172,17 +204,16 @@ namespace TelegArm.UI
 
         private void ShowSendRetake()
         {
-            _recordBtn.Text = "↺ Retake"; _recordBtn.Visible = true;
+            // Retake on the left, Send in the middle, Cancel on the right — the footer's order; Send is the primary action now.
+            _recordBtn.Text = "Retake"; _recordBtn.Kind = RoundedButtonKind.Secondary; _recordBtn.Visible = true;
             _sendBtn.Visible = true; _sendBtn.Enabled = true;
             _flipBtn.Visible = false;
-            // record button on the left, send in the middle, cancel on the right
-            _recordBtn.SetBounds(20, 376, 96, 40);
         }
 
         private void ShowRetake()
         {
             _state = St.Recorded;
-            _recordBtn.Text = "↺ Retake"; _recordBtn.SetBounds(132, 376, 96, 40); _recordBtn.Visible = true;
+            _recordBtn.Text = "Retake"; _recordBtn.Kind = RoundedButtonKind.Primary; _recordBtn.Visible = true;
             _sendBtn.Visible = false; _flipBtn.Visible = false;
         }
 
@@ -190,7 +221,7 @@ namespace TelegArm.UI
         {
             TryDeleteTemp();
             _state = St.Idle; _seconds = 0; _duration.Text = ""; _hint.Text = _hasPreview ? "Tap Record to start." : "Tap Record.";
-            _recordBtn.Text = "● Record"; _recordBtn.SetBounds(132, 376, 96, 40);
+            _recordBtn.Text = "Record"; _recordBtn.Kind = RoundedButtonKind.Primary;
             _sendBtn.Visible = false; _flipBtn.Visible = _rec != null && _rec.Cameras.Count > 1; _flipBtn.Enabled = true;
             _previewHost.Invalidate();
         }
@@ -209,7 +240,7 @@ namespace TelegArm.UI
                     try { BeginInvoke((Action)(() => _hint.Text = "Sending… " + pct + "%")); } catch { }
                 };
                 _sentMessage = await MediaSender.SendRoundVideoAsync(_service.Client, _peer, _recordedPath, _seconds, progress, CancellationToken.None);
-                System.Diagnostics.Debug.WriteLine("[ROUND-REC] sent round video msgId=" + (_sentMessage != null ? _sentMessage.ID : 0));
+                Logger.Diag("[ROUND-REC] sent round video msgId=" + (_sentMessage != null ? _sentMessage.ID : 0));
                 _recordedPath = null;   // sent — keep the file? no, it's uploaded; cleanup deletes the temp
                 DialogResult = DialogResult.OK; Close();
             }
@@ -221,13 +252,46 @@ namespace TelegArm.UI
             try { _timer.Stop(); } catch { }
             try { if (_rec != null) { _rec.Dispose(); _rec = null; } } catch { }   // releases the camera
             TryDeleteTemp();
-            System.Diagnostics.Debug.WriteLine("[ROUND-REC] recorder closed, camera released");
+            Logger.Diag("[ROUND-REC] recorder closed, camera released");
         }
 
         private void TryDeleteTemp()
         {
             try { if (!string.IsNullOrEmpty(_recordedPath) && File.Exists(_recordedPath)) File.Delete(_recordedPath); } catch { }
             try { if (!string.IsNullOrEmpty(_tempPath) && _tempPath != _recordedPath && File.Exists(_tempPath)) File.Delete(_tempPath); } catch { }
+        }
+
+        // ── the stage ────────────────────────────────────────────────────────────────────────────────────────
+
+        /// <summary>The one body row: the circular preview host centred at the top, the duration under it and the hint under
+        /// that. It owns only the geometry (logical px at the window's DPI); the form owns what the children show.</summary>
+        private sealed class RecorderStage : SettingRow
+        {
+            private const int CircleTop = 24, DurationTop = 312, DurationH = 26, HintTop = 340, HintH = 22, HintPad = 20, Side = 8, StageH = 372;
+            private readonly Control _preview, _duration, _hint;
+
+            public RecorderStage(Control preview, Control duration, Control hint) : base("", false)
+            {
+                _preview = preview; _duration = duration; _hint = hint;
+                AccessibleRole = AccessibleRole.Grouping;
+                AccessibleName = "Camera";
+                Controls.Add(preview); Controls.Add(duration); Controls.Add(hint);
+                Refit();
+            }
+
+            public override int HeightFor(int width, int dpi) { return Dpi.Px(StageH, dpi); }
+
+            protected override void OnLayout(LayoutEventArgs e)
+            {
+                base.OnLayout(e);
+                if (_preview == null) return;
+                int dpi = Dpi.Of(this);
+                int c = Math.Min(Dpi.Px(Circle, dpi), Math.Max(1, Width - 2 * Dpi.Px(Side, dpi)));   // never wider than the row
+                _preview.SetBounds((Width - c) / 2, Dpi.Px(CircleTop, dpi), c, c);
+                _duration.SetBounds(0, Dpi.Px(DurationTop, dpi), Width, Dpi.Px(DurationH, dpi));
+                int pad = Dpi.Px(HintPad, dpi);
+                _hint.SetBounds(pad, Dpi.Px(HintTop, dpi), Math.Max(1, Width - 2 * pad), Dpi.Px(HintH, dpi));
+            }
         }
     }
 }

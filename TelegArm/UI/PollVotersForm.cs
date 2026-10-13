@@ -34,7 +34,7 @@ namespace TelegArm.UI
             _sub = dark ? Color.FromArgb(150, 150, 150) : Color.FromArgb(120, 120, 120);
 
             Text = "Voted for: " + (optionText ?? "");
-            TelegArm.Helpers.ThemedChrome.SetAppIcon(this);   // app icon in the taskbar / Alt-Tab
+            TelegArm.Helpers.AppIcon.Set(this);   // app icon in the taskbar / Alt-Tab
             FormBorderStyle = FormBorderStyle.FixedDialog;
             StartPosition = FormStartPosition.CenterParent;
             MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;

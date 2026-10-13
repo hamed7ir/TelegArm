@@ -326,7 +326,7 @@ namespace TelegArm.UI
             AutoScaleMode = AutoScaleMode.Font;
 
             Text = "TelegArm";   // taskbar / alt-tab identity — the tall title action bar that drew it is removed below
-            ThemedChrome.SetAppIcon(this);   // redesign 1.8: the embedded multi-size app.ico (falls back to the exe's icon)
+            AppIcon.Set(this);   // redesign 1.8: the embedded multi-size app.ico (falls back to the exe's icon)
             PerfLog.Boot("  ctor: window icon decoded (app.ico)");
             ClientSize = new Size(960, 600);
             MinimumSize = new Size(720, 480);

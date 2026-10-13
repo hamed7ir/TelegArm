@@ -4,8 +4,6 @@ using System.Drawing.Drawing2D;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using MaterialSkin;
-using MaterialSkin.Controls;
 using TelegArm.Core;
 using TelegArm.Helpers;
 using TelegArm.UI.Controls;
@@ -17,24 +15,28 @@ namespace TelegArm.UI
     /// bar, QR-code as the DEFAULT view (Telegram logo in the QR center + numbered steps), filled accent
     /// action buttons, and a Phone↔QR toggle. Cosmetic only — the auth backbone (LoginUserIfNeeded /
     /// LoginWithQRCode + the AuthManager/Config bridge) is unchanged.
+    ///
+    /// Redesign step 2.4: a fixed <see cref="AppForm"/> (was a MaterialForm), 480×600 logical. TelegArm's own title bar
+    /// does the drag, the Back glyph (past the first step, or always when adding an account) and ✕ — the hand-drawn
+    /// "‹" / "✕" labels and the manual Location drag are gone. Fields are ring fields; the "▾" / "▸" symbol characters
+    /// are drawn or plain text (tofu on RT). Colours follow the live palette. The proxy pill and the Settings button stay
+    /// (the only proxy/theme access before sign-in). EVERY auth path below — phone, code, 2FA, QR, AddMode, the live
+    /// proxy re-apply, the DPI rescue — is unchanged.
     /// </summary>
-    public class LoginForm : MaterialForm
+    public class LoginForm : AppForm
     {
         private enum View { Phone, Code, Password, Qr }
 
         private readonly TelegramService _service;
-        private readonly MaterialSkinManager _skin;
-        private readonly bool _dark;
-        private readonly Color _accent, _fg, _sub, _field, _bg, _link;
 
-        private Panel _header, _countryRow, _phoneRow;
+        private RingPanel _countryRow, _phoneRow, _codeRow, _pwdRow;
         private ProxyStatusPill _proxyPill;          // BATCH-TA-16/P3 — bottom-left floating proxy pill
         private RoundedButton _settingsBtn;          // bottom-right — Settings is otherwise unreachable pre-login
-        private Label _backBtn, _closeBtn, _bigTitle, _subtitle, _flagLabel, _countryName, _statusLabel, _qrSteps;
+        private Label _bigTitle, _subtitle, _flagLabel, _countryName, _statusLabel, _qrSteps;
         private Label _qrToggleLink, _phoneToggleLink, _resendLink, _dpiRescueLink;
         private PictureBox _flagPic;
         private TextBox _dialBox, _phoneBox, _codeBox, _pwdBox;
-        private AccentButton _submitButton;
+        private RoundedButton _submitButton;
         private QrControl _qr;
 
         private Country _country;
@@ -45,33 +47,16 @@ namespace TelegArm.UI
         /// creating a new MainForm; the back arrow on the root step cancels (DialogResult.Cancel).</summary>
         public bool AddMode { get; set; }
         private bool _syncing, _formatting;
-        private bool _dragging; private Point _dragStart;
         private int _loginGen, _pwdAsks;
         private CancellationTokenSource _qrCts;
 
+        // 1.x laid the views out in FORM coordinates under a 48 px header; the same numbers, minus that header, are
+        // logical offsets inside Content now (whatever the title bar's height: full 46 or compact 36 on RT).
         private const int HeaderH = 48;
 
-        public LoginForm(TelegramService service)
+        public LoginForm(TelegramService service) : base(false)
         {
             _service = service;
-            _dark = ThemeHelper.IsDark;
-            _accent = ThemeHelper.GetWindowsAccentColor();
-            _bg = _dark ? Color.FromArgb(40, 40, 44) : Color.FromArgb(248, 248, 250);
-            _fg = _dark ? Color.FromArgb(235, 235, 235) : Color.FromArgb(20, 20, 20);
-            _sub = _dark ? Color.FromArgb(155, 155, 155) : Color.FromArgb(120, 120, 120);
-            _field = _dark ? Color.FromArgb(54, 54, 58) : Color.White;
-            // Accent for TEXT links — brightened on dark (toward white) so the purple reads clearly like
-            // Telegram Desktop's colored links; slightly deepened on light for contrast.
-            _link = _dark ? Blend(_accent, Color.White, 0.40f) : Blend(_accent, Color.Black, 0.12f);
-
-            _skin = MaterialSkinManager.Instance;
-            _skin.AddFormToManage(this);
-            _skin.Theme = _dark ? MaterialSkinManager.Themes.DARK : MaterialSkinManager.Themes.LIGHT;
-            var a = (Primary)(uint)_accent.ToArgb();
-            var msA = (Accent)(uint)_accent.ToArgb();   // accent slot = Windows accent (shared singleton — no blue re-poison)
-            _skin.ColorScheme = new ColorScheme(a, a, a, msA, TextShade.WHITE);
-
-            ThemedChrome.SetAppIcon(this);   // redesign 1.8: the embedded multi-size app.ico
 
             AuthManager.Reset();
             BuildUi();
@@ -97,38 +82,14 @@ namespace TelegArm.UI
 
         private void BuildUi()
         {
-            AutoScaleMode = AutoScaleMode.Font;
-            Text = "TelegArm v" + Program.Version + " — Sign in";
-            TelegArm.Helpers.ThemedChrome.SetAppIcon(this);   // app icon in the taskbar / Alt-Tab
-            FormStyle = FormStyles.ActionBar_None;
-            ClientSize = new Size(480, 600);
+            Text = "TelegArm v" + Program.Version + " — Sign in";   // taskbar / Alt-Tab identity
+            Bar.Title = "Sign in to Telegram";                         // what the bar shows (after Text, which also sets it)
+            Bar.LeftClick += (s, e) => OnBack();
+            Size = new Size(Px(480), Px(600));
             StartPosition = FormStartPosition.CenterScreen;
-            MaximizeBox = false; Sizable = false;
-            int W = ClientSize.Width;
-
-            // ── Accent title bar (back arrow + title + ✕) ──
-            _header = new Panel { Left = 0, Top = 0, Width = W, Height = HeaderH, BackColor = _accent };
-            _header.Paint += (s, e) =>
-            {
-                using (var b = new SolidBrush(_accent)) e.Graphics.FillRectangle(b, _header.ClientRectangle);
-                int tx = (_backBtn != null && _backBtn.Visible) ? 50 : 20;
-                TextRenderer.DrawText(e.Graphics, "Sign in to Telegram", FontHelper.Ui(12.5f, FontStyle.Bold),
-                    new Rectangle(tx, 0, _header.Width - tx - 52, HeaderH), Color.White,
-                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
-            };
-            _header.MouseDown += (s, e) => { _dragging = true; _dragStart = e.Location; };
-            _header.MouseMove += (s, e) => { if (_dragging) Location = new Point(Location.X + e.X - _dragStart.X, Location.Y + e.Y - _dragStart.Y); };
-            _header.MouseUp += (s, e) => _dragging = false;
-            _backBtn = new Label { Left = 8, Top = 0, Width = 40, Height = HeaderH, Cursor = Cursors.Hand, Visible = false };
-            StyleBarButton(_backBtn, "‹", 21f);
-            _backBtn.Click += (s, e) => OnBack();
-            _header.Controls.Add(_backBtn);
-            // ✕ close: in ADD mode → safely abort the add (non-destructive cancel); first-launch → close the app.
-            _closeBtn = new Label { Left = W - 48, Top = 0, Width = 44, Height = HeaderH, Cursor = Cursors.Hand };
-            StyleBarButton(_closeBtn, "✕", 13f);
-            _closeBtn.Click += (s, e) => { StopQr(); if (AddMode) DialogResult = DialogResult.Cancel; Close(); };
-            _header.Controls.Add(_closeBtn);
-            Controls.Add(_header);
+            int dpi = WindowDpiValue;
+            // ✕ (the title bar's): in ADD mode → Close() on a modal dialog = Cancel (a safe, non-destructive abort);
+            // first launch → close the app. FormClosed stops the QR poll in both cases.
 
             // BATCH-TA-16/P3 — the floating proxy pill, bottom-left. This lives on the LOGIN screen
             // specifically: a user whose network blocks Telegram can never reach MainForm's settings, so
@@ -136,13 +97,9 @@ namespace TelegArm.UI
             // ⚠ LoginForm ONLY this release (TA-16/Amendment 3). MainForm already shows a "Connecting…"
             //   overlay and a second indicator beside it would read as a bug; the connected case is served
             //   by the Settings row instead.
-            _proxyPill = new ProxyStatusPill { IsDark = _dark, AccentColor = _accent };
-            _proxyPill.Left = 14;
-            _proxyPill.Top = ClientSize.Height - _proxyPill.Height - 14;
-            _proxyPill.Anchor = AnchorStyles.Left | AnchorStyles.Bottom;
+            _proxyPill = new ProxyStatusPill { Anchor = AnchorStyles.Left | AnchorStyles.Bottom };
             _proxyPill.Click += (s, e) => OpenProxySettings();
-            Controls.Add(_proxyPill);
-            _proxyPill.BringToFront();
+            Content.Controls.Add(_proxyPill);
 
             // Settings, bottom-RIGHT, opposite the proxy pill. The login screen is a dead end otherwise:
             // Settings is only reachable from MainForm's drawer, so anyone who cannot get past sign-in
@@ -150,151 +107,165 @@ namespace TelegArm.UI
             // Same instance the drawer opens; it takes the service and works before authentication.
             _settingsBtn = new RoundedButton
             {
-                Text = "Settings", Width = 104, Height = 34,
-                Kind = RoundedButtonKind.Secondary, Font = FontHelper.Ui(9f)
+                Text = "Settings", Width = Px(104), Height = Px(34), Modern = true,
+                Kind = RoundedButtonKind.Secondary, Font = TextRoles.Font(TextRole.Field, dpi),
+                Anchor = AnchorStyles.Right | AnchorStyles.Bottom,
             };
-            _settingsBtn.Left = ClientSize.Width - _settingsBtn.Width - 14;
-            _settingsBtn.Top = ClientSize.Height - _settingsBtn.Height - 14;
-            _settingsBtn.Anchor = AnchorStyles.Right | AnchorStyles.Bottom;
             _settingsBtn.Click += (s, e) => OpenSettings();
-            Controls.Add(_settingsBtn);
-            _settingsBtn.BringToFront();
+            Content.Controls.Add(_settingsBtn);
+            PlaceCorners();
             RefreshProxyPill();
 
             // ── Shared title / subtitle ──
-            _bigTitle = new Label { Width = 440, Height = 36, ForeColor = _fg, Font = FontHelper.Ui(16.5f, FontStyle.Bold), TextAlign = ContentAlignment.MiddleCenter };
-            _subtitle = new Label { Width = 400, Height = 44, ForeColor = _sub, Font = FontHelper.Ui(10f), TextAlign = ContentAlignment.TopCenter };
-            Controls.Add(_bigTitle); Controls.Add(_subtitle);
+            _bigTitle = new Label { Width = Px(440), Height = Px(36), Font = FontHelper.UiAt(16.5f, dpi, FontStyle.Bold), TextAlign = ContentAlignment.MiddleCenter };
+            _subtitle = new Label { Width = Px(400), Height = Px(44), Font = FontHelper.UiAt(10f, dpi), TextAlign = ContentAlignment.TopCenter };
+            Content.Controls.Add(_bigTitle); Content.Controls.Add(_subtitle);
 
-            // ── Phone: country row + matched "+code | number" row ──
-            _countryRow = new Panel { Width = 360, Height = 48, BackColor = _field, Cursor = Cursors.Hand, BorderStyle = BorderStyle.FixedSingle };
-            _flagPic = new PictureBox { Left = 12, Top = 12, Width = 30, Height = 24, SizeMode = PictureBoxSizeMode.Zoom, BackColor = _field, Cursor = Cursors.Hand };
-            _flagLabel = new Label { Left = 12, Top = 12, Width = 30, Height = 24, ForeColor = _sub, Font = FontHelper.Ui(8f, FontStyle.Bold), TextAlign = ContentAlignment.MiddleCenter, Visible = false, Cursor = Cursors.Hand };
-            _countryName = new Label { Left = 52, Top = 0, Width = 274, Height = 46, ForeColor = _fg, TextAlign = ContentAlignment.MiddleLeft, Font = FontHelper.Ui(11.5f), Cursor = Cursors.Hand };
-            var chevron = new Label { Text = "▾", Left = 328, Top = 0, Width = 26, Height = 46, ForeColor = _sub, TextAlign = ContentAlignment.MiddleCenter, Cursor = Cursors.Hand };
-            foreach (Control c in new Control[] { _flagPic, _flagLabel, _countryName, chevron }) c.Click += (s, e) => OpenCountryPicker();
+            // ── Phone: country row + matched "+code | number" row (ring fields) ──
+            _countryRow = new RingPanel { Width = Px(360), Height = Px(48), Cursor = Cursors.Hand, Chevron = true };
+            _flagPic = new PictureBox { Left = Px(12), Top = Px(12), Width = Px(30), Height = Px(24), SizeMode = PictureBoxSizeMode.Zoom, Cursor = Cursors.Hand };
+            _flagLabel = new Label { Left = Px(12), Top = Px(12), Width = Px(30), Height = Px(24), Font = FontHelper.UiAt(8f, dpi, FontStyle.Bold), TextAlign = ContentAlignment.MiddleCenter, Visible = false, Cursor = Cursors.Hand };
+            _countryName = new Label { Left = Px(52), Top = Px(1), Width = Px(274), Height = Px(46), TextAlign = ContentAlignment.MiddleLeft, Font = FontHelper.UiAt(11.5f, dpi), Cursor = Cursors.Hand };
+            foreach (Control c in new Control[] { _flagPic, _flagLabel, _countryName }) c.Click += (s, e) => OpenCountryPicker();
             _countryRow.Click += (s, e) => OpenCountryPicker();
-            _countryRow.Controls.AddRange(new Control[] { _flagPic, _flagLabel, _countryName, chevron });
+            _countryRow.Controls.AddRange(new Control[] { _flagPic, _flagLabel, _countryName });
 
-            _phoneRow = new Panel { Width = 360, Height = 48, BackColor = _field, BorderStyle = BorderStyle.FixedSingle };
-            _dialBox = new TextBox { Left = 10, Top = 13, Width = 54, BorderStyle = BorderStyle.None, BackColor = _field, ForeColor = _fg, Font = FontHelper.Ui(13.5f), TextAlign = HorizontalAlignment.Center };
-            _phoneBox = new TextBox { Left = 84, Top = 13, Width = 266, BorderStyle = BorderStyle.None, BackColor = _field, ForeColor = _fg, Font = FontHelper.Ui(13.5f) };
-            _phoneRow.Paint += (s, e) =>
-            {
-                using (var p = new Pen(_dark ? Color.FromArgb(110, 110, 116) : Color.FromArgb(188, 188, 194), 1.6f))
-                    e.Graphics.DrawLine(p, 72, 9, 72, _phoneRow.Height - 9);
-            };
+            _phoneRow = new RingPanel { Width = Px(360), Height = Px(48), SeparatorX = 72 };
+            _dialBox = new TextBox { Left = Px(10), Top = Px(13), Width = Px(54), BorderStyle = BorderStyle.None, Font = FontHelper.UiAt(13.5f, dpi), TextAlign = HorizontalAlignment.Center };
+            _phoneBox = new TextBox { Left = Px(84), Top = Px(13), Width = Px(266), BorderStyle = BorderStyle.None, Font = FontHelper.UiAt(13.5f, dpi) };
             _dialBox.TextChanged += OnDialChanged;
             _dialBox.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; _phoneBox.Focus(); } };
             _phoneBox.TextChanged += (s, e) => { if (!_formatting) ReformatPhone(); };
             _phoneBox.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; StartPhoneLogin(); } };
             _phoneRow.Controls.AddRange(new Control[] { _dialBox, _phoneBox });
-            Controls.Add(_countryRow); Controls.Add(_phoneRow);
+            Content.Controls.Add(_countryRow); Content.Controls.Add(_phoneRow);
 
-            // ── Code / password fields ──
-            _codeBox = new TextBox { Width = 300, Height = 46, BackColor = _field, ForeColor = _fg, BorderStyle = BorderStyle.FixedSingle, Font = FontHelper.Ui(16f, FontStyle.Bold), TextAlign = HorizontalAlignment.Center };
+            // ── Code / password fields (ring fields around a borderless TextBox) ──
+            _codeBox = new TextBox { BorderStyle = BorderStyle.None, Font = FontHelper.UiAt(16f, dpi, FontStyle.Bold), TextAlign = HorizontalAlignment.Center };
             _codeBox.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; SubmitCode(); } };
-            _pwdBox = new TextBox { Width = 300, Height = 46, BackColor = _field, ForeColor = _fg, BorderStyle = BorderStyle.FixedSingle, UseSystemPasswordChar = true, Font = FontHelper.Ui(13.5f) };
+            _codeRow = RingAround(_codeBox, Px(300), Px(46));
+            _pwdBox = new TextBox { BorderStyle = BorderStyle.None, UseSystemPasswordChar = true, Font = FontHelper.UiAt(13.5f, dpi) };
             _pwdBox.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; SubmitPassword(); } };
-            Controls.Add(_codeBox); Controls.Add(_pwdBox);
+            _pwdRow = RingAround(_pwdBox, Px(300), Px(46));
+            Content.Controls.Add(_codeRow); Content.Controls.Add(_pwdRow);
 
             // ── QR: big code with the app logo in the center + numbered steps ──
-            _qr = new QrControl { Width = 240, Height = 240, Dark = Color.Black, Light = Color.White, CenterLogo = IconBitmap() };
+            _qr = new QrControl { Width = Px(240), Height = Px(240), Dark = Color.Black, Light = Color.White, CenterLogo = IconBitmap() };
             _qrSteps = new Label
             {
-                Width = 330, Height = 96, ForeColor = _fg, Font = FontHelper.Ui(11f), TextAlign = ContentAlignment.TopLeft,
-                Text = "1.    Open Telegram on your phone\n2.    Go to Settings ▸ Devices ▸ Add Device\n3.    Scan this image to Log In"
+                Width = Px(330), Height = Px(96), Font = FontHelper.UiAt(11f, dpi), TextAlign = ContentAlignment.TopLeft,
+                // ">" not "▸": a symbol character comes out as a box on RT 8.1.
+                Text = "1.    Open Telegram on your phone\n2.    Go to Settings > Devices > Add Device\n3.    Scan this image to Log In"
             };
-            Controls.Add(_qr); Controls.Add(_qrSteps);
+            Content.Controls.Add(_qr); Content.Controls.Add(_qrSteps);
 
             // ── Toggle links (Telegram-Desktop text links) ──
             _qrToggleLink = AccentLink("Log in using QR code", () => ShowView(View.Qr));
             _phoneToggleLink = AccentLink("Log in using phone number", () => { StopQr(); ShowView(View.Phone); });
             _resendLink = AccentLink("Resend code", ResendCode);
-            Controls.Add(_qrToggleLink); Controls.Add(_phoneToggleLink); Controls.Add(_resendLink);
+            Content.Controls.Add(_qrToggleLink); Content.Controls.Add(_phoneToggleLink); Content.Controls.Add(_resendLink);
 
             // DPI-rescue: on a high-DPI display the system-aware default renders this window small, and the
             // toggle that fixes it is buried in Settings (unreachable through the tiny UI). Surface it here as a
             // one-tap switch to proportional (DPI-unaware) scaling + self-restart. Shown only when warranted and
             // only on the safe root views (Qr/Phone) — see ShowView / DpiRescueApplicable.
             _dpiRescueLink = AccentLink("Display looks small?  Switch to larger UI", ApplyProportionalAndRestart);
-            Controls.Add(_dpiRescueLink);
+            Content.Controls.Add(_dpiRescueLink);
 
             // ── Shared filled-accent action button + status ──
-            _submitButton = new AccentButton(_accent, _bg) { Width = 300, Height = 48 };
+            _submitButton = new RoundedButton { Width = Px(300), Height = Px(48), Kind = RoundedButtonKind.Primary, Modern = true, Font = FontHelper.UiAt(12.5f, dpi, FontStyle.Bold) };
             _submitButton.Click += OnSubmitClick;
-            _statusLabel = new Label { Width = 420, Height = 40, ForeColor = _sub, Font = FontHelper.Ui(9.5f), TextAlign = ContentAlignment.TopCenter };
-            Controls.Add(_submitButton); Controls.Add(_statusLabel);
+            _statusLabel = new Label { Width = Px(420), Height = Px(40), Font = TextRoles.Font(TextRole.Field, dpi), TextAlign = ContentAlignment.TopCenter };
+            Content.Controls.Add(_submitButton); Content.Controls.Add(_statusLabel);
 
-            // Hide everything but the header until Shown → ShowView(Qr) lays out the active view.
+            ApplyColors();
+
+            // Hide everything but the corners until Shown → ShowView(Qr) lays out the active view.
             // ⚠ BATCH-TA-16f/F1 — THE PROXY PILL MUST BE EXEMPT, and this line is why nobody could see it.
-            // The pill is added at :143 and BringToFront()'d, but this blanket hide runs at the END of
-            // BuildUi and switches off EVERY control except the header — including the pill. ShowView then
-            // re-shows only the controls belonging to the active view (:355-357 hides an explicit list and
-            // the switch below re-shows per view); the pill is in NO view, so nothing ever turns it back on.
-            // It was therefore invisible on every sign-in surface: first run, post-logout, and add-account.
-            // That is the one place a blocked user MUST be able to reach proxy settings, so it is exempt
-            // here exactly like _header, and ShowView never touches it.
-            foreach (Control c in Controls) if (c != _header && c != _proxyPill && c != _settingsBtn) c.Visible = false;
+            // This blanket hide runs at the END of BuildUi; ShowView then re-shows only the controls belonging to the
+            // active view; the pill is in NO view, so nothing would ever turn it back on. It was invisible on every
+            // sign-in surface: first run, post-logout, and add-account — the one place a blocked user MUST be able to
+            // reach proxy settings. So it is exempt here, and ShowView never touches it.
+            foreach (Control c in Content.Controls) if (c != _proxyPill && c != _settingsBtn) c.Visible = false;
+        }
+
+        /// <summary>The proxy pill bottom-left and Settings bottom-right, inside Content (their height can change).</summary>
+        /// <summary>Step 2.4: when the DPI-rescue link will show, the window gets one extra row for it above the bottom
+        /// corners — at the 1.x height it would overlap the QR view's "phone number" link. Decided here, not in the
+        /// constructor: AddMode (which suppresses the link) is set by the caller after construction, and OnLoad still runs
+        /// before the window is first shown and centred.</summary>
+        protected override void OnLoad(EventArgs e)
+        {
+            if (DpiRescueApplicable()) Size = new Size(Width, Height + Px(RescueRow));
+            base.OnLoad(e);
+        }
+
+        private const int RescueRow = 34;
+
+        private void PlaceCorners()
+        {
+            int m = Px(14), w = Content.ClientSize.Width, h = Content.ClientSize.Height;
+            if (_proxyPill != null) { _proxyPill.Left = m; _proxyPill.Top = h - _proxyPill.Height - m; }
+            if (_settingsBtn != null) { _settingsBtn.Left = w - _settingsBtn.Width - m; _settingsBtn.Top = h - _settingsBtn.Height - m; }
+        }
+
+        protected override void OnThemeChanged() { ApplyColors(); }
+
+        /// <summary>Every colour from the palette — on build and on each theme change (1.x froze them at construction).</summary>
+        private void ApplyColors()
+        {
+            var p = ThemeHelper.Palette;
+            foreach (var l in new[] { _bigTitle, _countryName, _qrSteps }) if (l != null) l.ForeColor = p.Text;
+            foreach (var l in new[] { _subtitle, _statusLabel, _flagLabel }) if (l != null) l.ForeColor = p.TextDim;
+            foreach (var t in new[] { _dialBox, _phoneBox, _codeBox, _pwdBox }) if (t != null) { t.BackColor = p.Card; t.ForeColor = p.Text; }
+            if (_flagPic != null) _flagPic.BackColor = p.Card;
+            // Inside a ring the labels sit on the Card fill; left alone they would inherit the panel's system grey.
+            foreach (var l in new[] { _countryName, _flagLabel }) if (l != null) l.BackColor = p.Card;
+            foreach (var r in new[] { _countryRow, _phoneRow, _codeRow, _pwdRow }) if (r != null) r.BackColor = p.Card;
+            if (_proxyPill != null) { _proxyPill.IsDark = p.Dark; _proxyPill.AccentColor = p.Accent; _proxyPill.Invalidate(); }
+            foreach (Control c in Content.Controls) c.Invalidate(true);
         }
 
         private Image IconBitmap() { try { return Icon != null ? Icon.ToBitmap() : null; } catch { return null; } }
 
-        /// <summary>An owner-drawn ACCENT text link (Telegram-Desktop colored secondary link). Owner-drawn so the
-        /// accent color survives MaterialSkin's child re-coloring; underlines + brightens on hover.</summary>
+        /// <summary>An owner-drawn ACCENT text link (Telegram-Desktop colored secondary link), in Palette.AccentFg (readable
+        /// on the window in both themes); underlines on hover.</summary>
         private Label AccentLink(string text, Action onClick)
         {
-            var link = new Label { Width = 380, Height = 26, Cursor = Cursors.Hand, AutoSize = false, BackColor = _bg };
+            var link = new Label { Width = Px(380), Height = Px(26), Cursor = Cursors.Hand, AutoSize = false };
             bool hover = false;
             link.MouseEnter += (s, e) => { hover = true; link.Invalidate(); };
             link.MouseLeave += (s, e) => { hover = false; link.Invalidate(); };
             link.Paint += (s, e) =>
             {
+                var p = ThemeHelper.Palette;
                 var g = e.Graphics;
-                Color back = link.Parent != null ? link.Parent.BackColor : _bg;
-                using (var bb = new SolidBrush(back)) g.FillRectangle(bb, link.ClientRectangle);
-                var font = FontHelper.Ui(10.5f, hover ? (FontStyle.Bold | FontStyle.Underline) : FontStyle.Bold);
-                TextRenderer.DrawText(g, text, font, link.ClientRectangle, hover ? Scale(_link, 1.12f) : _link,
+                using (var bb = new SolidBrush(link.Parent != null ? link.Parent.BackColor : p.Window)) g.FillRectangle(bb, link.ClientRectangle);
+                var font = FontHelper.UiAt(10.5f, Dpi.Of(link), hover ? (FontStyle.Bold | FontStyle.Underline) : FontStyle.Bold);
+                TextRenderer.DrawText(g, text, font, link.ClientRectangle, p.AccentFg,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
             };
             link.Click += (s, e) => onClick();
             return link;
         }
 
-        /// <summary>Owner-draws a title-bar glyph button flush with the accent bar (no contrasting chip) — fills
-        /// the accent + white glyph, darken on press / lighten on hover. Owner-drawn so MaterialSkin can't paint
-        /// a dark box behind it.</summary>
-        private void StyleBarButton(Label lbl, string glyph, float size)
+        /// <summary>A ring field around one borderless TextBox, the box centred vertically and inset horizontally.</summary>
+        private RingPanel RingAround(TextBox box, int width, int height)
         {
-            lbl.Text = "";
-            lbl.BackColor = _accent;
-            var font = FontHelper.Ui(size, FontStyle.Bold);
-            bool hover = false, down = false;
-            lbl.MouseEnter += (s, e) => { hover = true; lbl.Invalidate(); };
-            lbl.MouseLeave += (s, e) => { hover = false; down = false; lbl.Invalidate(); };
-            lbl.MouseDown += (s, e) => { down = true; lbl.Invalidate(); };
-            lbl.MouseUp += (s, e) => { down = false; lbl.Invalidate(); };
-            lbl.Paint += (s, e) =>
+            var ring = new RingPanel { Width = width, Height = height };
+            ring.Controls.Add(box);
+            ring.Layout += (s, e) =>
             {
-                Color c = down ? Scale(_accent, 0.82f) : hover ? Scale(_accent, 1.16f) : _accent;
-                using (var b = new SolidBrush(c)) e.Graphics.FillRectangle(b, lbl.ClientRectangle);
-                TextRenderer.DrawText(e.Graphics, glyph, font, lbl.ClientRectangle, Color.White,
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                int inset = Px(10);
+                box.SetBounds(inset, Math.Max(0, (ring.Height - box.Height) / 2), Math.Max(1, ring.Width - 2 * inset), box.Height);
             };
+            ring.Click += (s, e) => box.Focus();
+            return ring;
         }
 
-        // Shared color math (also used by AccentButton).
-        private static Color Scale(Color c, float f) { return Color.FromArgb(c.A, Clamp(c.R * f), Clamp(c.G * f), Clamp(c.B * f)); }
-        private static Color Blend(Color a, Color b, float t) { return Color.FromArgb(255, (int)(a.R * (1 - t) + b.R * t), (int)(a.G * (1 - t) + b.G * t), (int)(a.B * (1 - t) + b.B * t)); }
-        private static int Clamp(float v) { return v < 0 ? 0 : v > 255 ? 255 : (int)v; }
+        /// <summary>Centers a control horizontally in Content and sets its Top from 1.x's form-coordinate value.</summary>
+        private void Center(Control c, int top1x) { c.Left = (Content.ClientSize.Width - c.Width) / 2; c.Top = Px(top1x - HeaderH); }
 
-        /// <summary>Centers a control horizontally and sets its Top (form coordinates).</summary>
-        private void Center(Control c, int top) { c.Left = (ClientSize.Width - c.Width) / 2; c.Top = top; }
-
-        /// <summary>BATCH-TA-16/P3 — opens the shared proxy form, then re-reads the pill.
-        /// The form persists on close; because LoginForm has not built a client yet, the new setting is
-        /// picked up by TelegramService.EnsureClient on the next connect attempt. Applying a change to an
-        /// ALREADY-CONNECTED client (and the warm pool) is the separate, gated problem — TA-16/P5.</summary>
         /// <summary>Opens the SAME SettingsForm the drawer opens. It takes the service and does not
         /// require an authorised connection; its Devices page fetches lazily only when selected.</summary>
         private void OpenSettings()
@@ -305,6 +276,10 @@ namespace TelegArm.UI
             RefreshProxyPill();
         }
 
+        /// <summary>BATCH-TA-16/P3 — opens the shared proxy form, then re-reads the pill.
+        /// The form persists on close; because LoginForm has not built a client yet, the new setting is
+        /// picked up by TelegramService.EnsureClient on the next connect attempt. Applying a change to an
+        /// ALREADY-CONNECTED client (and the warm pool) is the separate, gated problem — TA-16/P5.</summary>
         private async void OpenProxySettings()
         {
             bool changed = false;
@@ -355,13 +330,13 @@ namespace TelegArm.UI
         {
             if (_proxyPill == null) return;
             ProxyStatus.Reset();                                            // new proxy → fresh grace period
-            _proxyPill.Top = ClientSize.Height - _proxyPill.Height - 14;
+            PlaceCorners();
         }
 
         // ── Country ↔ dial-code two-way sync ──
         private void OpenCountryPicker()
         {
-            using (var dlg = new CountryPickerForm(_dark, _accent))
+            using (var dlg = new CountryPickerForm(ThemeHelper.Palette.Dark, ThemeHelper.Palette.Accent))
                 if (dlg.ShowDialog(this) == DialogResult.OK && dlg.SelectedCountry != null)
                     ApplyCountry(dlg.SelectedCountry, true);
         }
@@ -415,15 +390,15 @@ namespace TelegArm.UI
         {
             _view = v;
 
-            foreach (var c in new Control[] { _countryRow, _phoneRow, _codeBox, _pwdBox, _qr, _qrSteps,
+            foreach (var c in new Control[] { _countryRow, _phoneRow, _codeRow, _pwdRow, _qr, _qrSteps,
                 _subtitle, _submitButton, _qrToggleLink, _phoneToggleLink, _resendLink })
                 c.Visible = false;
             _bigTitle.Visible = true;
             _statusLabel.Visible = true; _statusLabel.Text = "";
             _submitButton.Enabled = true;
 
-            _backBtn.Visible = v != View.Qr || AddMode;   // QR is the root step now (except add-account = cancel)
-            _header.Invalidate();
+            // QR is the root step (except add-account, where Back = cancel).
+            Bar.LeftKind = v != View.Qr || AddMode ? TitleBar.LeftButton.Back : TitleBar.LeftButton.None;
 
             switch (v)
             {
@@ -441,7 +416,7 @@ namespace TelegArm.UI
                 case View.Code:
                     Center(_bigTitle, 78); _bigTitle.Text = "Enter the Code";
                     _subtitle.Visible = true; Center(_subtitle, 116); _subtitle.Text = "We sent the code to your other Telegram device.";
-                    _codeBox.Visible = true; Center(_codeBox, 170);
+                    _codeRow.Visible = true; Center(_codeRow, 170);
                     _submitButton.Visible = true; _submitButton.Text = "Verify"; Center(_submitButton, 238);
                     Center(_statusLabel, 300);
                     _resendLink.Visible = true; Center(_resendLink, 352);
@@ -451,7 +426,7 @@ namespace TelegArm.UI
                 case View.Password:
                     Center(_bigTitle, 78); _bigTitle.Text = "Two-Step Verification";
                     _subtitle.Visible = true; Center(_subtitle, 116); _subtitle.Text = "Your account is protected with an additional password.";
-                    _pwdBox.Visible = true; Center(_pwdBox, 170);
+                    _pwdRow.Visible = true; Center(_pwdRow, 170);
                     _submitButton.Visible = true; _submitButton.Text = "Submit"; Center(_submitButton, 238);
                     Center(_statusLabel, 300);
                     _pwdBox.Focus();
@@ -460,44 +435,32 @@ namespace TelegArm.UI
                 default: // Qr
                     Center(_qr, 64); _qr.Visible = true;
                     Center(_bigTitle, 320); _bigTitle.Text = "Scan From Mobile Telegram";
-                    _qrSteps.Visible = true; _qrSteps.Left = (ClientSize.Width - _qrSteps.Width) / 2; _qrSteps.Top = 366;
+                    _qrSteps.Visible = true; _qrSteps.Left = (Content.ClientSize.Width - _qrSteps.Width) / 2; _qrSteps.Top = Px(366 - HeaderH);
                     Center(_statusLabel, 472);
                     _phoneToggleLink.Visible = true; Center(_phoneToggleLink, 512);
                     StartQr();
                     break;
             }
 
-            // DPI-rescue affordance: only on the safe root views (Qr/Phone), only when warranted. Pinned near
-            // the bottom, clear of the toggle links above.
+            // The pill is view-independent chrome: re-assert it on EVERY view switch so no future view
+            // branch can strand it again the way the BuildUi sweep did, and so its Top follows the caption
+            // height when ProxyStatus flips it to "Connecting via proxy…" / "Proxy not working".
+            if (_proxyPill != null) { _proxyPill.Visible = true; _proxyPill.BringToFront(); }
+            if (_settingsBtn != null) { _settingsBtn.Visible = true; _settingsBtn.BringToFront(); }
+            PlaceCorners();
+
+            // DPI-rescue affordance: only on the safe root views (Qr/Phone), only when warranted. Its own row ABOVE the
+            // bottom corners (BATCH-TA-16f/F1: centred across the window it collided with the pill and lost its clicks to
+            // it; step 2.4: squeezed between the pill and the bottom-right Settings button it was clipped at both ends).
             bool showRescue = DpiRescueApplicable() && (v == View.Qr || v == View.Phone);
             _dpiRescueLink.Visible = showRescue;
             if (showRescue)
             {
-                // BATCH-TA-16f/F1 — this link used to be centred across the full 480px at y=560, which now
-                // COLLIDES with the proxy pill: the pill sits at (14, 552) and is ~174x34, so it covers the
-                // link's leading ~110px AND, being in front, swallows clicks there. Un-hiding the pill is
-                // what exposed this. Inset past the pill instead of centring, so both stay usable.
-                // Narrow blast radius: DpiRescueApplicable() is false in AddMode and false below 125% scale,
-                // so this only ever runs on a high-DPI first-launch desktop — never on the RT device.
-                int x = (_proxyPill != null && _proxyPill.Visible ? _proxyPill.Right : 8) + 10;
-                _dpiRescueLink.SetBounds(x, 560, Math.Max(120, ClientSize.Width - x - 12), _dpiRescueLink.Height);
-            }
-
-            // The pill is view-independent chrome: re-assert it on EVERY view switch so no future view
-            // branch can strand it again the way the BuildUi sweep did, and so its Top follows the caption
-            // height when ProxyStatus flips it to "Connecting via proxy…" / "Proxy not working".
-            if (_proxyPill != null)
-            {
-                _proxyPill.Visible = true;
-                _proxyPill.Top = ClientSize.Height - _proxyPill.Height - 14;
-                _proxyPill.BringToFront();
-            }
-            if (_settingsBtn != null)
-            {
-                _settingsBtn.Visible = true;
-                _settingsBtn.Left = ClientSize.Width - _settingsBtn.Width - 14;
-                _settingsBtn.Top = ClientSize.Height - _settingsBtn.Height - 14;
-                _settingsBtn.BringToFront();
+                int m = Px(14), top = Content.ClientSize.Height - m;
+                if (_proxyPill != null) top = Math.Min(top, _proxyPill.Top);
+                if (_settingsBtn != null) top = Math.Min(top, _settingsBtn.Top);
+                _dpiRescueLink.SetBounds(m, top - Px(8) - _dpiRescueLink.Height, Content.ClientSize.Width - 2 * m, _dpiRescueLink.Height);
+                _dpiRescueLink.BringToFront();
             }
         }
 
@@ -527,8 +490,7 @@ namespace TelegArm.UI
             catch (Exception ex)
             {
                 Logger.Diag("[DPI] rescue restart FAILED: " + ex.Message);
-                try { MessageBox.Show(this, "Couldn't restart automatically - please close and reopen TelegArm to apply the larger UI.",
-                    "TelegArm", MessageBoxButtons.OK, MessageBoxIcon.Information); } catch { }
+                try { ThemedDialog.Show(this, "TelegArm", "Couldn't restart automatically - please close and reopen TelegArm to apply the larger UI.", "OK"); } catch { }
             }
         }
 
@@ -695,42 +657,52 @@ namespace TelegArm.UI
 
         private void SetBusy(string status) { _submitButton.Enabled = false; _statusLabel.Text = status; }
 
-        /// <summary>A filled, rounded ACCENT button (white centered text) with hover/press/disabled states —
-        /// owner-drawn so it renders consistently under MaterialSkin / on RT (a plain Button's BackColor was
-        /// being flattened to bare text).</summary>
-        private sealed class AccentButton : Control
+        /// <summary>A ring field: a rounded Card-filled frame (Divider hairline, accent when a child has focus), optionally a
+        /// vertical separator (the "+code | number" row) and a DRAWN chevron (the country row — "▾" is a box on RT).</summary>
+        private sealed class RingPanel : Panel
         {
-            private readonly Color _accent, _parentBg;
-            private bool _hover, _down;
+            /// <summary>Logical x of a separator line (0 = none).</summary>
+            public int SeparatorX;
+            public bool Chevron;
 
-            public AccentButton(Color accent, Color parentBg)
+            public RingPanel()
             {
-                _accent = accent; _parentBg = parentBg;
-                SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint
-                         | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
-                Cursor = Cursors.Hand;
+                SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             }
 
-            protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }
-            protected override void OnMouseLeave(EventArgs e) { _hover = false; _down = false; Invalidate(); base.OnMouseLeave(e); }
-            protected override void OnMouseDown(MouseEventArgs e) { _down = true; Invalidate(); base.OnMouseDown(e); }
-            protected override void OnMouseUp(MouseEventArgs e) { _down = false; Invalidate(); base.OnMouseUp(e); }
-            protected override void OnEnabledChanged(EventArgs e) { Invalidate(); base.OnEnabledChanged(e); }
-            protected override void OnTextChanged(EventArgs e) { Invalidate(); base.OnTextChanged(e); }
+            protected override void OnControlAdded(ControlEventArgs e)
+            {
+                base.OnControlAdded(e);
+                e.Control.GotFocus += (s, a) => Invalidate();
+                e.Control.LostFocus += (s, a) => Invalidate();
+                if (e.Control is TextBox) e.Control.BackColor = ThemeHelper.Palette.Card;
+            }
 
             protected override void OnPaint(PaintEventArgs e)
             {
+                var p = ThemeHelper.Palette;
                 var g = e.Graphics;
+                int dpi = Dpi.Of(this);
+                g.Clear(Parent != null ? Parent.BackColor : p.Window);
                 g.SmoothingMode = SmoothingMode.AntiAlias;
-                Color pbg = Parent != null ? Parent.BackColor : _parentBg;   // match the form so rounded corners blend
-                using (var bg = new SolidBrush(pbg)) g.FillRectangle(bg, ClientRectangle);
-                Color c = !Enabled ? LoginForm.Blend(_accent, pbg, 0.55f)
-                        : _down ? LoginForm.Scale(_accent, 0.86f)
-                        : _hover ? LoginForm.Scale(_accent, 1.10f) : _accent;
-                var r = new Rectangle(0, 0, Width - 1, Height - 1);
-                using (var path = DrawHelper.RoundedRect(r, 8)) using (var b = new SolidBrush(c)) g.FillPath(b, path);
-                TextRenderer.DrawText(g, Text, FontHelper.Ui(12.5f, FontStyle.Bold), ClientRectangle, Color.White,
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                bool focused = ContainsFocus;
+                using (var path = DrawHelper.RoundedRect(new Rectangle(0, 0, Width - 1, Height - 1), Dpi.Px(8, dpi)))
+                {
+                    using (var b = new SolidBrush(p.Card)) g.FillPath(b, path);
+                    using (var pen = new Pen(focused ? p.Accent : p.Divider, focused ? Dpi.F(1.5f, dpi) : 1f)) g.DrawPath(pen, path);
+                }
+                if (SeparatorX > 0)
+                    using (var pen = new Pen(p.Divider, Dpi.F(1.6f, dpi)))
+                        g.DrawLine(pen, Dpi.Px(SeparatorX, dpi), Dpi.Px(9, dpi), Dpi.Px(SeparatorX, dpi), Height - Dpi.Px(9, dpi));
+                if (Chevron)
+                {
+                    float cx = Width - Dpi.Px(20, dpi), cy = Height / 2f, u = Dpi.F(4f, dpi);
+                    using (var pen = new Pen(p.TextDim, Dpi.F(1.6f, dpi)) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                    {
+                        g.DrawLine(pen, cx - u, cy - u / 2, cx, cy + u / 2);
+                        g.DrawLine(pen, cx, cy + u / 2, cx + u, cy - u / 2);
+                    }
+                }
             }
         }
     }

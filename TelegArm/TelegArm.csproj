@@ -99,7 +99,7 @@
     <Compile Include="Core\VlcEnvironment.cs" />
     <Compile Include="Core\WebmAlphaProbe.cs" />
     <Compile Include="Helpers\DrawHelper.cs" />
-    <Compile Include="Helpers\ThemedChrome.cs" />
+    <Compile Include="Helpers\AppIcon.cs" />
     <Compile Include="Helpers\TextEntities.cs" />
     <Compile Include="Helpers\PerfLog.cs" />
     <Compile Include="Helpers\FileLog.cs" />
@@ -216,6 +216,7 @@
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="Helpers\KeyboardInset.cs" />
+    <Compile Include="Helpers\TextRoles.cs" />
     <Compile Include="Core\CloseAction.cs" />
     <Compile Include="UI\Controls\DialogRows.cs" />
     <Compile Include="UI\Controls\ThemedTextBox.cs" />
@@ -223,7 +224,9 @@
     <Compile Include="UI\Controls\ThemedLabel.cs" />
     <Compile Include="UI\Controls\EmptyState.cs" />
     <Compile Include="UI\Controls\SettingRows.cs" />
+    <Compile Include="UI\Controls\SettingRowsExtra.cs" />
     <Compile Include="UI\DialogProbe.cs" />
+    <Compile Include="UI\SettingsProbe.cs" />
     <Compile Include="UI\TextBoxProbe.cs" />
     <Compile Include="UI\DialogForm.cs">
       <SubType>Form</SubType>
@@ -392,7 +395,7 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <!-- Tray icons (unread-aware): swapped live by unread count. Repo root → copied beside the exe. -->
-    <!-- Redesign 1.8 (DroidFinestra pattern): the multi-size app icon, embedded, for every window (ThemedChrome.AppIcon). -->
+    <!-- Redesign 1.8 (DroidFinestra pattern): the multi-size app icon, embedded, for every window (AppIcon.Icon). -->
     <EmbeddedResource Include="..\img-icon\icon.ico">
       <Link>app.ico</Link>
       <LogicalName>app.ico</LogicalName>

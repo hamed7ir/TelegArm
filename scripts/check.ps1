@@ -7,7 +7,7 @@
 # Raise -Step's default as the plan advances. Exit code 0 = every enforced gate passed and SelfTest passed.
 #
 # ASCII only: Windows PowerShell 5.1 reads a BOM-less script as ANSI.
-param([string]$Step = '2.1', [switch]$NoSelfTest)
+param([string]$Step = '2.6', [switch]$NoSelfTest)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $app = Join-Path $root 'TelegArm'
@@ -50,7 +50,19 @@ function PaintBodies($files) {
 }
 
 # Phase 2: every file a step has converted off MaterialSkin (append as steps land; step 2.8 then forbids it everywhere).
-$converted = @('UI\ThemedDialog.cs')
+$converted = @(
+    'UI\ThemedDialog.cs',                                                                    # 2.1
+    'UI\EditContactForm.cs', 'UI\CreateChatForm.cs', 'UI\CountryPickerForm.cs',              # 2.2 / 2.6b
+    'UI\StoriesGridForm.cs', 'UI\PeoplePickerForm.cs', 'UI\ForwardPickerDialog.cs',
+    'UI\SendMediaDialog.cs', 'UI\ProfilePhotoViewer.cs', 'UI\ProxyLinkForm.cs', 'UI\ProxyShare.cs',
+    'UI\ProxyForm.cs', 'UI\AboutForm.cs', 'UI\RoundRecorderForm.cs',
+    'UI\Admin\ManageChatForm.cs', 'UI\Admin\RightsChecklistForm.cs', 'UI\Admin\EditChatInfoForm.cs',
+    'UI\Admin\ChannelExtrasForm.cs', 'UI\Admin\ChatMembersForm.cs', 'UI\Admin\InviteLinksForm.cs',
+    'UI\MediaViewerForm.cs',                                                                 # 2.3
+    'UI\LoginForm.cs',                                                                       # 2.4
+    'UI\ProfileForm.cs',                                                                     # 2.5
+    'UI\SettingsForm.cs', 'UI\Controls\SettingRowsExtra.cs', 'UI\Controls\SessionRowControl.cs'   # 2.6
+)
 
 $rowClasses = @($all | Where-Object { $_.Name -in 'MessageBubbleControl.cs', 'VoiceBubbleControl.cs', 'ServiceLineControl.cs', 'SponsoredCardControl.cs', 'ChatListItemControl.cs' })
 
@@ -68,9 +80,18 @@ $gates = @(
     @{ From = '1.3'; Name = 'no ClientSize = in AppForm / DialogForm subclasses (set Size)'; Test = {
         $forms = @($all | Where-Object { (Select-String -LiteralPath $_.FullName -Pattern ':\s*(AppForm|DialogForm)\b' -Quiet) })
         Hits $forms '\bClientSize\s*=(?!=)' $null } }
+    @{ From = '1.3'; Name = 'AppForm asks DWM for Windows 11 round corners (DWMWCP_ROUND; the owner wants them kept)'; Test = {
+        $af = @($all | Where-Object { $_.Name -eq 'AppForm.cs' })
+        if (@(Hits $af 'DwmSetWindowAttribute\(Handle,\s*DWMWA_WINDOW_CORNER_PREFERENCE').Count -eq 0 -or @(Hits $af 'int\s+round\s*=\s*DWMWCP_ROUND').Count -eq 0) {
+            'UI\AppForm.cs: the DWMWCP_ROUND request in ApplyDwmAttributes is gone' } } }
     @{ From = '2.1'; Name = 'no Material in the files Phase 2 has converted (plan 5 (f))'; Test = {
         $done = @($all | Where-Object { $converted -contains $_.FullName.Substring($app.Length + 1) })
-        Hits $done '\bMaterial[A-Z]\w*|\bMaterialSkin\b' $null } }
+        # String literals are cut too: About's credits name the library (it ships until 2.8), which is not a use of it.
+        @(Hits $done '\bMaterial[A-Z]\w*|\bMaterialSkin\b' $null | Where-Object { ($_ -replace '^.+?:\d+: ', '' -replace '"[^"]*"', '""') -match '\bMaterial[A-Z]\w*|\bMaterialSkin\b' }) } }
+    @{ From = '2.2'; Name = 'no MessageBox in the files Phase 2 has converted (plan 5 (b): ThemedDialog)'; Test = {
+        $done = @($all | Where-Object { $converted -contains $_.FullName.Substring($app.Length + 1) })
+        Hits $done 'MessageBox\.Show' $null } }
+    @{ From = '2.6'; Name = 'no ThemedChrome (the 1.x shim is deleted once 2.6b has no callers)'; Test = { Hits $all 'ThemedChrome' $null } }
     @{ From = '2.8'; Name = 'no MaterialSkin anywhere'; Test = { Hits $all '\bMaterial[A-Z]\w*|\bMaterialSkin\b' $null } }
     @{ From = '3.1'; Name = 'no CreateGraphics().Dpi'; Test = { Hits $all 'CreateGraphics\(\)\s*\.\s*Dpi' $null } }
     @{ From = '3.3'; Name = 'no new Font( or .SizeInPoints outside FontCache / FontHelper'; Test = { Hits $all 'new\s+Font\s*\(|\.SizeInPoints\b' '^(FontCache|FontHelper)\.cs$' } }

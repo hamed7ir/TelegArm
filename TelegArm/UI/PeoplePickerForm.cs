@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -16,11 +17,18 @@ namespace TelegArm.UI
     /// RTL-aware (Persian names via TextRenderer), themed, touch-sized. Contacts are fetched via the injected
     /// async fetcher (off-thread + bounded in the service) with a loading state; NO per-contact avatar download
     /// (VPN-safe — colored initials instead).
+    ///
+    /// Redesign step 2.6b: a <see cref="DialogForm"/> (was a plain Form + ThemedChrome.Apply) — the list is the dialog's
+    /// own body (<c>UseOwnBody</c>), the search field a <see cref="ThemedTextBox"/>, the loading / failed / empty
+    /// messages an <see cref="EmptyState"/>, the Add / Cancel buttons the footer. <paramref name="dark"/> and
+    /// <paramref name="accent"/> are kept for the callers and no longer read: the palette follows the theme live.
+    /// Selection semantics, the fetch flow and the result properties are exactly the 1.x ones.
     /// </summary>
-    public sealed class PeoplePickerForm : Form
+    public sealed class PeoplePickerForm : DialogForm
     {
-        private readonly bool _multi, _dark;
-        private readonly Color _accent, _fg, _sub, _field, _bg;
+        private const int RowLogical = 54;   // one row, logical px — the list takes it at the window's DPI
+
+        private readonly bool _multi;
         private readonly Func<Task<List<User>>> _fetch;
         private readonly Func<long, Image> _cachedAvatar;
         private readonly Func<long, IPeerInfo, Task<Image>> _loadAvatar;
@@ -29,68 +37,107 @@ namespace TelegArm.UI
         private readonly HashSet<long> _checked = new HashSet<long>();
         private readonly HashSet<long> _avatarRequested = new HashSet<long>();
 
-        private TextBox _search;
-        private ThemedListBox _list;
-        private Label _status;
-        private Button _confirm, _cancel;
+        private readonly Panel _host, _searchHost;
+        private readonly ThemedTextBox _search;
+        private readonly ThemedListBox _list;
+        private readonly EmptyState _status;
+        private readonly RoundedButton _confirm;
+        private readonly bool _built;   // ApplyDialogTheme is first called from the base constructor, before the controls exist
 
         public User SelectedUser { get; private set; }
         public List<User> SelectedUsers { get; private set; } = new List<User>();
 
         public PeoplePickerForm(Func<Task<List<User>>> fetch, bool multiSelect, bool dark, Color accent, string title,
                                 Func<long, Image> cachedAvatar = null, Func<long, IPeerInfo, Task<Image>> loadAvatar = null)
+            : base(title, 380, 580)
         {
-            _fetch = fetch; _multi = multiSelect; _dark = dark; _accent = accent;
+            _fetch = fetch; _multi = multiSelect;
             _cachedAvatar = cachedAvatar; _loadAvatar = loadAvatar;
-            _bg = _dark ? Color.FromArgb(40, 40, 44) : Color.FromArgb(248, 248, 250);
-            _fg = _dark ? Color.FromArgb(235, 235, 235) : Color.FromArgb(20, 20, 20);
-            _sub = _dark ? Color.FromArgb(155, 155, 155) : Color.FromArgb(120, 120, 120);
-            _field = _dark ? Color.FromArgb(54, 54, 58) : Color.White;
-            BuildUi(title);
-            Shown += async (s, e) => await LoadAsync();
-        }
+            var p = ThemeHelper.Palette;
 
-        private void BuildUi(string title)
-        {
-            Text = title;
-            StartPosition = FormStartPosition.CenterParent;
-            MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
-            ClientSize = new Size(380, 520 + ThemedChrome.BarH);
-            var content = ThemedChrome.Apply(this, title, _accent, _dark);   // accent title bar + dark chrome (matches the app)
-
-            _search = new TextBox { Left = 12, Top = 12, Width = 356, Height = 28, BackColor = _field, ForeColor = _fg, BorderStyle = BorderStyle.FixedSingle, Font = FontHelper.Ui(10f) };
+            _search = new ThemedTextBox(false) { Hint = "Search", AccessibleName = "Search" };
+            _search.Inner.AccessibleName = "Search";
             _search.TextChanged += (s, e) => ApplyFilter();
-            content.Controls.Add(_search);
+            _searchHost = new Panel { Dock = DockStyle.Top, BackColor = p.Window };
+            _searchHost.Controls.Add(_search);
+            _searchHost.SizeChanged += (s, e) => LayoutSearch();
 
-            _list = new ThemedListBox(_dark, _accent)
-            {
-                Left = 12, Top = 48, Width = 356, Height = _multi ? 414 : 458, RowHeight = 54, CanvasBackColor = _bg
-            };
+            // Owner-drawn list with a themed scrollbar that's dark on RT 8.1 too. Hidden while the status shows (as in 1.x).
+            _list = new ThemedListBox(p.Dark, p.Accent) { Dock = DockStyle.Fill, RowHeight = Px(RowLogical), CanvasBackColor = p.Window, Visible = false };
             _list.DrawRow += DrawRow;
             _list.ItemClicked += OnRowClicked;
-            content.Controls.Add(_list);   // owner-drawn list with a themed scrollbar that's DARK on RT 8.1 too
 
-            _status = new Label { Left = 12, Top = 230, Width = 356, Height = 28, ForeColor = _sub, TextAlign = ContentAlignment.MiddleCenter, Text = "Loading contacts…", Font = FontHelper.Ui(10f) };
-            content.Controls.Add(_status); _status.BringToFront();
+            _status = new EmptyState { Dock = DockStyle.Fill, Hint = "Loading contacts…" };
+
+            _host = new Panel { BackColor = p.Window };
+            _host.Controls.Add(_list);          // the two Fill children share the space (one is visible at a time);
+            _host.Controls.Add(_status);
+            _host.Controls.Add(_searchHost);    // added last = docked first: the Top strip
+            UseOwnBody(_host);
+            LayoutSearch();
 
             if (_multi)
             {
-                _confirm = new RoundedButton { Text = "Add (0)", Left = 196, Top = 470, Width = 86, Height = 36, Kind = RoundedButtonKind.Primary, Font = FontHelper.Ui(10f, FontStyle.Bold), Enabled = false };
+                _confirm = AddFooterButton("Add (0)", RoundedButtonKind.Primary, DialogResult.None);   // first added = rightmost
+                _confirm.Enabled = false;
                 _confirm.Click += (s, e) => { SelectedUsers = _all.Where(u => _checked.Contains(u.id)).ToList(); DialogResult = DialogResult.OK; Close(); };
-                _cancel = new RoundedButton { Text = "Cancel", Left = 288, Top = 470, Width = 80, Height = 36, Kind = RoundedButtonKind.Secondary };
-                _cancel.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
-                content.Controls.Add(_confirm); content.Controls.Add(_cancel);
+                AcceptButton = _confirm;
             }
+            CancelButton = AddFooterButton("Cancel", RoundedButtonKind.Neutral, DialogResult.Cancel);
+            FocusOnShow(_search.Inner);
+
+            _built = true;
+            Shown += async (s, e) => await LoadAsync();
+        }
+
+        /// <summary>The search field sits in a strip of its own: padded, and as tall as the field wants at the window's DPI.</summary>
+        private void LayoutSearch()
+        {
+            if (_search == null || _searchHost == null) return;
+            int padX = Px(12), padTop = Px(10), padBottom = Px(8);
+            int h = _search.PreferredFieldHeight;
+            _search.SetBounds(padX, padTop, Math.Max(1, _searchHost.Width - 2 * padX), h);
+            int total = padTop + h + padBottom;
+            if (_searchHost.Height != total) _searchHost.Height = total;
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            LayoutSearch();   // the DPI of the window is only known once it is placed
+        }
+
+        protected override void OnDpiChanged(int oldDpi, int newDpi)
+        {
+            base.OnDpiChanged(oldDpi, newDpi);
+            if (!_built) return;
+            _list.RowHeight = Px(RowLogical);
+            _list.SetItems(_view.Count);   // the canvas height follows the row height
+            LayoutSearch();
+        }
+
+        protected override void ApplyDialogTheme()
+        {
+            base.ApplyDialogTheme();
+            if (!_built) return;
+            var p = ThemeHelper.Palette;
+            _host.BackColor = p.Window;
+            _searchHost.BackColor = p.Window;
+            _search.Recolor();
+            _list.CanvasBackColor = p.Window;
+            _list.Invalidate(true);
+            _status.Invalidate();
         }
 
         private async Task LoadAsync()
         {
-            _status.Visible = true; _status.Text = "Loading contacts…"; _list.Visible = false;
+            _status.Hint = "Loading contacts…"; _status.Visible = true; _list.Visible = false;
             List<User> users = null;
             try { users = await _fetch(); } catch { users = null; }
-            if (users == null) { _status.Text = "Couldn't load contacts — make sure your VPN is on."; return; }
+            if (IsDisposed) return;   // the dialog was closed while the contacts were on their way
+            if (users == null) { _status.Hint = "Couldn't load contacts — make sure your VPN is on."; return; }
             _all = users.OrderBy(u => PersonName(u), StringComparer.CurrentCultureIgnoreCase).ToList();
-            if (_all.Count == 0) { _status.Text = "No contacts."; return; }
+            if (_all.Count == 0) { _status.Hint = "No contacts."; return; }
             _status.Visible = false; _list.Visible = true;
             ApplyFilter();
             UpdateConfirm();
@@ -130,10 +177,12 @@ namespace TelegArm.UI
         {
             if (index < 0 || index >= _view.Count) return;
             var u = _view[index];
-            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            using (var bb = new SolidBrush(_bg)) g.FillRectangle(bb, r);
+            var p = ThemeHelper.Palette;
+            int dpi = WindowDpiValue;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            using (var bb = new SolidBrush(p.Window)) g.FillRectangle(bb, r);
 
-            int d = 40, ax = r.Left + 8, ay = r.Top + (r.Height - d) / 2;
+            int d = Px(40), ax = r.Left + Px(8), ay = r.Top + (r.Height - d) / 2;
             var avatarRect = new Rectangle(ax, ay, d, d);
             string name = PersonName(u);
             Image av = _cachedAvatar != null ? _cachedAvatar(u.id) : null;
@@ -142,29 +191,42 @@ namespace TelegArm.UI
             {
                 using (var ab = new SolidBrush(DrawHelper.AvatarColor(u.id))) g.FillEllipse(ab, avatarRect);
                 string initial = name.Length > 0 ? name.Substring(0, 1).ToUpperInvariant() : "?";
-                TextRenderer.DrawText(g, initial, FontHelper.Ui(14f, FontStyle.Bold), avatarRect, Color.White,
+                TextRenderer.DrawText(g, initial, FontHelper.UiAt(14f, dpi, FontStyle.Bold), avatarRect, Color.White,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
                 EnsureAvatar(u);
             }
 
-            int tx = ax + d + 12, tw = r.Right - tx - (_multi ? 36 : 12);
-            TextRenderer.DrawText(g, name, FontHelper.Ui(11f, FontStyle.Bold), new Rectangle(tx, r.Top + 8, tw, 20), _fg,
+            // Fonts without the text argument = the Roboto face, as in 1.x: GDI substitutes Persian glyphs, and the taller
+            // Vazirmatn line would not fit these fixed name / @username bands.
+            int tx = ax + d + Px(12), tw = r.Right - tx - Px(_multi ? 36 : 12);
+            TextRenderer.DrawText(g, name, TextRoles.Font(TextRole.Section, dpi), new Rectangle(tx, r.Top + Px(8), tw, Px(20)), p.Text,
                 TextFormatFlags.Left | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
             string sub = !string.IsNullOrEmpty(u.username) ? "@" + u.username : (!string.IsNullOrEmpty(u.phone) ? "+" + u.phone : "");
             if (sub.Length > 0)
-                TextRenderer.DrawText(g, sub, FontHelper.Ui(8.5f), new Rectangle(tx, r.Top + 28, tw, 18), _sub,
+                TextRenderer.DrawText(g, sub, TextRoles.Font(TextRole.Field, dpi), new Rectangle(tx, r.Top + Px(28), tw, Px(18)), p.TextDim,
                     TextFormatFlags.Left | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
 
             if (_multi && _checked.Contains(u.id))
             {
-                int cx = r.Right - 30, cy = r.Top + (r.Height - 20) / 2;
-                using (var cbk = new SolidBrush(_accent)) g.FillEllipse(cbk, cx, cy, 20, 20);
-                TextRenderer.DrawText(g, "✓", FontHelper.Ui(9f, FontStyle.Bold), new Rectangle(cx, cy, 20, 20), Color.White,
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                int cd = Px(20), cx = r.Right - Px(30), cy = r.Top + (r.Height - cd) / 2;
+                DrawCheckBadge(g, new Rectangle(cx, cy, cd, cd), p.Accent, p.OnAccent, dpi);
             }
 
-            using (var sep = new Pen(_dark ? Color.FromArgb(54, 54, 58) : Color.FromArgb(230, 230, 232)))
-                g.DrawLine(sep, r.Left + 8, r.Bottom - 1, r.Right - 8, r.Bottom - 1);
+            using (var sep = new Pen(p.Divider))
+                g.DrawLine(sep, r.Left + Px(8), r.Bottom - 1, r.Right - Px(8), r.Bottom - 1);
+        }
+
+        /// <summary>The "selected" mark: an accent disc with a tick drawn in lines (a font tick is tofu on RT 8.1).</summary>
+        private static void DrawCheckBadge(Graphics g, Rectangle b, Color fill, Color ink, int dpi)
+        {
+            using (var fb = new SolidBrush(fill)) g.FillEllipse(fb, b);
+            using (var pen = new Pen(ink, Math.Max(1.5f, Dpi.F(2f, dpi))) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+                g.DrawLines(pen, new[]
+                {
+                    new PointF(b.X + b.Width * 0.27f, b.Y + b.Height * 0.52f),
+                    new PointF(b.X + b.Width * 0.44f, b.Y + b.Height * 0.69f),
+                    new PointF(b.X + b.Width * 0.74f, b.Y + b.Height * 0.33f),
+                });
         }
 
         // Real profile photo: requested once per contact (bounded/async in the host), repaint the row on arrival.

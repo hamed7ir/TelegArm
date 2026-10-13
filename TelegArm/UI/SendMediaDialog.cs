@@ -1,13 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Windows.Forms;
-using MaterialSkin;
-using MaterialSkin.Controls;
 using TelegArm.Core;
 using TelegArm.Helpers;
+using TelegArm.UI.Controls;
 
 namespace TelegArm.UI
 {
@@ -19,9 +20,17 @@ namespace TelegArm.UI
     /// The dialog owns the upload/send; it raises FileStarting/FileSucceeded/FileFailed
     /// (on the UI thread) so MainForm can show optimistic bubbles and swap them on the
     /// server-confirmed id (mirroring the text-send dedup via _shownMessageIds).
+    ///
+    /// Redesign step 2.2: a <see cref="DialogForm"/> (was a Material-skinned form). The file list scrolls by itself (ScrollHost) with
+    /// the caption field fixed under it; Send / Cancel are the dialog's footer buttons. The upload flow (OnSend and what it
+    /// raises) is unchanged. Keys: Enter = Send, Esc = Cancel — except that Esc is ignored while an upload runs (the Cancel
+    /// button stops it), exactly as before.
     /// </summary>
-    public class SendMediaDialog : MaterialForm
+    public class SendMediaDialog : DialogForm
     {
+        // Logical (96-DPI) metrics; every use goes through Px.
+        private const int RowH = 64, RowPad = 12, ModeButtonW = 132, ListMaxBody = 372, CaptionH = 60;
+
         private sealed class Row
         {
             public string Path;
@@ -29,21 +38,25 @@ namespace TelegArm.UI
             public bool Toggleable;       // image/video can switch Compress↔File
             public SendMode CompressMode; // Photo or Video (the non-file option)
             public Panel Panel;
-            public MaterialButton ModeButton;
-            public ProgressBar Bar;
-            public MaterialLabel Info;   // shows size, then upload status
+            public ThemedLabel KindLabel;
+            public ThemedLabel NameLabel;
+            public RoundedButton ModeButton;
+            public UploadBar Bar;
+            public ThemedLabel Info;      // shows size, then upload status
         }
 
-        private readonly MaterialSkinManager _skin;
         private readonly WTelegram.Client _client;
         private readonly TL.InputPeer _peer;
         private readonly List<Row> _rows = new List<Row>();
         private readonly CancellationTokenSource _cts = new CancellationTokenSource();
         private bool _sending;
+        private bool _restacking;
 
-        private FlowLayoutPanel _list;
-        private MaterialTextBox2 _caption;
-        private MaterialButton _sendBtn, _cancelBtn;
+        private Panel _root, _captionHost;
+        private NoNativeScrollPanel _list;
+        private ThemedScrollBar _listBar;
+        private ThemedTextBox _caption;
+        private RoundedButton _sendBtn, _cancelBtn;
 
         /// <summary>Raised (UI thread) just before a file's upload begins. (token, path, mode, caption)</summary>
         public event Action<int, string, SendMode, string> FileStarting;
@@ -60,83 +73,72 @@ namespace TelegArm.UI
         public event Action<int, string> AlbumFailed;
 
         public SendMediaDialog(WTelegram.Client client, TL.InputPeer peer, IList<string> paths)
+            : base("TelegArm — Send " + paths.Count + (paths.Count == 1 ? " file" : " files"), 520, 520)
         {
             _client = client;
             _peer = peer;
 
-            _skin = MaterialSkinManager.Instance;
-            _skin.AddFormToManage(this);
-            ApplyTheme();
-
             BuildUi(paths);
-            ThemeHelper.ThemeChanged += OnThemeChanged;
-            FormClosed += (s, e) => ThemeHelper.ThemeChanged -= OnThemeChanged;
         }
 
-        private void OnThemeChanged()
+        /// <summary>Recolours what this dialog colours itself. ⚠ DialogForm's constructor calls this before ours has run, so
+        /// anything built here is still null then.</summary>
+        protected override void ApplyDialogTheme()
         {
-            if (IsDisposed) return;
-            try { BeginInvoke((Action)(() => { ApplyTheme(); RecolorRows(); })); } catch { }
-        }
-
-        private void ApplyTheme()
-        {
-            _skin.Theme = ThemeHelper.IsDark ? MaterialSkinManager.Themes.DARK : MaterialSkinManager.Themes.LIGHT;
-            var win = ThemeHelper.GetWindowsAccentColor();
-            var accent = (Primary)(uint)win.ToArgb();
-            var msAccent = (Accent)(uint)win.ToArgb();   // accent slot = Windows accent (shared singleton — no blue re-poison)
-            _skin.ColorScheme = new ColorScheme(accent, accent, accent, msAccent, TextShade.WHITE);
-        }
-
-        private Color RowColor => ThemeHelper.IsDark ? Color.FromArgb(50, 50, 53) : Color.FromArgb(236, 236, 238);
-        private Color SubText => ThemeHelper.IsDark ? Color.FromArgb(170, 170, 170) : Color.FromArgb(110, 110, 110);
-
-        private void RecolorRows()
-        {
-            foreach (var r in _rows)
-            {
-                r.Panel.BackColor = RowColor;
-                if (r.Info != null) r.Info.ForeColor = SubText;
-            }
+            base.ApplyDialogTheme();
+            if (_root == null) return;
+            var p = ThemeHelper.Palette;
+            _root.BackColor = p.Window;
+            _list.BackColor = p.Window;
+            if (_list.Parent != null) _list.Parent.BackColor = p.Window;
+            _captionHost.BackColor = p.Window;
+            if (_listBar != null) { _listBar.IsDark = p.Dark; _listBar.AccentColor = p.Accent; _listBar.Invalidate(); }
+            foreach (var r in _rows) { r.Panel.BackColor = p.Card; r.Panel.Invalidate(true); }
+            _caption.Recolor();
         }
 
         private void BuildUi(IList<string> paths)
         {
-            AutoScaleMode = AutoScaleMode.Font;
-            Text = "TelegArm — Send " + paths.Count + (paths.Count == 1 ? " file" : " files");
-            TelegArm.Helpers.ThemedChrome.SetAppIcon(this);   // app icon in the taskbar / Alt-Tab
-            FormStyle = FormStyles.ActionBar_None;
-            ClientSize = new Size(520, 470);
-            StartPosition = FormStartPosition.CenterParent;
-            MaximizeBox = false;
-            Sizable = false;
-            KeyPreview = true;
-            KeyDown += (s, e) => { if (e.KeyCode == Keys.Escape && !_sending) { DialogResult = DialogResult.Cancel; Close(); } };
+            var p = ThemeHelper.Palette;
+            int gap = Px(RowGap);
 
-            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(12, 16, 12, 12) };
-            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 56));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
+            _root = new Panel { BackColor = p.Window };   // UseOwnBody docks it Fill
 
-            _list = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Margin = new Padding(0) };
-            foreach (var p in paths) _rows.Add(BuildRow(_rows.Count, p));
+            var listHost = new Panel { Dock = DockStyle.Fill, BackColor = p.Window };
+            _list = ScrollHost.Wrap(listHost, p.Dark, p.Accent);   // themed bar + finger-pan (TouchScroller) included
+            _list.BackColor = p.Window;
+            var margin = _list.AutoScrollMargin; margin.Height = gap;
+            _list.AutoScrollMargin = margin;                        // room under the last row
+            _listBar = listHost.Controls.OfType<ThemedScrollBar>().FirstOrDefault();
+            foreach (var path in paths) _rows.Add(BuildRow(_rows.Count, path));
             foreach (var r in _rows) _list.Controls.Add(r.Panel);
-            TelegArm.UI.Controls.TouchScroller.Enable(_list, horizontal: false);   // finger-pan the attachment list (RT touch)
+            _list.ClientSizeChanged += (s, e) => RestackRows();
 
-            _caption = new MaterialTextBox2 { Hint = "Caption (optional)", Dock = DockStyle.Fill, Margin = new Padding(2, 8, 2, 8) };
+            _captionHost = new Panel
+            {
+                Dock = DockStyle.Bottom,
+                Height = Px(CaptionH),
+                Padding = new Padding(Px(14), Px(10), Px(14), Px(10)),
+                BackColor = p.Window,
+            };
+            _caption = new ThemedTextBox(false) { Hint = "Caption (optional)", Dock = DockStyle.Fill, AccessibleName = "Caption" };
+            _captionHost.Controls.Add(_caption);
 
-            var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false, Margin = new Padding(0) };
-            _sendBtn = new MaterialButton { Text = "Send", Type = MaterialButton.MaterialButtonType.Contained, AutoSize = false, Width = 110, Height = 36 };
+            _root.Controls.Add(listHost);       // Fill first: docking takes the last-added (the caption) first
+            _root.Controls.Add(_captionHost);
+            UseOwnBody(_root);
+
+            _sendBtn = AddFooterButton("Send", RoundedButtonKind.Primary, DialogResult.None);   // first added = rightmost
             _sendBtn.Click += OnSend;
-            _cancelBtn = new MaterialButton { Text = "Cancel", Type = MaterialButton.MaterialButtonType.Outlined, AutoSize = false, Width = 110, Height = 36 };
+            _cancelBtn = AddFooterButton("Cancel", RoundedButtonKind.Neutral, DialogResult.None);
             _cancelBtn.Click += OnCancel;
-            buttons.Controls.Add(_sendBtn);
-            buttons.Controls.Add(_cancelBtn);
+            AcceptButton = _sendBtn;   // NOT CancelButton: that would give the button DialogResult.Cancel and close the dialog mid-upload (Esc: ProcessDialogKey)
+            FocusOnShow(_caption.Inner);
 
-            layout.Controls.Add(_list, 0, 0);
-            layout.Controls.Add(_caption, 0, 1);
-            layout.Controls.Add(buttons, 0, 2);
-            Controls.Add(layout);
+            // Height from the number of files (a few files = a small dialog), capped: more rows scroll in the list.
+            int rowsH = _rows.Count * (Px(RowH) + gap) + gap;
+            int bodyH = Math.Min(Px(ListMaxBody), rowsH) + Px(CaptionH);
+            Size = new Size(Width, Bar.Height + bodyH + Px(FooterHeight) + 1);
         }
 
         private Row BuildRow(int token, string path)
@@ -148,25 +150,24 @@ namespace TelegArm.UI
             row.CompressMode = isVideo ? SendMode.Video : SendMode.Photo;
             row.Mode = row.Toggleable ? row.CompressMode : SendMode.Document;
 
-            var panel = new Panel { Width = 472, Height = 60, Margin = new Padding(0, 0, 0, 8), BackColor = RowColor };
+            var panel = new RowPanel { Width = Px(480), Height = Px(RowH), BackColor = ThemeHelper.Palette.Card };
 
             string kind = isImage ? "IMG" : isVideo ? "VID" : "FILE";
-            var kindLabel = new MaterialLabel { Text = kind, Location = new Point(10, 8), AutoSize = false, Size = new Size(44, 22), FontType = MaterialSkinManager.fontType.Caption };
+            row.KindLabel = new ThemedLabel { Text = kind, Role = LabelRole.Accent, Style = FontStyle.Bold, PointSize = TextRoles.Points(TextRole.Field) };
 
             string name = Path.GetFileName(path);
-            var nameLabel = new MaterialLabel { Text = name, Location = new Point(58, 6), AutoSize = false, Size = new Size(240, 24), TextAlign = ContentAlignment.MiddleLeft };
-            row.Info = new MaterialLabel { Text = DrawHelper.FormatSize(SafeSize(path)), Location = new Point(58, 30), AutoSize = false, Size = new Size(240, 20), ForeColor = SubText, FontType = MaterialSkinManager.fontType.Caption };
+            row.NameLabel = new ThemedLabel { Text = name, Ellipsis = true, PointSize = TextRoles.Points(TextRole.Body) };
+            row.Info = new ThemedLabel { Text = DrawHelper.FormatSize(SafeSize(path)), Role = LabelRole.Dim, PointSize = TextRoles.Points(TextRole.Field) };
 
-            row.Bar = new ProgressBar { Location = new Point(310, 34), Size = new Size(150, 12), Minimum = 0, Maximum = 100, Visible = false };
+            row.Bar = new UploadBar { Visible = false };
 
-            row.ModeButton = new MaterialButton
+            row.ModeButton = new RoundedButton
             {
-                Type = MaterialButton.MaterialButtonType.Outlined,
-                AutoSize = false,
-                Location = new Point(304, 12),
-                Size = new Size(156, 32),
+                Kind = RoundedButtonKind.Secondary,
+                Modern = true,
                 Text = ModeText(row.Mode),
-                Visible = row.Toggleable
+                Visible = row.Toggleable,
+                Font = TextRoles.Font(TextRole.Button, WindowDpiValue),
             };
             row.ModeButton.Click += (s, e) =>
             {
@@ -174,13 +175,95 @@ namespace TelegArm.UI
                 row.ModeButton.Text = ModeText(row.Mode);
             };
 
-            panel.Controls.Add(kindLabel);
-            panel.Controls.Add(nameLabel);
+            panel.Controls.Add(row.KindLabel);
+            panel.Controls.Add(row.NameLabel);
             panel.Controls.Add(row.Info);
             panel.Controls.Add(row.Bar);
             panel.Controls.Add(row.ModeButton);
             row.Panel = panel;
+            panel.SizeChanged += (s, e) => LayoutRow(row);
+            LayoutRow(row);
             return row;
+        }
+
+        /// <summary>Places a row's parts from its own width: the kind tag and the name / status text on the left, the mode
+        /// button on the right, the progress bar along the bottom. Own flag (Toggleable), never Control.Visible.</summary>
+        private void LayoutRow(Row r)
+        {
+            int w = r.Panel.Width, h = r.Panel.Height;
+            int pad = Px(RowPad), btnW = Px(ModeButtonW), btnH = Px(32);
+            int right = w - pad;
+            int textLeft = pad + Px(46);
+            int textRight = r.Toggleable ? right - btnW - Px(10) : right;
+            int textW = Math.Max(Px(20), textRight - textLeft);
+            r.KindLabel.SetBounds(pad, Px(10), Px(40), Px(20));
+            r.NameLabel.SetBounds(textLeft, Px(8), textW, Px(22));
+            r.Info.SetBounds(textLeft, Px(30), textW, Px(20));
+            r.ModeButton.SetBounds(right - btnW, Px(10), btnW, btnH);
+            r.Bar.SetBounds(pad, h - Px(10), Math.Max(1, w - 2 * pad), Px(5));
+        }
+
+        /// <summary>Stacks the rows top-down at the list's width (the list is a plain scrolling panel, as DialogForm's body).</summary>
+        private void RestackRows()
+        {
+            if (_list == null || _restacking) return;
+            _restacking = true;
+            try
+            {
+                int gap = Px(RowGap);
+                int w = _list.ClientSize.Width - 2 * gap, y = gap + _list.AutoScrollPosition.Y;
+                foreach (var r in _rows)
+                {
+                    if (w > Px(10) && r.Panel.Width != w) r.Panel.Width = w;
+                    if (r.Panel.Left != gap) r.Panel.Left = gap;
+                    if (r.Panel.Top != y) r.Panel.Top = y;
+                    y += r.Panel.Height + gap;
+                }
+            }
+            finally { _restacking = false; }
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            RestackRows();   // the list had no width when the rows were added
+        }
+
+        protected override void OnDpiChanged(int oldDpi, int newDpi)
+        {
+            base.OnDpiChanged(oldDpi, newDpi);
+            RestackRows();
+        }
+
+        /// <summary>Esc cancels the dialog, but is ignored while an upload runs (the Cancel button stops the upload) — the
+        /// old KeyDown handler's behaviour. Handled here, not through CancelButton: that would stamp DialogResult.Cancel on
+        /// the Cancel button, which would then close the dialog in the middle of an upload.</summary>
+        protected override bool ProcessDialogKey(Keys keyData)
+        {
+            if (keyData == Keys.Escape)
+            {
+                if (!_sending) { DialogResult = DialogResult.Cancel; Close(); }
+                return true;
+            }
+            return base.ProcessDialogKey(keyData);
+        }
+
+        /// <summary>The title bar's ✕ (and Alt+F4) did not exist in the old dialog; during an upload they now do what the Cancel
+        /// button does — stop the upload — instead of closing the dialog under it. The send flow closes the dialog itself when
+        /// it unwinds, always with DialogResult.OK set just before its Close(), which is what lets that close through.
+        /// Before Send, ✕ closes the dialog (Cancel) as usual. Only the FIRST close request during an upload is turned into a
+        /// cancel: once cancellation has been asked for (✕, the Cancel button) a further ✕ / Alt+F4 closes the dialog, as
+        /// Alt+F4 always did — otherwise an upload that never observes its token (a stalled connection, or an event handler
+        /// that threw out of OnSend) would leave a modal dialog nothing can dismiss.</summary>
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            if (_sending && !_cts.IsCancellationRequested && e.CloseReason == CloseReason.UserClosing && DialogResult != DialogResult.OK)
+            {
+                e.Cancel = true;
+                OnCancel(this, EventArgs.Empty);
+                return;
+            }
+            base.OnFormClosing(e);
         }
 
         private static string ModeText(SendMode mode) => mode == SendMode.Document ? "Send as file" : "Compress";
@@ -197,7 +280,7 @@ namespace TelegArm.UI
             if (_sending) return;
             _sending = true;
             _sendBtn.Enabled = false;
-            _caption.Enabled = false;
+            _caption.InputEnabled = false;   // ThemedTextBox: never Enabled = false on it
             foreach (var r in _rows) { r.ModeButton.Enabled = false; r.Bar.Visible = true; }
 
             string caption = _caption.Text?.Trim() ?? "";
@@ -297,6 +380,70 @@ namespace TelegArm.UI
         {
             if (disposing) { try { _cts.Dispose(); } catch { } }
             base.Dispose(disposing);
+        }
+
+        // ── small owner-drawn parts ──────────────────────────────────────────────────────────────────────────
+
+        /// <summary>One file's card: the Card colour with a Divider hairline. Children clear to its BackColor (opaque).</summary>
+        private sealed class RowPanel : Panel
+        {
+            public RowPanel()
+            {
+                ResizeRedraw = true;
+                DoubleBuffered = true;
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                base.OnPaint(e);
+                using (var pen = new Pen(ThemeHelper.Palette.Divider)) e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
+            }
+        }
+
+        /// <summary>The upload progress bar (replaces the native ProgressBar, whose green fill and light track ignore the
+        /// theme): a Divider track with an Accent fill, 0..100, painted from the cached palette. <see cref="Value"/> is
+        /// clamped like the native bar's range, so the send flow's <c>Bar.Value = pct</c> lines are unchanged.</summary>
+        private sealed class UploadBar : Control
+        {
+            private int _value;
+
+            public UploadBar()
+            {
+                SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+                SetStyle(ControlStyles.Selectable, false);
+                TabStop = false;
+            }
+
+            public int Value
+            {
+                get { return _value; }
+                set
+                {
+                    value = Math.Max(0, Math.Min(100, value));
+                    if (value == _value) return;
+                    _value = value;
+                    Invalidate();
+                }
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                var p = ThemeHelper.Palette;
+                var g = e.Graphics;
+                g.Clear(Parent != null ? Parent.BackColor : p.Window);
+                if (Width < 2 || Height < 2) return;
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                var track = ClientRectangle;
+                track.Width -= 1; track.Height -= 1;
+                using (var path = DrawHelper.RoundedRect(track, track.Height / 2))
+                using (var b = new SolidBrush(p.Divider)) g.FillPath(b, path);
+                int fw = (int)((long)track.Width * _value / 100);
+                if (fw < 1) return;
+                var fill = track;
+                fill.Width = fw;
+                using (var path = DrawHelper.RoundedRect(fill, fill.Height / 2))
+                using (var b = new SolidBrush(p.Accent)) g.FillPath(b, path);
+            }
         }
     }
 }

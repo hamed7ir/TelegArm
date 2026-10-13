@@ -2,69 +2,97 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
-using MaterialSkin.Controls;
+using TelegArm.Helpers;
 using TelegArm.UI.Controls;
 
 namespace TelegArm.UI
 {
     /// <summary>
-    /// Minimal full-screen-ish viewer for profile photos: a zoom/pan panel plus ◀ ▶
+    /// Minimal full-screen-ish viewer for profile photos: a zoom/pan panel plus previous / next
     /// navigation when there are older photos. Owns and disposes the images it's given.
+    ///
+    /// Redesign step 2.2: an <see cref="AppForm"/> (was a Material-skinned form) — a resizable window with TelegArm's own title bar.
+    /// The photo fills <c>Content</c>; with more than one photo a bar is DOCKED under it (previous, counter, next) instead
+    /// of floating over the picture. Keys as before: Left / Right step through the photos, Esc closes. It is shown
+    /// modally, so it cannot be minimised (a minimised modal window would leave its owner disabled).
     /// </summary>
-    public class ProfilePhotoViewer : MaterialForm
+    public class ProfilePhotoViewer : AppForm
     {
+        private const int NavBarHeight = 48, NavButton = 36, NavCounterWidth = 72, NavGap = 8;
+
         private readonly List<Image> _images;
         private int _index;
         private ZoomableImagePanel _panel;
+        private Panel _navBar;
         private MediaControlButton _prev, _next;
-        private Label _counter;
+        private ThemedLabel _counter;
 
         public ProfilePhotoViewer(List<Image> images)
         {
             _images = images ?? new List<Image>();
 
-            FormStyle = FormStyles.ActionBar_None;
             Text = "Photo";
-            TelegArm.Helpers.ThemedChrome.SetAppIcon(this);   // app icon in the taskbar / Alt-Tab
             StartPosition = FormStartPosition.CenterParent;
-            ClientSize = new Size(640, 640);
-            MaximizeBox = true;
-            Sizable = true;
-            BackColor = Color.FromArgb(20, 20, 20);
-            KeyPreview = true;
-            KeyDown += (s, e) =>
-            {
-                if (e.KeyCode == Keys.Escape) Close();
-                else if (e.KeyCode == Keys.Left) ShowAt(_index - 1);
-                else if (e.KeyCode == Keys.Right) ShowAt(_index + 1);
-            };
+            Size = new Size(Px(640), Px(680));
+            LogicalMinimumSize = new Size(320, 280);
+            MinimizeBox = false;
+            Bar.CanMinimize = false;
 
-            _panel = new ZoomableImagePanel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(20, 20, 20) };
-            Controls.Add(_panel);
+            _panel = new ZoomableImagePanel { Dock = DockStyle.Fill };
+            Content.Controls.Add(_panel);   // Fill first: docking takes the last-added (the nav bar) first
 
             if (_images.Count > 1)
             {
-                _prev = new MediaControlButton { Icon = MediaButtonIcon.Previous, BackColor = Color.FromArgb(20, 20, 20) };
-                _next = new MediaControlButton { Icon = MediaButtonIcon.Next, BackColor = Color.FromArgb(20, 20, 20) };
-                _counter = new Label { ForeColor = Color.White, BackColor = Color.Transparent, AutoSize = false, TextAlign = ContentAlignment.MiddleCenter };
+                _navBar = new Panel { Dock = DockStyle.Bottom, Height = Px(NavBarHeight) };
+                _prev = new MediaControlButton { Icon = MediaButtonIcon.Previous, Size = new Size(Px(NavButton), Px(NavButton)), AccessibleName = "Previous photo" };
+                _next = new MediaControlButton { Icon = MediaButtonIcon.Next, Size = new Size(Px(NavButton), Px(NavButton)), AccessibleName = "Next photo" };
+                _counter = new ThemedLabel { TextAlign = HorizontalAlignment.Center, Role = LabelRole.Body, PointSize = TextRoles.Points(TextRole.Body) };
                 _prev.Click += (s, e) => ShowAt(_index - 1);
                 _next.Click += (s, e) => ShowAt(_index + 1);
-                Controls.Add(_prev); Controls.Add(_next); Controls.Add(_counter);
-                _prev.BringToFront(); _next.BringToFront(); _counter.BringToFront();
+                _navBar.Controls.Add(_prev); _navBar.Controls.Add(_counter); _navBar.Controls.Add(_next);
+                _navBar.SizeChanged += (s, e) => LayoutNav();
+                Content.Controls.Add(_navBar);
                 LayoutNav();
-                Resize += (s, e) => LayoutNav();
             }
 
+            ApplyTheme();
             ShowAt(0);
         }
 
+        /// <summary>Esc closes; Left / Right step through the photos. Taken here (before dialog-key processing) rather than
+        /// from KeyDown, so they work whichever control has the focus — INFERENCE: after a click on a nav button the framework's
+        /// arrow-key focus movement could otherwise take the arrow before KeyDown sees it. There is no text field here to
+        /// need the arrows.</summary>
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            if (keyData == Keys.Escape) { Close(); return true; }
+            if (keyData == Keys.Left) { ShowAt(_index - 1); return true; }
+            if (keyData == Keys.Right) { ShowAt(_index + 1); return true; }
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        /// <summary>AppForm raises this on every theme change (it subscribes and unsubscribes ThemeHelper itself).</summary>
+        protected override void OnThemeChanged() { ApplyTheme(); }
+
+        private void ApplyTheme()
+        {
+            var p = ThemeHelper.Palette;
+            if (_panel != null) { _panel.BackColor = p.SurfaceAlt; _panel.Invalidate(); }
+            if (_navBar != null) _navBar.BackColor = p.Footer;
+            if (_prev != null) _prev.BackColor = p.Footer;   // the buttons clear to their BackColor
+            if (_next != null) _next.BackColor = p.Footer;
+            if (_counter != null) _counter.Invalidate();
+        }
+
+        /// <summary>Centres previous / counter / next in the bar.</summary>
         private void LayoutNav()
         {
-            if (_prev == null) return;
-            int y = ClientSize.Height - 48;
-            _prev.Location = new Point(ClientSize.Width / 2 - 80, y);
-            _next.Location = new Point(ClientSize.Width / 2 + 44, y);
-            _counter.SetBounds(ClientSize.Width / 2 - 36, y, 72, 36);
+            if (_navBar == null) return;
+            int b = Px(NavButton), cw = Px(NavCounterWidth), gap = Px(NavGap);
+            int x = (_navBar.Width - (b + gap + cw + gap + b)) / 2, y = (_navBar.Height - b) / 2;
+            _prev.SetBounds(x, y, b, b);
+            _counter.SetBounds(x + b + gap, y, cw, b);
+            _next.SetBounds(x + b + gap + cw + gap, y, b, b);
         }
 
         private void ShowAt(int i)

@@ -16,50 +16,59 @@ namespace TelegArm.UI.Admin
     /// participants. Three modes — Members (promote / ban / remove), Administrators (edit rights / dismiss),
     /// Banned (unban). Paged via Channels_GetParticipants (loads more on scroll). RTL names + initials-circle
     /// avatars (no per-row download). Destructive ops confirm via ThemedDialog; every RPC is bounded.
+    ///
+    /// Redesign step 2.6b: a <see cref="DialogForm"/> (was a plain Form + ThemedChrome.Apply). The list is the dialog's own
+    /// body (<c>UseOwnBody</c>: it scrolls by itself, themed bar and touch pan included, and pages in more rows when it
+    /// reaches its end); the loading / failed / empty messages are an <see cref="EmptyState"/>; "Close" is the footer.
+    /// What did not change: the Mode enum, the paging, the live presence and avatar repaints, the row actions and every
+    /// service call and message. <paramref name="dark"/> and <paramref name="accent"/> are kept for the callers; this form
+    /// itself follows the palette live and only hands them on to <see cref="RightsChecklistForm"/> (still a 1.x form).
     /// </summary>
-    public sealed class ChatMembersForm : Form
+    public sealed class ChatMembersForm : DialogForm
     {
         public enum Mode { Members, Admins, Banned }
 
         private const int PageSize = 100;
+        private const int RowLogical = 56;   // one row, logical px — the list takes it at the window's DPI
 
         private readonly TelegramService _service;
         private readonly Channel _channel;
         private readonly bool _dark, _isMega;
-        private readonly Color _accent, _bg, _fg, _sub;
+        private readonly Color _accent;   // _dark / _accent: only for RightsChecklistForm
         private readonly Mode _mode;
 
+        private readonly Panel _host;
         private readonly ThemedListBox _list;
-        private readonly Label _status;
+        private readonly EmptyState _status;
         private readonly AvatarStore _avatars;   // shared store (ambient); null-safe throughout
         private readonly List<User> _users = new List<User>();
         private readonly Dictionary<long, ChatAdminRights> _adminRights = new Dictionary<long, ChatAdminRights>();
         private readonly Dictionary<long, string> _ranks = new Dictionary<long, string>();
         private bool _loading, _exhausted;
+        private readonly bool _built;   // ApplyDialogTheme is first called from the base constructor, before the controls exist
 
         public ChatMembersForm(TelegramService service, Channel channel, Mode mode, bool dark, Color accent)
+            : base(TitleFor(mode), 390, 580)
         {
             _service = service; _channel = channel; _mode = mode; _dark = dark; _accent = accent;
             _isMega = (channel.flags & Channel.Flags.megagroup) != 0;
-            _bg = dark ? Color.FromArgb(40, 40, 44) : Color.FromArgb(248, 248, 250);
-            _fg = dark ? Color.FromArgb(235, 235, 235) : Color.FromArgb(20, 20, 20);
-            _sub = dark ? Color.FromArgb(155, 155, 155) : Color.FromArgb(120, 120, 120);
+            var p = ThemeHelper.Palette;
 
-            string title = mode == Mode.Admins ? "Administrators" : mode == Mode.Banned ? "Banned users" : "Members";
-            Text = title;
-            StartPosition = FormStartPosition.CenterParent;
-            MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
-            ClientSize = new Size(390, 520 + ThemedChrome.BarH);
-            var content = ThemedChrome.Apply(this, title, accent, dark);
-
-            _list = new ThemedListBox(dark, accent) { Left = 8, Top = 8, Width = 374, Height = 504, RowHeight = 56, CanvasBackColor = _bg };
+            // Owner-drawn list with a themed scrollbar that's dark on RT 8.1 too. Hidden while the status shows (as in 1.x).
+            _list = new ThemedListBox(p.Dark, p.Accent) { Dock = DockStyle.Fill, RowHeight = Px(RowLogical), CanvasBackColor = p.Window, Visible = false };
+            _list.AccessibleName = Text;
             _list.DrawRow += DrawRow;
             _list.ItemClicked += OnRowClicked;
             _list.ReachedEnd += async () => await LoadMore();
-            content.Controls.Add(_list);
 
-            _status = new Label { Left = 8, Top = 240, Width = 374, Height = 28, ForeColor = _sub, TextAlign = ContentAlignment.MiddleCenter, Text = "Loading…", Font = FontHelper.Ui(10f) };
-            content.Controls.Add(_status); _status.BringToFront();
+            _status = new EmptyState { Dock = DockStyle.Fill, Hint = "Loading…" };
+
+            _host = new Panel { BackColor = p.Window };
+            _host.Controls.Add(_list);      // the two Fill children share the space (one is visible at a time)
+            _host.Controls.Add(_status);
+            UseOwnBody(_host);
+
+            CancelButton = AddFooterButton("Close", RoundedButtonKind.Neutral, DialogResult.Cancel);
 
             // Member avatars from the shared AvatarStore (cached + demand) — arrivals repaint their row.
             _avatars = AvatarStore.Current;
@@ -69,12 +78,37 @@ namespace TelegArm.UI.Admin
                 Disposed += (s, e) => _avatars.AvatarLoaded -= OnAvatarLoaded;
             }
 
+            _built = true;
             Shown += async (s, e) => await LoadMore();
 
             // PRESENCE 4.2: a listed user's status change repaints that row live while the form is open.
             // Subscribe on open, unsubscribe on dispose (E-3) — the event is raised on the UI thread.
             MainForm.UserStatusChanged += OnUserStatusChanged;
             Disposed += (s, e) => MainForm.UserStatusChanged -= OnUserStatusChanged;
+        }
+
+        private static string TitleFor(Mode mode)
+        {
+            return mode == Mode.Admins ? "Administrators" : mode == Mode.Banned ? "Banned users" : "Members";
+        }
+
+        protected override void OnDpiChanged(int oldDpi, int newDpi)
+        {
+            base.OnDpiChanged(oldDpi, newDpi);
+            if (!_built) return;
+            _list.RowHeight = Px(RowLogical);
+            _list.SetItems(_users.Count);   // the canvas height follows the row height
+        }
+
+        protected override void ApplyDialogTheme()
+        {
+            base.ApplyDialogTheme();
+            if (!_built) return;
+            var p = ThemeHelper.Palette;
+            _host.BackColor = p.Window;
+            _list.CanvasBackColor = p.Window;
+            _list.Invalidate(true);   // the rows read the palette when they paint
+            _status.Invalidate();
         }
 
         private void OnUserStatusChanged(long userId, UserStatus status)
@@ -102,6 +136,7 @@ namespace TelegArm.UI.Admin
                 Channels_ChannelParticipants res;
                 try { res = await _service.GetParticipantsAsync(_channel, Filter(), _users.Count, PageSize); }
                 catch (Exception ex) { ShowError(ex); return; }
+                if (IsDisposed) return;   // the dialog was closed while the page was on its way
                 if (res == null) { ShowMessage("Couldn't load — make sure your VPN is on."); return; }
 
                 int added = 0;
@@ -133,7 +168,15 @@ namespace TelegArm.UI.Admin
             return _mode == Mode.Admins ? "No administrators." : _mode == Mode.Banned ? "No banned users." : "No members.";
         }
 
-        private void ShowMessage(string text) { _status.Visible = true; _status.Text = text; _list.Visible = false; }
+        /// <summary>The loading / failed / empty message, in place of the list.</summary>
+        private void ShowMessage(string text)
+        {
+            if (IsDisposed) return;
+            _status.Hint = text;
+            _status.Visible = true;
+            _list.Visible = false;
+        }
+
         private void ShowError(Exception ex) { ShowMessage("Couldn't load: " + ex.Message); }
 
         /// <summary>A demanded avatar landed (WORKER thread — marshal) → repaint just that row.</summary>
@@ -150,42 +193,37 @@ namespace TelegArm.UI.Admin
         {
             if (index < 0 || index >= _users.Count) return;
             var u = _users[index];
+            var p = ThemeHelper.Palette;
+            int dpi = WindowDpiValue;
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            using (var bb = new SolidBrush(_bg)) g.FillRectangle(bb, r);
+            using (var bb = new SolidBrush(p.Window)) g.FillRectangle(bb, r);
 
-            int d = 40, ax = r.Left + 10, ay = r.Top + (r.Height - d) / 2;
+            int d = Px(40), ax = r.Left + Px(10), ay = r.Top + (r.Height - d) / 2;
+            var avatarRect = new Rectangle(ax, ay, d, d);
             string name = DisplayName(u);
             var av = _avatars?.GetCached(u.id);   // memory-only lookup — render-hot safe
-            if (av != null)
-            {
-                using (var clip = new GraphicsPath())
-                {
-                    clip.AddEllipse(ax, ay, d, d);
-                    var oldClip = g.Clip;
-                    g.SetClip(clip);
-                    g.DrawImage(av, ax, ay, d, d);
-                    g.Clip = oldClip;
-                }
-            }
+            if (av != null) DrawHelper.DrawCircularImage(g, avatarRect, av);
             else
             {
-                using (var ab = new SolidBrush(DrawHelper.AvatarColor(u.id))) g.FillEllipse(ab, ax, ay, d, d);
+                using (var ab = new SolidBrush(DrawHelper.AvatarColor(u.id))) g.FillEllipse(ab, avatarRect);
                 string initial = name.Length > 0 ? name.Substring(0, 1).ToUpperInvariant() : "?";
-                TextRenderer.DrawText(g, initial, FontHelper.Ui(14f, FontStyle.Bold), new Rectangle(ax, ay, d, d), Color.White,
+                TextRenderer.DrawText(g, initial, FontHelper.UiAt(14f, dpi, FontStyle.Bold), avatarRect, Color.White,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
             }
 
-            int tx = ax + d + 12, tw = r.Right - tx - 12;
-            TextRenderer.DrawText(g, name, FontHelper.Ui(11f, FontStyle.Bold), new Rectangle(tx, r.Top + 9, tw, 20), _fg,
+            // Fonts without the text argument = the Roboto face, as in 1.x: GDI substitutes Persian glyphs, and the taller
+            // Vazirmatn line would not fit these fixed name / status bands.
+            int tx = ax + d + Px(12), tw = r.Right - tx - Px(12);
+            TextRenderer.DrawText(g, name, TextRoles.Font(TextRole.Section, dpi), new Rectangle(tx, r.Top + Px(9), tw, Px(20)), p.Text,
                 TextFormatFlags.Left | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
             string sub = SubText(u);
             if (sub.Length > 0)
-                TextRenderer.DrawText(g, sub, FontHelper.Ui(8.5f), new Rectangle(tx, r.Top + 30, tw, 18),
-                    sub == "online" ? _accent : _sub,   // PRESENCE 4.1: "online" in accent, like the header
+                TextRenderer.DrawText(g, sub, TextRoles.Font(TextRole.Field, dpi), new Rectangle(tx, r.Top + Px(30), tw, Px(18)),
+                    sub == "online" ? p.AccentFg : p.TextDim,   // PRESENCE 4.1: "online" in accent, like the header
                     TextFormatFlags.Left | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
 
-            using (var sep = new Pen(_dark ? Color.FromArgb(54, 54, 58) : Color.FromArgb(230, 230, 232)))
-                g.DrawLine(sep, r.Left + 10, r.Bottom - 1, r.Right - 10, r.Bottom - 1);
+            using (var sep = new Pen(p.Divider))
+                g.DrawLine(sep, r.Left + Px(10), r.Bottom - 1, r.Right - Px(10), r.Bottom - 1);
         }
 
         private string SubText(User u)
@@ -206,6 +244,7 @@ namespace TelegArm.UI.Admin
             if (i < 0 || i >= _users.Count) return;
             var u = _users[i];
             var menu = new ThemedContextMenuStrip();
+            menu.Font = FontHelper.UiAt(10.5f, WindowDpiValue);   // shared: Control never disposes its Font. The row padding is the menu's own.
             if (_mode == Mode.Members)
             {
                 AddItem(menu, "Promote to admin", () => PromoteFlow(u, null));
@@ -223,12 +262,12 @@ namespace TelegArm.UI.Admin
                 AddItem(menu, "Unban", () => UnbanFlow(u));
             }
             menu.Closed += (s, e) => BeginInvoke((Action)menu.Dispose);
-            menu.Show(Cursor.Position);
+            menu.Show(_list, _list.PointToClient(Cursor.Position));   // over the list: the menu sizes itself at this window's DPI
         }
 
         private void AddItem(ContextMenuStrip menu, string text, Action act)
         {
-            var it = new ToolStripMenuItem(text) { Font = FontHelper.Ui(10.5f), Padding = new Padding(2, 6, 2, 6) };
+            var it = new ToolStripMenuItem(text);
             it.Click += (s, e) => act();
             menu.Items.Add(it);
         }
@@ -257,7 +296,7 @@ namespace TelegArm.UI.Admin
                 if (!await _service.SetAdminAsync(_channel, u, new ChatAdminRights { flags = flags }, "")) { Vpn(); return; }
             }
             catch (Exception ex) { Err(ex); return; }
-            System.Diagnostics.Debug.WriteLine("[ADMIN] set admin " + u.id + " flags=" + flags);
+            Logger.Diag("[ADMIN] set admin " + u.id + " flags=" + flags);
             ThemedDialog.Show(this, "Admin", DisplayName(u) + (existing == null ? " is now an admin." : " rights updated."), "OK");
         }
 

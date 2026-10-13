@@ -130,6 +130,13 @@ namespace TelegArm.Helpers
         public static Color GetWindowsAccentColor()
         {
             if (_accentOverride.HasValue) return _accentOverride.Value;   // step 1.2: the user's accent wins
+            return ReadWindowsAccent();
+        }
+
+        /// <summary>Step 2.6: the accent WINDOWS has, ignoring the user's override — Settings → Appearance draws it as the
+        /// "Follow Windows" swatch. A registry read: never call it from a paint method.</summary>
+        public static Color ReadWindowsAccent()
+        {
             if (!IsWindows10OrGreater())
             {
                 LogAccentDiagOnce();   // one-shot [ACCENT] truth line so the 8.1 read + decode is verifiable by log

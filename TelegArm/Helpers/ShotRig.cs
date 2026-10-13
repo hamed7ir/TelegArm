@@ -67,6 +67,13 @@ namespace TelegArm.Helpers
             foreach (var mode in new[] { ThemeMode.Light, ThemeMode.Dark })
             {
                 ThemeHelper.InitMode(mode);   // InitMode raises no ThemeChanged, so no live form re-themes mid-run
+                // ⚠ Until step 2.8 removes MaterialSkin: create its manager first, as the live app's MainForm (a MaterialForm)
+                // always has by the time any other window opens. Its creation changes how later text lays out (measured in
+                // step 2.6: without it the 1.x dialogs, the gallery and MainForm shifted by a few px — INFERENCE: its own
+                // Roboto registered with GDI). 1.x's LoginForm and SettingsForm created it as a side effect, early in each
+                // pass; Phase 2 converted both, so the rig now does it on purpose. Delete with the package (2.8) and
+                // refresh B1 then — text everywhere will move.
+                { var skin = MaterialSkin.MaterialSkinManager.Instance; skin.Theme = mode == ThemeMode.Dark ? MaterialSkin.MaterialSkinManager.Themes.DARK : MaterialSkin.MaterialSkinManager.Themes.LIGHT; }
                 string t = mode == ThemeMode.Light ? "light" : "dark";
 
                 // The real first view is QR, but ShowView(Qr) starts a QR login (network). Phone is UI-only.
@@ -89,7 +96,10 @@ namespace TelegArm.Helpers
 
                 WithForm("settings-" + t, () => new SettingsForm(), f =>
                 {
-                    string[] names = { "general", "data", "advanced" };   // the three pages that need no account
+                    // Step 2.6: the rail's eleven pages. Offline (no service), Privacy / Security / Devices show their
+                    // not-signed-in state — still worth a shot for the layout.
+                    string[] names = { "general", "appearance", "notifications", "chats", "data", "connection",
+                                       "privacy", "security", "devices", "advanced", "about" };
                     for (int i = 0; i < names.Length; i++)
                     {
                         Invoke(f, "ShowPage", i);
@@ -120,6 +130,47 @@ namespace TelegArm.Helpers
                          f => Capture(f, "confirm-" + t));   // step 1.4+
                 WithForm("input-" + t, () => InputDialog.Create("Rename", "New name", "Family group"), f => Capture(f, "input-" + t));
                 WithForm("closechoice-" + t, () => new CloseChoiceDialog(), f => Capture(f, "closechoice-" + t));
+                // ── Phase 2: the converted forms (one line each; constructible offline — no service call in the ctor) ──
+                WithForm("p2-editcontact-" + t, () => new EditContactForm("Ada", "Lovelace", ThemeHelper.IsDark, ThemeHelper.Palette.Accent), f => Capture(f, "p2-editcontact-" + t));
+                // Steps 2.2 / 2.6b (the parity reviewers named these constructors as offline-safe: nothing in a constructor
+                // reaches the network or the camera — loads and the camera start on Shown, which the rig never raises).
+                Shot("p2-createchat-" + t, () => new CreateChatForm(CreateChatForm.Kind.Channel, () => System.Threading.Tasks.Task.FromResult(new List<User>()), ThemeHelper.IsDark, ThemeHelper.Palette.Accent));
+                Shot("p2-country-" + t, () => new CountryPickerForm(ThemeHelper.IsDark, ThemeHelper.Palette.Accent));
+                Shot("p2-stories-" + t, () => new StoriesGridForm(null, null, Enumerable.Range(1, 9).Select(i => new StoryItem { id = i }).ToList(), ThemeHelper.IsDark, ThemeHelper.Palette.Accent, null));
+                Shot("p2-forward-" + t, () => new ForwardPickerDialog(new List<ChatEntry> { new ChatEntry { PeerId = 1, Title = "Ada Lovelace" }, new ChatEntry { PeerId = 2, Title = "Family group" }, new ChatEntry { PeerId = 3, Title = "Charles Babbage" } }, ThemeHelper.IsDark, ThemeHelper.Palette.Accent));
+                Shot("p2-people-" + t, () => new PeoplePickerForm(() => System.Threading.Tasks.Task.FromResult(new List<User>()), true, ThemeHelper.IsDark, ThemeHelper.Palette.Accent, "Add members"));
+                Shot("p2-sendmedia-" + t, () => new SendMediaDialog(null, null, new List<string> { "holiday.jpg", "clip.mp4", "notes.pdf" }));
+                Shot("p2-photoviewer-" + t, () => new ProfilePhotoViewer(new List<Image> { DemoImage(Color.SteelBlue), DemoImage(Color.SeaGreen), DemoImage(Color.Goldenrod) }));
+                Shot("p2-proxylink-" + t, () => new ProxyLinkForm(DemoProxyUrl, false));
+                Shot("p2-proxyqr-" + t, () => (Form)Activator.CreateInstance(typeof(ProxyShare).GetNestedType("QrDialog", BindingFlags.NonPublic), DemoProxyUrl));
+                Shot("p2-rights-" + t, () => new TelegArm.UI.Admin.RightsChecklistForm("Admin rights", "Ada Lovelace", new List<TelegArm.UI.Admin.RightsChecklistForm.Item>
+                    { new TelegArm.UI.Admin.RightsChecklistForm.Item("Change group info", true), new TelegArm.UI.Admin.RightsChecklistForm.Item("Delete messages", true),
+                      new TelegArm.UI.Admin.RightsChecklistForm.Item("Ban users", false), new TelegArm.UI.Admin.RightsChecklistForm.Item("Invite users", true) }, ThemeHelper.IsDark, ThemeHelper.Palette.Accent));
+                Shot("p2-managechat-" + t, () => new TelegArm.UI.Admin.ManageChatForm(null, new Channel { flags = Channel.Flags.megagroup }, null, "Sample group", "", ThemeHelper.IsDark, ThemeHelper.Palette.Accent));
+                Shot("p2-editchatinfo-" + t, () => new TelegArm.UI.Admin.EditChatInfoForm(null, new Channel { title = "Sample group" }, null, "Sample group", "A sample description.", ThemeHelper.IsDark, ThemeHelper.Palette.Accent));
+                Shot("p2-members-" + t, () => new TelegArm.UI.Admin.ChatMembersForm(null, new Channel { id = 1, flags = Channel.Flags.megagroup }, TelegArm.UI.Admin.ChatMembersForm.Mode.Members, ThemeHelper.IsDark, ThemeHelper.Palette.Accent));
+                Shot("p2-invitelinks-" + t, () => new TelegArm.UI.Admin.InviteLinksForm(null, new InputPeerChannel(1, 0), ThemeHelper.IsDark, ThemeHelper.Palette.Accent));
+                Shot("p2-channelextras-" + t, () => new TelegArm.UI.Admin.ChannelExtrasForm(null, new Channel { id = 1, username = "demo", flags = Channel.Flags.broadcast | Channel.Flags.signatures | Channel.Flags.creator }, ThemeHelper.IsDark, ThemeHelper.Palette.Accent));
+                Shot("p2-roundrecorder-" + t, () => new RoundRecorderForm(null, null));
+                // Step 2.5: the profile, modal (view of a user, filled from PeerInfo — LoadDetails runs on Load, which the rig
+                // never raises) and the own-profile editor (Me is null offline, so its fields are empty).
+                Shot("p2-profile-" + t, () => new ProfileForm(new TelegramService(), new ChatEntry
+                {
+                    Peer = new InputPeerUser(1001, 0), PeerId = 1001, Title = "Ada Lovelace",
+                    PeerInfo = new User { id = 1001, first_name = "Ada", last_name = "Lovelace", username = "ada", phone = "15550100" },
+                }, null));
+                Shot("p2-profile-edit-" + t, () => new ProfileForm(new TelegramService()));
+                // Step 2.3: a photo (bytes in memory, so no download) and a document — never a video (that would start VLC).
+                WithForm("p2-viewer-" + t, () => new MediaViewerForm(new List<MediaItem>
+                    {
+                        new MediaItem { Type = "photo", FileName = "holiday.png", Bytes = DemoPng(Color.SteelBlue), Width = 640, Height = 400 },
+                        new MediaItem { Type = "document", FileName = "notes.pdf", FileSize = 2516582 },
+                    }, 0, null), f =>
+                {
+                    Capture(f, "p2-viewer-photo-" + t);
+                    Invoke(f, "Navigate", 1);
+                    Capture(f, "p2-viewer-doc-" + t);
+                });
                 ShootMenu("menu-" + t);
             }
 
@@ -165,6 +216,29 @@ namespace TelegArm.Helpers
                     try { f.Dispose(); } catch { }
                 }
                 Settle(null);
+            }
+        }
+
+        private const string DemoProxyUrl = "tg://proxy?server=proxy.example.com&port=443&secret=ee0123456789abcdef0123456789abcdef7777772e6578616d706c652e636f6d";
+
+        /// <summary>A form shot in one line: build it, capture it under <paramref name="name"/>.</summary>
+        private static void Shot(string name, Func<Form> make) { WithForm(name, make, f => Capture(f, name)); }
+
+        /// <summary>A flat 400×400 picture (no file, no network) for the photo viewers.</summary>
+        private static Image DemoImage(Color c)
+        {
+            var b = new Bitmap(400, 400);
+            using (var g = Graphics.FromImage(b)) g.Clear(c);
+            return b;
+        }
+
+        private static byte[] DemoPng(Color c)
+        {
+            using (var img = DemoImage(c))
+            using (var ms = new MemoryStream())
+            {
+                img.Save(ms, ImageFormat.Png);
+                return ms.ToArray();
             }
         }
 

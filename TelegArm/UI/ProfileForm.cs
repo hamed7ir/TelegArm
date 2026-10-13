@@ -4,10 +4,9 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Linq;
 using System.Windows.Forms;
-using MaterialSkin;
-using MaterialSkin.Controls;
 using TelegArm.Core;
 using TelegArm.Helpers;
+using TelegArm.UI.Controls;
 using TL;
 
 namespace TelegArm.UI
@@ -17,35 +16,52 @@ namespace TelegArm.UI
     /// an action-tile row (Message / Mute / Call / More), contact info, a counted media row-list
     /// (Photos / Videos / Files / Audio / Links / Voice / GIFs) that opens a category gallery, and a
     /// bottom action list (Share / Edit / Delete / Block). Edit mode (self) lets you change name + bio.
+    ///
+    /// Redesign step 2.5: an <see cref="AppForm"/> (fixed size when modal; <see cref="AppForm.UseAsPane"/> when it is
+    /// the Info dock's embedded pane) instead of the 1.x skinned form. The lists are <see cref="SettingGroup"/> cards, the
+    /// edit fields <see cref="TextRow"/>s, every colour comes from <see cref="ThemeHelper.Palette"/> and every icon is
+    /// DRAWN with GDI+ (a font symbol is a tofu box on RT 8.1). Public surface and behaviour are the 1.x ones.
     /// </summary>
-    public class ProfileForm : MaterialForm
+    public class ProfileForm : AppForm
     {
         private readonly TelegramService _service;
         private readonly bool _editable;
         private readonly ChatEntry _entry;
         private Image _avatar;
         private readonly bool _ownsAvatar;
-        // Not readonly: re-derived by OnThemeChanged if the theme flips while the profile is open (UI-FIX-T1).
-        private bool _dark = ThemeHelper.IsDark;
-        private Color _accentColor = ThemeHelper.GetWindowsAccentColor();
+
+        // Logical (96-DPI) metrics; everything below goes through Px() at the window's DPI.
+        // ViewW/H and EditW/H are the 1.x CLIENT area; AppForm adds its title bar and 1 px frame around it.
+        private const int ViewW = 440, ViewH = 620, EditW = 420, EditH = 588;
+        private const int OuterPad = 16;                                  // side margin of every flow item
+        private const int FooterH = 60, FooterButtonW = 116, FooterButtonH = 38;
+        private const int TileW = 92, TileH = 64, TileGap = 100;
+
+        private static Palette Pal { get { return ThemeHelper.Palette; } }
 
         // Edit-mode controls.
-        private Panel _pic;
-        private MaterialLabel _titleLbl;
-        private MaterialTextBox2 _first, _last, _aboutBox;
+        private AvatarCanvas _pic;
+        private ThemedLabel _titleLbl;
+        private TextRow _first, _last, _about;
         private TextBox _contactBox;
         // PROFILE-EDIT-SELF: username editor + availability gate.
-        private MaterialTextBox2 _username;
-        private Label _usernameStatus;
+        private TextRow _username;
+        private StatusLine _usernameStatus;
+        private FlowLayoutPanel _footer;
         private System.Windows.Forms.Timer _usernameCheckTimer;
         private bool _usernameOk = true;   // empty/current username = ok; a CHANGED one must pass the availability check
 
         // View-mode controls.
         private FlowLayoutPanel _flow;
-        private Panel _viewAvatarPanel;   // CHANNEL-PHOTO-REFRESH: the big avatar panel (repaint after a photo change)
-        private MaterialLabel _nameLbl, _statusLbl;
+        private AvatarCanvas _viewAvatarPanel;   // CHANNEL-PHOTO-REFRESH: the big avatar panel (repaint after a photo change)
+        private ThemedLabel _nameLbl, _statusLbl;
         private TextBox _idBox;
-        private Controls.RichInfoLabel _details;
+        private RichInfoLabel _details;
+        // The description's base font is POINT-unit on purpose: InlineText derives its run fonts from Font.Size read as
+        // points, so a shared pixel-unit font would draw 33% too big. Owned here, disposed with the form.
+        private Font _detailsFont;
+        private string _detailsText = "";
+        private bool _detailsShown;
         private ActionTile _muteTile;
         private Panel _actionsPanel;   // PROFILE-CHANNEL: the personal-channel card slots right after this in the flow
         private bool _muted;
@@ -109,9 +125,9 @@ namespace TelegArm.UI
         ///  1. WIDTH. Every row was built at a hardcoded ContentW = 392 with a hardcoded _flow.Width = 424.
         ///     Those are now DERIVED from <paramref name="contentWidth"/>, so the identical layout code
         ///     serves a 440-wide dialog and a ~300-wide dock.
-        ///  2. CHROME. MaterialForm reserves a caption strip — measured: STATUS_BAR_HEIGHT_DEFAULT = 24,
-        ///     and the form's Dock=Fill child sits at Top = 24 because Padding.Top holds that band. Clearing
-        ///     Padding when embedded lets the opaque content cover it.
+        ///  2. CHROME. 1.x reserved a caption strip inside the form (a 24 px Padding band) that had to be cleared by
+        ///     hand when embedded. Redesign 2.5: the embedded profile calls <see cref="AppForm.UseAsPane"/> — no title
+        ///     bar, no custom chrome, no resize gutter, no hit-testing of its own — so there is nothing to clear.
         /// The caller does: `new ProfileForm(svc, entry, avatar, width) { TopLevel = false, Dock = Fill }`,
         /// adds it, calls Show(), and handles <see cref="EmbeddedRoute"/> instead of a DialogResult.</summary>
         public ProfileForm(TelegramService service, ChatEntry entry, Image avatar, int contentWidth)
@@ -119,6 +135,7 @@ namespace TelegArm.UI
 
         private ProfileForm(TelegramService service, ChatEntry entry, Image avatar, bool editable,
                             int contentWidth = 0)
+            : base(false)
         {
             _service = service;
             _entry = entry;
@@ -127,70 +144,78 @@ namespace TelegArm.UI
             _ownsAvatar = editable;
             _muted = entry?.Muted ?? false;
             _embedded = contentWidth > 0;
-            if (_embedded) ContentW = Math.Max(180, contentWidth - 32);   // 16px margin each side, as before
+            if (_embedded) UseAsPane();   // before any handle: replaces the 1.x "embed hack" (Padding = 0 / Sizable = false)
 
-            var skin = MaterialSkinManager.Instance;
-            skin.AddFormToManage(this);
-            skin.Theme = _dark ? MaterialSkinManager.Themes.DARK : MaterialSkinManager.Themes.LIGHT;
-            var accent = (Primary)(uint)_accentColor.ToArgb();
-            // Same singleton as MainForm — keep the MaterialSkin accent on the Windows accent (not the default
-            // light blue) so opening a profile doesn't flip the whole app's text-box accent back to blue.
-            var msAccent = (Accent)(uint)_accentColor.ToArgb();
-            skin.ColorScheme = new ColorScheme(accent, accent, accent, msAccent, TextShade.WHITE);
-
-            FormStyle = FormStyles.ActionBar_None;
             Text = editable ? "My Profile" : "Profile";
-            AutoScaleMode = AutoScaleMode.Font;
-            StartPosition = FormStartPosition.CenterParent;
-            MaximizeBox = false; MinimizeBox = false; Sizable = false;
-            TelegArm.Helpers.ThemedChrome.SetAppIcon(this);   // app icon in the taskbar / Alt-Tab
-            KeyPreview = true;
-            KeyDown += (s, e) => { if (e.KeyCode == Keys.Escape) { DialogResult = DialogResult.Cancel; Close(); } };
+            if (!_embedded)
+            {
+                StartPosition = FormStartPosition.CenterParent;
+                ShowInTaskbar = false;
+                MinimizeBox = false; MaximizeBox = false;
+                Bar.CanMinimize = false;
+                // Set Size, never ClientSize (AppForm). The 1.x client area was ViewW x ViewH (EditW x EditH when editing);
+                // the title bar and the 1 px frame come on top of it.
+                int w = editable ? EditW : ViewW, h = editable ? EditH : ViewH;
+                Size = new Size(Px(w) + Padding.Horizontal, Bar.Height + Px(h) + Padding.Bottom);
+            }
+
+            // Inner content width (within the side margins). Embedded: the host hands in the dock width MINUS its own
+            // scrollbar strip. Modal: the client width minus the scrollbar lane.
+            int avail = _embedded ? contentWidth : Px(editable ? EditW : ViewW) - ThemedScrollBar.LaneWidth(WindowDpiValue);
+            ContentW = Math.Max(Px(180), avail - 2 * Px(OuterPad));
 
             if (_editable) BuildEditMode();
             else BuildViewMode();
 
-            // UI-FIX-T1: retheme live if the theme flips while the profile is open. The in-app switchers
-            // (Settings / drawer) are unreachable behind this modal, so the only live path is a System-mode OS
-            // switch — MainForm's handler re-sets the global MaterialSkin theme first (subscribed earlier), so
-            // by the time our BeginInvoke runs the skin (and this form's BackColor) are already current.
-            ThemeHelper.ThemeChanged += OnThemeChanged;
-            Disposed += (s, e) => ThemeHelper.ThemeChanged -= OnThemeChanged;   // event-leak discipline (E-3)
-
+            // UI-FIX-T1: AppForm subscribes ThemeHelper itself and calls OnThemeChanged() below on a live change.
             Load += (s, e) => LoadDetails();
         }
 
-        private void OnThemeChanged()
+        /// <summary>Redesign 2.5 — recolour what the palette cannot reach by itself. The cards, rows, tiles and labels read
+        /// the palette when they paint (a repaint is enough); the native read-only boxes carry their own colours; the
+        /// description label bakes its colours at construction, so it is rebuilt.</summary>
+        protected override void OnThemeChanged()
         {
-            if (IsDisposed || !IsHandleCreated) return;
-            try
-            {
-                BeginInvoke((Action)(() =>
-                {
-                    _dark = ThemeHelper.IsDark;
-                    _accentColor = ThemeHelper.GetWindowsAccentColor();
-                    RepushThemed(this);
-                    Invalidate(true);   // paint-time readers (PaintAvatar etc.) pick up the re-derived fields
-                }));
-            }
-            catch { /* form tearing down mid-switch — reopen is fresh anyway */ }
+            base.OnThemeChanged();
+            if (IsDisposed) return;
+            var pal = Pal;
+            if (_footer != null) _footer.BackColor = pal.Footer;
+            RecolorReadOnly(_contactBox, pal.Text);
+            RecolorReadOnly(_idBox, pal.TextDim);
+            RebuildDetails();
+            Invalidate(true);
         }
 
-        /// <summary>Re-pushes construction-time theme state into the owner-drawn children (tiles, list rows)
-        /// and the read-only text boxes; MaterialSkin controls follow the global skin on their own.</summary>
-        private void RepushThemed(Control root)
+        private static void RecolorReadOnly(TextBox tb, Color ink)
         {
-            foreach (Control c in root.Controls)
+            if (tb == null || tb.IsDisposed) return;
+            tb.BackColor = Pal.Window;
+            tb.ForeColor = ink;
+        }
+
+        /// <summary>DpiScaler's generic pass rescales an explicit Font into a shared PIXEL-unit one; the description's
+        /// InlineText needs a point-unit base font (see <c>_detailsFont</c>), so put one back.</summary>
+        protected override void OnDpiChanged(int oldDpi, int newDpi)
+        {
+            base.OnDpiChanged(oldDpi, newDpi);
+            if (_details == null || _details.IsDisposed) return;
+            var fresh = FontHelper.Ui(9.75f);
+            var prev = _detailsFont;
+            _details.Font = fresh;
+            _detailsFont = fresh;
+            if (prev != null) prev.Dispose();
+        }
+
+        /// <summary>Esc closes a modal profile (1.x: KeyPreview + KeyDown). An EMBEDDED pane ignores it: closing a
+        /// TopLevel = false form would dispose the pane and leave the dock blank. Edit mode has a CancelButton.</summary>
+        protected override bool ProcessDialogKey(Keys keyData)
+        {
+            if (keyData == Keys.Escape && CancelButton == null && !_embedded)
             {
-                if (c is ActionTile tile) tile.SetTheme(_dark, _accentColor);
-                else if (c is ProfileRow row) row.SetTheme(_dark, _accentColor);
-                else if (c is TextBox tb && tb.ReadOnly)
-                {
-                    tb.BackColor = BackColor;   // ReadOnlyBox pairs — same derivation as the builder
-                    tb.ForeColor = _dark ? Color.FromArgb(225, 225, 225) : Color.FromArgb(35, 35, 35);
-                }
-                if (c.Controls.Count > 0) RepushThemed(c);
+                DialogResult = DialogResult.Cancel;
+                return true;
             }
+            return base.ProcessDialogKey(keyData);
         }
 
         private User SelfUser => _service.Me;
@@ -204,66 +229,144 @@ namespace TelegArm.UI
 
         private long AvatarColorKey => _editable ? (SelfUser?.id ?? 0) : (_entry?.PeerId ?? 0);
 
+        // ── Layout helpers ───────────────────────────────────────────────────
+
+        private static Padding PadPx(int dpi, int l, int t, int r, int b)
+        {
+            return new Padding(Dpi.Px(l, dpi), Dpi.Px(t, dpi), Dpi.Px(r, dpi), Dpi.Px(b, dpi));
+        }
+
+        /// <summary>A Padding / Margin from LOGICAL lengths at this window's DPI.</summary>
+        private Padding Edge(int l, int t, int r, int b) { return PadPx(WindowDpiValue, l, t, r, b); }
+
+        /// <summary>The scrolling column both modes share: the scroll stack (NoNativeScrollPanel + themed bar + touch
+        /// momentum, from ScrollHost) holding one top-down flow of full-width items.</summary>
+        private void BuildFlow(Control bodyHost)
+        {
+            var pal = Pal;
+            var scroll = ScrollHost.Wrap(bodyHost, pal.Dark, pal.Accent);
+            _flow = new FlowLayoutPanel
+            {
+                FlowDirection = FlowDirection.TopDown,
+                WrapContents = false,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Width = ContentW + 2 * Px(OuterPad),   // 1.x: ContentW + 32 (a second hardcoded 424)
+                Padding = Edge(0, 0, 0, 16)
+            };
+            scroll.Controls.Add(_flow);
+        }
+
+        private ThemedLabel NewLabel(string text, TextRole role, LabelRole ink, int heightLogical)
+        {
+            return new ThemedLabel
+            {
+                Text = text ?? "",
+                PointSize = TextRoles.Points(role),
+                Style = TextRoles.Style(role),
+                Role = ink,
+                TextAlign = HorizontalAlignment.Center,
+                Ellipsis = true,
+                Width = ContentW,
+                Height = Px(heightLogical)
+            };
+        }
+
+        private SectionHeader SectionHead(string text)
+        {
+            return new SectionHeader(text) { Width = ContentW };
+        }
+
+        private RoundedButton NewFooterButton(string text, RoundedButtonKind kind)
+        {
+            return new RoundedButton
+            {
+                Text = text,
+                Kind = kind,
+                Modern = true,
+                Width = Px(FooterButtonW),
+                Height = Px(FooterButtonH),
+                Margin = Edge(8, 0, 0, 0),
+                Font = TextRoles.Font(TextRole.Button, WindowDpiValue)
+            };
+        }
+
+        /// <summary>A selectable, borderless, read-only text box (the contact line, the ID line).</summary>
+        private TextBox ReadOnlyBox(HorizontalAlignment align, float points, Color ink)
+        {
+            return new TextBox
+            {
+                ReadOnly = true,
+                BorderStyle = BorderStyle.None,
+                TabStop = false,
+                TextAlign = align,
+                BackColor = Pal.Window,
+                ForeColor = ink,
+                Font = FontHelper.UiAt(points, WindowDpiValue)
+            };
+        }
+
         // ── Edit mode (self) — unchanged behaviour ───────────────────────────
         private void BuildEditMode()
         {
-            ClientSize = new Size(420, 588);
-
-            _pic = new Panel { Size = new Size(96, 96), Location = new Point((420 - 96) / 2, 20), BackColor = Color.Transparent, Cursor = Cursors.Hand };
-            _pic.Paint += (s, e) => PaintAvatar(e.Graphics, new Rectangle(0, 0, 96, 96), 34f);
-            _pic.Click += (s, e) => ShowEditAvatarMenu();   // PROFILE-EDIT-SELF: tap avatar → View / Set new / Remove
-            Controls.Add(_pic);
-
-            _titleLbl = new MaterialLabel
+            var pal = Pal;
+            // Fill first, footer second: docking resolves the last-added control first.
+            var bodyHost = new Panel { Dock = DockStyle.Fill };
+            Content.Controls.Add(bodyHost);
+            _footer = new FlowLayoutPanel
             {
-                Text = FullName(SelfUser),
-                Location = new Point(20, 120),
-                AutoSize = false,
-                Size = new Size(380, 24),
-                FontType = MaterialSkinManager.fontType.H6,
-                TextAlign = ContentAlignment.MiddleCenter
+                Dock = DockStyle.Bottom,
+                Height = Px(FooterH),
+                FlowDirection = FlowDirection.RightToLeft,
+                WrapContents = false,
+                Padding = Edge(0, 11, 14, 11),
+                BackColor = pal.Footer
             };
-            Controls.Add(_titleLbl);
-            Controls.Add(new Label { Text = "Tap your photo to change it", Location = new Point(20, 146), AutoSize = false, Size = new Size(380, 16), Font = new Font("Segoe UI", 8f), ForeColor = _dark ? Color.FromArgb(150, 150, 155) : Color.FromArgb(140, 140, 145), TextAlign = ContentAlignment.MiddleCenter, BackColor = Color.Transparent });
+            Content.Controls.Add(_footer);
+            BuildFlow(bodyHost);
 
-            _contactBox = ReadOnlyBox(24, 166, 372, 22, false);
-            Controls.Add(_contactBox);
+            _pic = new AvatarCanvas { Width = ContentW, Height = Px(108), Cursor = Cursors.Hand };   // 96 circle, 8 above, 4 below
+            _pic.Paint += (s, e) => PaintAvatar(e.Graphics, AvatarRect(_pic, 96), 34f);
+            _pic.Click += (s, e) => ShowEditAvatarMenu();   // PROFILE-EDIT-SELF: tap avatar → View / Set new / Remove
+            AddFlow(_pic, 8);
 
-            Controls.Add(SmallLabel("First name", 24, 194));
-            _first = new MaterialTextBox2 { Text = SelfUser?.first_name ?? "", Location = new Point(24, 216), Width = 372 };
-            Controls.Add(_first);
+            _titleLbl = NewLabel(FullName(SelfUser), TextRole.Title, LabelRole.Title, 28);
+            AddFlow(_titleLbl, 0);
+            AddFlow(NewLabel("Tap your photo to change it", TextRole.Field, LabelRole.Dim, 20), 0);
 
-            Controls.Add(SmallLabel("Last name", 24, 266));
-            _last = new MaterialTextBox2 { Text = SelfUser?.last_name ?? "", Location = new Point(24, 288), Width = 372 };
-            Controls.Add(_last);
+            _contactBox = ReadOnlyBox(HorizontalAlignment.Center, TextRoles.Points(TextRole.Field), pal.Text);
+            _contactBox.Width = ContentW;
+            AddFlow(_contactBox, 2);
 
-            Controls.Add(SmallLabel("Bio", 24, 338));
-            _aboutBox = new MaterialTextBox2 { Hint = "A few words about you", Location = new Point(24, 360), Width = 372 };
-            Controls.Add(_aboutBox);
-
+            var card = new SettingGroup { Width = ContentW };
+            _first = card.Add(new TextRow("First name", SelfUser?.first_name ?? ""));
+            _last = card.Add(new TextRow("Last name", SelfUser?.last_name ?? ""));
+            _about = card.Add(new TextRow("Bio", "") { Hint = "A few words about you" });
             _usernameCheckTimer = new System.Windows.Forms.Timer { Interval = 500 };   // debounce the availability check
             _usernameCheckTimer.Tick += (s, e) => CheckUsernameNow();
-            Controls.Add(SmallLabel("Username", 24, 410));
-            _username = new MaterialTextBox2 { Hint = "username", Text = SelfUser?.MainUsername ?? "", Location = new Point(24, 432), Width = 372 };
-            _username.TextChanged += OnUsernameChanged;
-            Controls.Add(_username);
-            _usernameStatus = new Label { Location = new Point(26, 484), AutoSize = false, Size = new Size(368, 18), Font = new Font("Segoe UI", 8.5f), BackColor = Color.Transparent, Text = "" };
-            Controls.Add(_usernameStatus);
+            _username = card.Add(new TextRow("Username", SelfUser?.MainUsername ?? "") { Hint = "username" });
+            _username.Changed += OnUsernameChanged;   // subscribed after the initial value: no spurious availability check
+            AddFlow(card, 8);
 
-            var save = new MaterialButton { Text = "Save", Location = new Point(214, 530), Width = 90, Type = MaterialButton.MaterialButtonType.Contained };
+            _usernameStatus = new StatusLine { Width = ContentW, Height = Px(22) };
+            AddFlow(_usernameStatus, 4);
+
+            var save = NewFooterButton("Save", RoundedButtonKind.Primary);
             save.Click += OnSave;
-            Controls.Add(save);
-            var cancel = new MaterialButton { Text = "Cancel", Location = new Point(310, 530), Width = 90, Type = MaterialButton.MaterialButtonType.Outlined };
-            cancel.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
-            Controls.Add(cancel);
+            var cancel = NewFooterButton("Cancel", RoundedButtonKind.Neutral);
+            cancel.DialogResult = DialogResult.Cancel;
+            _footer.Controls.Add(save);     // first added = rightmost
+            _footer.Controls.Add(cancel);
+            AcceptButton = save;
+            CancelButton = cancel;
         }
 
         // ── View mode (others) — Telegram-style scrollable layout ────────────
-        /// <summary>Inner content width (within the 16px side margins). WAS a const 392; it is now
+        /// <summary>Inner content width (within the side margins). WAS a const 392; it is now
         /// per-instance so the SAME layout code can serve the 440-wide dialog and the narrower dock pane
         /// (BATCH-TA-24). Every one of its ~19 uses is a read at build time, so setting it in the ctor
         /// before Build*Mode() runs is sufficient.</summary>
-        private readonly int ContentW = 392;
+        private readonly int ContentW;
         private readonly bool _embedded;
 
         /// <summary>Embedded only: raised INSTEAD of closing, when something the host must handle was
@@ -296,65 +399,28 @@ namespace TelegArm.UI
 
         private void BuildViewMode()
         {
-            if (_embedded)
-            {
-                // ⚠ MEASURED: MaterialForm reserves a caption strip via Padding — its Dock=Fill child sits
-                //   at Top = 24 (STATUS_BAR_HEIGHT_DEFAULT). Clearing Padding lets the opaque content cover
-                //   the band, which is what makes this look like a pane instead of a windowless dialog.
-                Padding = new Padding(0);
-                Sizable = false;
-            }
-            else ClientSize = new Size(440, 620);
-
-            var outer = new Panel { Dock = DockStyle.Fill, BackColor = BackColor };
-            var host = new Controls.NoNativeScrollPanel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = BackColor };
-            _flow = new FlowLayoutPanel
-            {
-                FlowDirection = FlowDirection.TopDown,
-                WrapContents = false,
-                AutoSize = true,
-                AutoSizeMode = AutoSizeMode.GrowAndShrink,
-                Width = ContentW + 32,   // was a second hardcoded 424; 392 + 32 == 424, so the dialog is unchanged
-                BackColor = BackColor,
-                Padding = new Padding(0, 0, 0, 16)
-            };
-            host.Controls.Add(_flow);
-            outer.Controls.Add(host);
-            outer.Controls.Add(new Controls.ThemedScrollBar(host, _dark, _accentColor) { Dock = DockStyle.Right });
-            Controls.Add(outer);
-            TelegArm.UI.Controls.TouchScroller.Enable(host, horizontal: false);
+            // Embedded: UseAsPane() (ctor) already removed the chrome; the 1.x Padding/Sizable "embed hack" is gone.
+            var bodyHost = new Panel { Dock = DockStyle.Fill };
+            Content.Controls.Add(bodyHost);
+            BuildFlow(bodyHost);
 
             // Avatar.
-            var avi = new Panel { Width = ContentW, Height = 112, BackColor = BackColor, Cursor = Cursors.Hand };
-            avi.Paint += (s, e) => PaintAvatar(e.Graphics, new Rectangle((ContentW - 100) / 2, 8, 100, 100), 36f);
+            var avi = new AvatarCanvas { Width = ContentW, Height = Px(112), Cursor = Cursors.Hand };
+            avi.Paint += (s, e) => PaintAvatar(e.Graphics, AvatarRect(avi, 100), 36f);
             avi.Click += (s, e) => ViewPhoto();
             _viewAvatarPanel = avi;
             AddFlow(avi, 8);
 
-            _nameLbl = new MaterialLabel
-            {
-                Text = _entry?.Title ?? "",
-                AutoSize = false,
-                Size = new Size(ContentW, 28),
-                FontType = MaterialSkinManager.fontType.H6,
-                TextAlign = ContentAlignment.MiddleCenter
-            };
+            _nameLbl = NewLabel(_entry?.Title ?? "", TextRole.Title, LabelRole.Title, 28);
             AddFlow(_nameLbl, 2);
 
-            _statusLbl = new MaterialLabel
-            {
-                Text = StatusText(),
-                AutoSize = false,
-                Size = new Size(ContentW, 20),
-                FontType = MaterialSkinManager.fontType.Caption,
-                TextAlign = ContentAlignment.MiddleCenter
-            };
+            _statusLbl = NewLabel(StatusText(), TextRole.Field, LabelRole.Dim, 20);
             AddFlow(_statusLbl, 0);
 
             // Action-tile row — branches on peer type: a USER gets Message / Mute / Call / More; a GROUP or
             // CHANNEL gets only Mute / More (Message & Call are user-only — you can't DM or call a group/channel).
             // Whatever set applies is laid out centred.
-            var actions = new Panel { Width = ContentW, Height = 66, BackColor = BackColor };
+            var actions = new Panel { Width = ContentW, Height = Px(66) };
             _actionsPanel = actions;   // PROFILE-CHANNEL: personal-channel card inserts directly after this
             bool isUser = OtherUser != null;
             var tiles = new List<ActionTile>();
@@ -365,22 +431,22 @@ namespace TelegArm.UI
             //   action rather than grey-out is this app's convention (TA-20/S0, and the dock's own Emoji tab).
             if (isUser && !_embedded)
             {
-                var msg = NewTile("✉", "Message", 0);
+                var msg = NewTile(ProfileIcon.Message, "Message");
                 msg.Clicked += () => { SendMessageRequested = true; DialogResult = DialogResult.OK; Close(); };
                 tiles.Add(msg);
             }
-            _muteTile = NewTile("🔔", _muted ? "Unmute" : "Mute", 0); _muteTile.Clicked += ToggleMute;
-            _muteTile.Glyph = _muted ? "🔕" : "🔔";
+            _muteTile = NewTile(_muted ? ProfileIcon.BellOff : ProfileIcon.Bell, _muted ? "Unmute" : "Mute");
+            _muteTile.Clicked += ToggleMute;
             tiles.Add(_muteTile);
             if (isUser)
             {
-                var call = NewTile("📞", "Call", 0); call.Enabled2 = false; call.ToolTipText = "Voice calls aren't implemented yet";
+                var call = NewTile(ProfileIcon.Phone, "Call"); call.Enabled2 = false; call.ToolTipText = "Voice calls aren't implemented yet";
                 tiles.Add(call);
             }
-            var more = NewTile("⋯", "More", 0); more.Clicked += () => ShowMoreMenu(more);
+            var more = NewTile(ProfileIcon.More, "More"); more.Clicked += () => ShowMoreMenu(more);
             tiles.Add(more);
 
-            const int tileW = 92, tileGap = 100;
+            int tileW = Px(TileW), tileGap = Px(TileGap);
             int startX = Math.Max(0, (ContentW - ((tiles.Count - 1) * tileGap + tileW)) / 2);
             for (int i = 0; i < tiles.Count; i++)
             {
@@ -389,32 +455,70 @@ namespace TelegArm.UI
             }
             AddFlow(actions, 12);
 
-            // Contact info + bio (selectable / copyable).
-            AddFlow(SectionLabel("INFO"), 14);
-            _details = new Controls.RichInfoLabel(_dark, _accentColor, new Font("Segoe UI", 9.75f))
-            {
-                Width = ContentW,
-                Margin = new Padding(16, 2, 16, 0)
-            };
-            _details.LinkClicked += url => { PendingLink = url; FinishOrRoute(); };
-            _details.MentionClicked += (un, uid) => { PendingMentionUser = un; PendingMentionId = uid; FinishOrRoute(); };
-            _details.HashtagClicked += tag => { PendingHashtag = tag; FinishOrRoute(); };
+            // Contact info + bio (selectable / copyable). The text sits on the page (no card) and lines up with the
+            // section titles above it, which are inset by the rows' own padding.
+            AddFlow(SectionHead("INFO"), 8);
+            _details = NewDetails();
             _flow.Controls.Add(_details);
 
             // Secondary, selectable ID line (every peer type).
-            _idBox = ReadOnlyBox(0, 0, ContentW, 20, false);
-            _idBox.Margin = new Padding(16, 0, 16, 0);
-            _idBox.Font = new Font("Segoe UI", 8.25f);
-            _idBox.ForeColor = _dark ? Color.FromArgb(140, 140, 145) : Color.FromArgb(140, 140, 145);
+            _idBox = ReadOnlyBox(HorizontalAlignment.Left, 8.5f, Pal.TextDim);
+            int idLeft = Px(OuterPad + SettingRow.PadX) - 1;
+            _idBox.Width = ContentW + Px(OuterPad) - idLeft;
+            _idBox.Margin = new Padding(idLeft, 0, Px(OuterPad), 0);
             _flow.Controls.Add(_idBox);
 
             // Media + bottom actions are appended in LoadDetails (counts are async).
         }
 
+        private void SetFlowMargin(Control c, int topGap)
+        {
+            c.Margin = Edge(OuterPad, topGap, OuterPad, 0);
+        }
+
         private void AddFlow(Control c, int topGap)
         {
-            c.Margin = new Padding(16, topGap, 16, 0);
+            SetFlowMargin(c, topGap);
             _flow.Controls.Add(c);
+        }
+
+        // ── The description (rich text) ──────────────────────────────────────
+        /// <summary>A description label in the CURRENT palette. RichInfoLabel bakes its colours when it is built, so a theme
+        /// change builds a fresh one (<see cref="RebuildDetails"/>). Each label owns its own point-unit font.</summary>
+        private RichInfoLabel NewDetails()
+        {
+            var pal = Pal;
+            _detailsFont = FontHelper.Ui(9.75f);
+            int left = Px(OuterPad + SettingRow.PadX) - 2;   // 2 = RichInfoLabel's own inner pad, so the TEXT lines up
+            var rich = new RichInfoLabel(pal.Dark, pal.Accent, _detailsFont);
+            rich.Width = ContentW + Px(OuterPad) - left;
+            rich.Margin = new Padding(left, Px(2), Px(OuterPad), 0);
+            rich.LinkClicked += url => { PendingLink = url; FinishOrRoute(); };
+            rich.MentionClicked += (un, uid) => { PendingMentionUser = un; PendingMentionId = uid; FinishOrRoute(); };
+            rich.HashtagClicked += tag => { PendingHashtag = tag; FinishOrRoute(); };
+            return rich;
+        }
+
+        private void ShowDetailsText()
+        {
+            if (_details == null) return;
+            if (!_detailsShown) _details.Visible = false;
+            else { _details.Visible = true; _details.SetText(_detailsText, Helpers.TextEntities.Detect(_detailsText), null); }
+        }
+
+        private void RebuildDetails()
+        {
+            if (_details == null || _flow == null || _details.IsDisposed) return;
+            var old = _details;
+            var oldFont = _detailsFont;
+            int index = _flow.Controls.GetChildIndex(old);
+            _details = NewDetails();   // also replaces _detailsFont
+            _flow.Controls.Add(_details);
+            _flow.Controls.SetChildIndex(_details, index);
+            _flow.Controls.Remove(old);
+            old.Dispose();
+            if (oldFont != null) oldFont.Dispose();
+            ShowDetailsText();
         }
 
         // ── PROFILE-CHANNEL: the user's attached personal channel, as a tappable card right below the action row ──
@@ -427,8 +531,8 @@ namespace TelegArm.UI
                 var val = res.Value;
                 var ch = val.channel;
                 string sub = "Channel" + (val.subs > 0 ? " • " + val.subs.ToString("N0") + " subscriber" + (val.subs == 1 ? "" : "s") : "");
-                var card = new ProfileChannelCard(ch.title, sub, ChannelMsgPreview(val.latest), _dark, _accentColor)
-                { Width = ContentW, Margin = new Padding(16, 8, 16, 0) };
+                var card = new ProfileChannelCard(ch.title, sub, ChannelMsgPreview(val.latest))
+                { Width = ContentW, Height = Px(76), Margin = Edge(OuterPad, 8, OuterPad, 0) };
                 card.Clicked += () => { PendingOpenChannel = ch; FinishOrRoute(); };
                 _flow.Controls.Add(card);
                 int ai = _flow.Controls.GetChildIndex(_actionsPanel);   // slot the card directly after the action row
@@ -484,8 +588,8 @@ namespace TelegArm.UI
             if (IsDisposed || _flow == null || _idBox == null || items == null || items.Count == 0) return;
             _postedStories = items;
 
-            var label = SectionLabel(items.Count > 1 ? items.Count + " POSTED STORIES" : "POSTED STORIES");
-            label.Margin = new Padding(16, 14, 16, 0);
+            var label = SectionHead(items.Count > 1 ? items.Count + " POSTED STORIES" : "POSTED STORIES");
+            SetFlowMargin(label, 8);
             var grid = new FlowLayoutPanel
             {
                 FlowDirection = FlowDirection.LeftToRight,
@@ -494,23 +598,23 @@ namespace TelegArm.UI
                 AutoSizeMode = AutoSizeMode.GrowAndShrink,
                 MinimumSize = new Size(ContentW, 0),   // pin the width → the row WRAPS instead of growing horizontally
                 MaximumSize = new Size(ContentW, 0),
-                Margin = new Padding(16, 2, 16, 0),
-                BackColor = BackColor
+                Margin = Edge(OuterPad, 2, OuterPad, 0)
             };
             int shown = Math.Min(items.Count, StoryPreviewMax);   // one preview row; the rest live behind "Show all"
             for (int i = 0; i < shown; i++)
             {
                 int idx = i;   // capture → the viewer deep-links to this story
-                var thumb = new Controls.StoryThumb(_service, items[i], _dark) { Margin = new Padding(0, 0, 6, 6) };
+                var thumb = new StoryThumb(_service, items[i], Pal.Dark) { Margin = Edge(0, 0, 6, 6) };
                 thumb.Clicked += () => OpenProfileStoryViewer(idx);
                 grid.Controls.Add(thumb);
             }
 
-            ProfileRow showAll = null;
+            SettingGroup showAll = null;
             if (items.Count > StoryPreviewMax)
             {
-                showAll = new ProfileRow(_dark, _accentColor) { Glyph = "▦", Label = "Show all " + items.Count + " stories", Width = ContentW };
-                showAll.Clicked += OpenStoriesGallery;
+                showAll = new SettingGroup { Width = ContentW };
+                var allRow = showAll.Add(new ProfileRow { Icon = ProfileIcon.Stories, Label = "Show all " + items.Count + " stories" });
+                allRow.Clicked += OpenStoriesGallery;
                 AddFlow(showAll, 2);
             }
 
@@ -534,7 +638,7 @@ namespace TelegArm.UI
             if (_entry?.Peer == null || _postedStories == null) return;
             var refs = new List<StoryPeerRef> { new StoryPeerRef { PeerId = _entry.PeerId, Name = _entry.Title ?? "", Input = _entry.Peer } };
             // Hand the viewer the SAME posted list (preloaded) so it shows/navigates exactly the grid's stories at the tapped index.
-            using (var viewer = new StoryViewerForm(_service, refs, 0, cid => Avatars?.GetCached(cid), _accentColor, storyIdx, _postedStories))
+            using (var viewer = new StoryViewerForm(_service, refs, 0, cid => Avatars?.GetCached(cid), Pal.Accent, storyIdx, _postedStories))
                 viewer.ShowDialog(this);
         }
 
@@ -544,82 +648,70 @@ namespace TelegArm.UI
         {
             if (_entry?.Peer == null || _postedStories == null) return;
             var peerRef = new StoryPeerRef { PeerId = _entry.PeerId, Name = _entry.Title ?? "", Input = _entry.Peer };
-            using (var f = new StoriesGridForm(_service, peerRef, _postedStories, _dark, _accentColor, cid => Avatars?.GetCached(cid)))
+            using (var f = new StoriesGridForm(_service, peerRef, _postedStories, Pal.Dark, Pal.Accent, cid => Avatars?.GetCached(cid)))
                 f.ShowDialog(this);
         }
 
         /// <summary>A tappable channel row (avatar + title + "Channel • N subscribers" + latest-message preview),
-        /// RTL-aware. Owner-drawn like a chat-list row; avatar fills in async via SetAvatar.</summary>
+        /// RTL-aware. Owner-drawn like a chat-list row; avatar fills in async via SetAvatar. The creator sets Width and
+        /// Height; colours come from the palette at paint time.</summary>
         private sealed class ProfileChannelCard : Control
         {
-            private readonly bool _dark;
-            private readonly Color _accent;
             private readonly string _title, _sub, _preview;
             private Image _avatar;
             public event Action Clicked;
-            public ProfileChannelCard(string title, string sub, string preview, bool dark, Color accent)
+            public ProfileChannelCard(string title, string sub, string preview)
             {
-                _title = title ?? ""; _sub = sub ?? ""; _preview = preview ?? ""; _dark = dark; _accent = accent;
-                Height = 76; Cursor = Cursors.Hand;
+                _title = title ?? ""; _sub = sub ?? ""; _preview = preview ?? "";
+                Cursor = Cursors.Hand;
                 SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
-                Click += (s, e) => { var h = Clicked; if (h != null) h(); };
+                MouseClick += (s, e) => { if (e.Button == MouseButtons.Left) { var h = Clicked; if (h != null) h(); } };
             }
             public void SetAvatar(Image a) { _avatar = a; if (!IsDisposed) Invalidate(); }
             protected override void OnPaint(PaintEventArgs e)
             {
+                var pal = ThemeHelper.Palette;
                 var g = e.Graphics;
+                int dpi = Dpi.Of(this);
                 g.SmoothingMode = SmoothingMode.AntiAlias;
-                g.Clear(Parent != null ? Parent.BackColor : (_dark ? Color.FromArgb(30, 30, 30) : Color.White));
-                var card = new Rectangle(0, 1, Width - 1, Height - 4);
-                using (var cb = new SolidBrush(_dark ? Color.FromArgb(46, 46, 50) : Color.FromArgb(238, 238, 241)))
-                using (var p = DrawHelper.RoundedRect(card, 10))
-                    g.FillPath(cb, p);
-                const int d = 48; int ax = 12, ay = (Height - d) / 2;
-                var ar = new Rectangle(ax, ay, d, d);
-                if (_avatar != null)
+                g.Clear(Parent != null ? Parent.BackColor : pal.Window);
+                var card = new Rectangle(Point.Empty, new Size(Math.Max(1, Width - 1), Math.Max(1, Height - Dpi.Px(4, dpi))));
+                card.Y = Dpi.Px(1, dpi);
+                using (var cb = new SolidBrush(pal.Card))
+                using (var pen = new Pen(pal.Divider, 1f))
+                using (var p = DrawHelper.RoundedRect(card, Dpi.Px(10, dpi)))
                 {
-                    using (var clip = new GraphicsPath()) { clip.AddEllipse(ar); var old = g.Clip; g.SetClip(clip); g.DrawImage(_avatar, ar); g.Clip = old; }
+                    g.FillPath(cb, p);
+                    g.DrawPath(pen, p);
                 }
+                int d = Dpi.Px(48, dpi), ax = Dpi.Px(12, dpi), ay = (Height - d) / 2;
+                var ar = new Rectangle(ax, ay, d, d);
+                if (_avatar != null) DrawHelper.DrawCircularImage(g, ar, _avatar);
                 else
                 {
-                    using (var b = new SolidBrush(_accent)) g.FillEllipse(b, ar);
+                    using (var b = new SolidBrush(pal.Accent)) g.FillEllipse(b, ar);
                     string letter = string.IsNullOrEmpty(_title) ? "#" : _title.Substring(0, 1).ToUpper();
-                    using (var af = FontHelper.For(_title, 15f, FontStyle.Bold))
-                        TextRenderer.DrawText(g, letter, af, ar, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                    TextRenderer.DrawText(g, letter, FontHelper.ForAt(_title, 15f, dpi, FontStyle.Bold), ar, pal.OnAccent,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
                 }
-                int tx = ax + d + 12, tw = Width - tx - 14;
-                Color titleC = _dark ? Color.White : Color.FromArgb(20, 20, 24);
-                Color subC = _dark ? Color.FromArgb(150, 150, 156) : Color.FromArgb(120, 120, 126);
-                DrawLine(g, _title, tx, 10, tw, titleC, 10.5f, FontStyle.Bold);
-                DrawLine(g, _sub, tx, 31, tw, subC, 8.5f, FontStyle.Regular);
-                DrawLine(g, _preview, tx, 50, tw, subC, 9f, FontStyle.Regular);
+                int tx = ax + d + Dpi.Px(12, dpi), tw = Width - tx - Dpi.Px(14, dpi);
+                DrawLine(g, _title, tx, Dpi.Px(10, dpi), tw, pal.Text, 10.5f, FontStyle.Bold, dpi);
+                DrawLine(g, _sub, tx, Dpi.Px(31, dpi), tw, pal.TextDim, 8.5f, FontStyle.Regular, dpi);
+                DrawLine(g, _preview, tx, Dpi.Px(50, dpi), tw, pal.TextDim, 9f, FontStyle.Regular, dpi);
             }
-            private static void DrawLine(Graphics g, string text, int x, int y, int w, Color c, float size, FontStyle st)
+            private static void DrawLine(Graphics g, string text, int x, int y, int w, Color c, float size, FontStyle st, int dpi)
             {
-                if (string.IsNullOrEmpty(text) || w < 20) return;
+                if (string.IsNullOrEmpty(text) || w < Dpi.Px(20, dpi)) return;
                 bool fa = FontHelper.IsPersian(text);
                 var flags = TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis | TextFormatFlags.VerticalCenter
                             | (fa ? TextFormatFlags.Right | TextFormatFlags.RightToLeft : TextFormatFlags.Left);
-                using (var f = FontHelper.For(text, size, st))
-                    TextRenderer.DrawText(g, text, f, new Rectangle(x, y, w, 18), c, flags);
+                TextRenderer.DrawText(g, text, FontHelper.ForAt(text, size, dpi, st), new Rectangle(x, y, w, Dpi.Px(18, dpi)), c, flags);
             }
         }
 
-        private ActionTile NewTile(string glyph, string label, int x)
+        private ActionTile NewTile(ProfileIcon icon, string label)
         {
-            return new ActionTile(_dark, _accentColor) { Glyph = glyph, Label = label, Location = new Point(x, 0) };
-        }
-
-        private MaterialLabel SectionLabel(string text)
-        {
-            return new MaterialLabel
-            {
-                Text = text,
-                AutoSize = false,
-                Size = new Size(ContentW, 20),
-                FontType = MaterialSkinManager.fontType.Caption,
-                ForeColor = _accentColor
-            };
+            return new ActionTile { Icon = icon, Label = label, Size = new Size(Px(TileW), Px(TileH)) };
         }
 
         private string StatusText()
@@ -649,13 +741,13 @@ namespace TelegArm.UI
             bool ok;
             try { ok = await _service.ToggleMuteAsync(_entry.Peer, target); }
             catch (Exception ex) { ThemedDialog.Show(this, "Mute", "Couldn't change mute: " + ex.Message, "OK"); return; }
-            if (Logger.Enabled) System.Diagnostics.Debug.WriteLine("[NOTIFY] mute write peer=" + (_entry?.PeerId ?? 0) + " mute=" + target + (ok ? " ok" : " FAILED (server returned false)"));
+            if (Logger.Enabled) Logger.Diag("[NOTIFY] mute write peer=" + (_entry?.PeerId ?? 0) + " mute=" + target + (ok ? " ok" : " FAILED (server returned false)"));
             if (!ok) { ThemedDialog.Show(this, "Mute", "Telegram didn't accept the change — try again.", "OK"); return; }
             _muted = target;
             if (_entry != null) _entry.Muted = target;
             if (_muteTile != null && !_muteTile.IsDisposed)
             {
-                _muteTile.Glyph = _muted ? "🔕" : "🔔";
+                _muteTile.Icon = _muted ? ProfileIcon.BellOff : ProfileIcon.Bell;
                 _muteTile.Label = _muted ? "Unmute" : "Mute";
                 _muteTile.Invalidate();
             }
@@ -683,12 +775,14 @@ namespace TelegArm.UI
                 MenuItem(menu, LeaveLabel(), LeaveChat);
             }
             menu.Closed += (s, e) => BeginInvoke((Action)menu.Dispose);
-            menu.Show(anchor, new Point(0, anchor.Height));
+            menu.Show(anchor, new Point(x: 0, y: anchor.Height));
         }
 
         private void MenuItem(ContextMenuStrip menu, string text, Action action, bool danger = false)
         {
-            var item = new ToolStripMenuItem(text) { ForeColor = danger ? Color.FromArgb(222, 74, 74) : (_dark ? Color.White : Color.FromArgb(30, 30, 30)) };
+            // The themed menu supplies the ordinary ink; only a destructive item sets its own.
+            var item = new ToolStripMenuItem(text);
+            if (danger) item.ForeColor = Pal.Danger;
             item.Click += (s, e) => BeginInvoke(action);
             menu.Items.Add(item);
         }
@@ -709,7 +803,7 @@ namespace TelegArm.UI
         {
             var ch = AdminChannel;
             if (ch == null || _entry?.Peer == null) return;
-            using (var f = new Admin.ManageChatForm(_service, ch, _entry.Peer, _entry.Title ?? "", "", _dark, _accentColor))
+            using (var f = new Admin.ManageChatForm(_service, ch, _entry.Peer, _entry.Title ?? "", "", Pal.Dark, Pal.Accent))
                 f.ShowDialog(this);
             // RELEASE-FIXES-V11: reflect edits made inside Manage in this OPEN profile — title (updated on the shared
             // _entry by MainForm.PeerTitleChanged during the edit), avatar (CHANNEL-PHOTO-REFRESH), and description (M1).
@@ -755,8 +849,9 @@ namespace TelegArm.UI
             }
             if (!string.IsNullOrEmpty(about)) { if (sb.Length > 0) sb.AppendLine(); sb.AppendLine(about); }
             string detailsText = sb.ToString().TrimEnd();
-            if (detailsText.Length == 0) _details.Visible = false;
-            else { _details.Visible = true; _details.SetText(detailsText, Helpers.TextEntities.Detect(detailsText), null); }
+            _detailsText = detailsText;           // kept so a theme change can rebuild the label with the same text
+            _detailsShown = detailsText.Length > 0;
+            ShowDetailsText();
         }
 
         /// <summary>M1: re-fetch the peer's about and refresh the shown description after a Manage edit (bounded; no-op on self/failure).</summary>
@@ -778,7 +873,7 @@ namespace TelegArm.UI
             if (u == null) { ThemedDialog.Show(this, "Edit contact", "Only a saved user can be renamed.", "OK"); return; }
 
             string newFirst, newLast;
-            using (var f = new EditContactForm(u.first_name ?? "", u.last_name ?? "", _dark, _accentColor))
+            using (var f = new EditContactForm(u.first_name ?? "", u.last_name ?? "", Pal.Dark, Pal.Accent))
             {
                 if (f.ShowDialog(this) != DialogResult.OK) return;
                 newFirst = f.FirstNameValue; newLast = f.LastNameValue;
@@ -797,7 +892,7 @@ namespace TelegArm.UI
             if (_entry != null) _entry.Title = display;
             if (_nameLbl != null && !_nameLbl.IsDisposed) _nameLbl.Text = display;   // view-mode name label (was _titleLbl = edit-mode, null here)
             MainForm.RaisePeerTitleChanged(u.id, display);   // RELEASE-FIXES-V11: refresh the chat-list row + header live
-            System.Diagnostics.Debug.WriteLine("[CONTACT] renamed id=" + u.id);
+            Logger.Diag("[CONTACT] renamed id=" + u.id);
         }
 
         private async void DeleteContact()
@@ -809,7 +904,7 @@ namespace TelegArm.UI
             try { ok = await _service.DeleteContactAsync(u); }
             catch (Exception ex) { ThemedDialog.Show(this, "Delete contact", "Couldn't delete: " + ex.Message, "OK"); return; }
             if (!ok) { ThemedDialog.Show(this, "Delete contact", "Couldn't delete — make sure your VPN is on and try again.", "OK"); return; }
-            System.Diagnostics.Debug.WriteLine("[CONTACT] deleted id=" + u.id);
+            Logger.Diag("[CONTACT] deleted id=" + u.id);
             ThemedDialog.Show(this, "Delete contact", "Contact deleted.", "OK");
         }
 
@@ -835,25 +930,20 @@ namespace TelegArm.UI
         }
 
         // ── Media counts → counted rows ──────────────────────────────────────
-        private struct MediaCat { public string Glyph, Label; public MessagesFilter Filter; public bool ListMode; }
+        private struct MediaCat { public ProfileIcon Icon; public string Label; public MessagesFilter Filter; public bool ListMode; }
 
         private static List<MediaCat> Categories() => new List<MediaCat>
         {
-            // ⚠ BATCH-TA-39 — BMP GLYPHS ONLY. THE ASTRAL ONES RENDER AS TOFU BOXES ON RT 8.1.
-            //   Windows 8.1's Segoe UI Symbol covers SOME emoji above U+FFFF and not others, which is why
-            //   this looked fine on the dev box and showed empty boxes on the device for Photos (U+1F5BC),
-            //   GIFs (U+1F39E) and Delete contact (U+1F5D1), while the music note and microphone happened
-            //   to render. "It renders here" is not evidence for RT.
-            //   Everything below is now from Geometric Shapes / Misc Symbols / Dingbats (U+25xx-U+27xx),
-            //   which 8.1 covers completely. Same reasoning as the drawn header glyphs — a font glyph
-            //   renders inconsistently on RT — applied without hand-drawing seven icons.
-            new MediaCat { Glyph = "▣", Label = "Photos",         Filter = new InputMessagesFilterPhotos() },
-            new MediaCat { Glyph = "▶", Label = "Videos",         Filter = new InputMessagesFilterVideo() },
-            new MediaCat { Glyph = "▤", Label = "Files",          Filter = new InputMessagesFilterDocument() },
-            new MediaCat { Glyph = "♫", Label = "Audio",          Filter = new InputMessagesFilterMusic(),  ListMode = true },
-            new MediaCat { Glyph = "⛓", Label = "Shared links",   Filter = new InputMessagesFilterUrl(),    ListMode = true },
-            new MediaCat { Glyph = "◉", Label = "Voice messages", Filter = new InputMessagesFilterVoice(),  ListMode = true },
-            new MediaCat { Glyph = "▷", Label = "GIFs",           Filter = new InputMessagesFilterGif() },
+            // Redesign 2.5 — every icon is DRAWN (ProfileIcons), not a font symbol. BATCH-TA-39 had to swap the astral emoji
+            //   for BMP shapes because RT 8.1 renders SOME of them as tofu boxes ("it renders here" is not evidence for RT);
+            //   a drawn icon looks the same on every Windows version, which is the whole point.
+            new MediaCat { Icon = ProfileIcon.Photo, Label = "Photos",         Filter = new InputMessagesFilterPhotos() },
+            new MediaCat { Icon = ProfileIcon.Video, Label = "Videos",         Filter = new InputMessagesFilterVideo() },
+            new MediaCat { Icon = ProfileIcon.File,  Label = "Files",          Filter = new InputMessagesFilterDocument() },
+            new MediaCat { Icon = ProfileIcon.Audio, Label = "Audio",          Filter = new InputMessagesFilterMusic(),  ListMode = true },
+            new MediaCat { Icon = ProfileIcon.Link,  Label = "Shared links",   Filter = new InputMessagesFilterUrl(),    ListMode = true },
+            new MediaCat { Icon = ProfileIcon.Voice, Label = "Voice messages", Filter = new InputMessagesFilterVoice(),  ListMode = true },
+            new MediaCat { Icon = ProfileIcon.Gif,   Label = "GIFs",           Filter = new InputMessagesFilterGif() },
         };
 
         private async void LoadMediaCounts()
@@ -870,40 +960,48 @@ namespace TelegArm.UI
                 if (c?.filter != null) byType[c.filter.GetType()] = c.count;
 
             bool any = false;
+            SettingGroup group = null;
             foreach (var cat in cats)
             {
                 byType.TryGetValue(cat.Filter.GetType(), out int n);
                 if (n <= 0) continue;
-                if (!any) { AddFlow(SectionLabel("SHARED MEDIA"), 14); any = true; }
+                if (!any)
+                {
+                    AddFlow(SectionHead("SHARED MEDIA"), 10);
+                    group = new SettingGroup { Width = ContentW };   // the counted rows are one card
+                    AddFlow(group, 0);
+                    any = true;
+                }
                 var captured = cat;
-                var row = new ProfileRow(_dark, _accentColor) { Glyph = cat.Glyph, Label = cat.Label, Trailing = n.ToString("N0"), Width = ContentW };
+                var row = new ProfileRow { Icon = cat.Icon, Label = cat.Label, Trailing = n.ToString("N0") };
                 row.Clicked += () => OpenCategory(captured);
-                AddFlow(row, 0);
+                group.Add(row);
             }
         }
 
         private void OpenCategory(MediaCat cat)
         {
             if (_entry?.Peer == null) return;
-            using (var f = new MediaCategoryForm(this, _service, _entry.Peer, cat.Filter, cat.Label, cat.ListMode, _dark, _accentColor))
+            using (var f = new MediaCategoryForm(this, _service, _entry.Peer, cat.Filter, cat.Label, cat.ListMode))
                 f.ShowDialog(this);
         }
 
         // ── Bottom action list (adapts by peer type) ─────────────────────────
         private void AddBottomActions()
         {
-            AddFlow(SectionLabel("ACTIONS"), 16);
+            AddFlow(SectionHead("ACTIONS"), 10);
+            var group = new SettingGroup { Width = ContentW };
             if (OtherUser != null)   // user contact → Edit/Delete + Block (Share hidden for release — RELEASE-FIXES-V11)
             {
-                // BMP glyphs only — see Categories() for why. U+1F5D1 (wastebasket) was a tofu box on RT.
-                AddActionRow("✎", "Edit contact", false, EditContact);
-                AddActionRow("✖", "Delete contact", true, DeleteContact);
-                _blockRow = AddActionRow("⊘", _blocked ? "Unblock user" : "Block user", true, BlockUser);
+                AddActionRow(group, ProfileIcon.Edit, "Edit contact", false, EditContact);
+                AddActionRow(group, ProfileIcon.Trash, "Delete contact", true, DeleteContact);
+                _blockRow = AddActionRow(group, ProfileIcon.Block, _blocked ? "Unblock user" : "Block user", true, BlockUser);
             }
             else                     // channel / group → Leave (destructive)
             {
-                AddActionRow("⇤", LeaveLabel(), true, LeaveChat);
+                AddActionRow(group, ProfileIcon.Leave, LeaveLabel(), true, LeaveChat);
             }
+            AddFlow(group, 0);
         }
 
         /// <summary>TA-39 — the block row, kept so its label can be corrected in place.</summary>
@@ -946,11 +1044,11 @@ namespace TelegArm.UI
         }
 
         /// <summary>Returns the row so a caller can retitle it later (TA-39: the block row).</summary>
-        private ProfileRow AddActionRow(string glyph, string label, bool danger, Action action)
+        private ProfileRow AddActionRow(SettingGroup group, ProfileIcon icon, string label, bool danger, Action action)
         {
-            var row = new ProfileRow(_dark, _accentColor) { Glyph = glyph, Label = label, Danger = danger, Width = ContentW };
+            var row = new ProfileRow { Icon = icon, Label = label, Danger = danger };
             row.Clicked += () => action();
-            AddFlow(row, 0);
+            group.Add(row);
             return row;
         }
 
@@ -965,7 +1063,7 @@ namespace TelegArm.UI
                     try { var bytes = await _service.DownloadAvatarAsync(SelfUser); if (bytes != null && bytes.Length > 0) { _avatar = ToBitmap(bytes); _pic.Invalidate(); } } catch { }
                 }
                 string about = await _service.GetSelfAboutAsync();
-                if (_aboutBox != null && !IsDisposed) _aboutBox.Text = about;
+                if (_about != null && !IsDisposed) _about.Value = about;
                 return;
             }
 
@@ -1018,7 +1116,7 @@ namespace TelegArm.UI
         /// demand fetches; null = initials-only fallback.</summary>
         internal Core.AvatarStore Avatars { get; set; }
 
-        private FlowLayoutPanel _membersPanel;
+        private SettingGroup _membersGroup;
         private readonly List<MemberRow> _memberRows = new List<MemberRow>();
         private bool _membersClosed;
 
@@ -1028,17 +1126,9 @@ namespace TelegArm.UI
 
         private void BuildMembersSection(int totalMembers, List<User> basicUsers)
         {
-            AddFlow(SectionLabel(totalMembers > 0 ? totalMembers.ToString("N0") + " MEMBERS" : "MEMBERS"), 14);
-            _membersPanel = new FlowLayoutPanel
-            {
-                FlowDirection = FlowDirection.TopDown,
-                WrapContents = false,
-                Width = ContentW,
-                AutoSize = true,
-                AutoSizeMode = AutoSizeMode.GrowAndShrink,
-                Margin = new Padding(16, 0, 16, 0)
-            };
-            _flow.Controls.Add(_membersPanel);
+            AddFlow(SectionHead(totalMembers > 0 ? totalMembers.ToString("N0") + " MEMBERS" : "MEMBERS"), 10);
+            _membersGroup = new SettingGroup { Width = ContentW };   // empty (0 tall) until the rows arrive
+            AddFlow(_membersGroup, 0);
 
             // Live status rows (the ChatMembersForm Part-4 pattern, verbatim: subscribe on open,
             // unsubscribe on Disposed) + avatar arrivals repaint their row.
@@ -1063,12 +1153,12 @@ namespace TelegArm.UI
                 var res = await _service.GetParticipantsAsync(mg, new ChannelParticipantsRecent(), 0, 20);
                 if (_membersClosed || IsDisposed)
                 {
-                    if (Logger.Enabled) System.Diagnostics.Debug.WriteLine("[PRESENCE] members fetch discarded (profile closed)");
+                    if (Logger.Enabled) Logger.Diag("[PRESENCE] members fetch discarded (profile closed)");
                     return;
                 }
                 if (res?.participants == null || res.users == null || res.participants.Length == 0)
                 {
-                    if (Logger.Enabled) System.Diagnostics.Debug.WriteLine("[PRESENCE] members hidden");
+                    if (Logger.Enabled) Logger.Diag("[PRESENCE] members hidden");
                     return;   // hidden/forbidden list → count header only, no rows, no error UI
                 }
                 var users = new List<User>();
@@ -1078,7 +1168,7 @@ namespace TelegArm.UI
             }
             catch (Exception ex)
             {
-                if (Logger.Enabled) System.Diagnostics.Debug.WriteLine("[PRESENCE] members hidden (" + ex.Message + ")");
+                if (Logger.Enabled) Logger.Diag("[PRESENCE] members hidden (" + ex.Message + ")");
             }
         }
 
@@ -1086,29 +1176,28 @@ namespace TelegArm.UI
         {
             if (users == null || users.Count == 0)
             {
-                if (Logger.Enabled) System.Diagnostics.Debug.WriteLine("[PRESENCE] members hidden");
+                if (Logger.Enabled) Logger.Diag("[PRESENCE] members hidden");
                 return;
             }
             foreach (var u in users.Take(20))
             {
-                var row = new MemberRow(u, _dark, _accentColor) { Width = ContentW - 32 };
+                var row = new MemberRow(u);
                 row.Avatar = Avatars?.GetCached(u.id);
                 if (row.Avatar == null) Avatars?.Request(u.id, u);
                 var captured = u;
                 row.Clicked += () => OpenMemberProfile(captured);
                 _memberRows.Add(row);
-                _membersPanel.Controls.Add(row);
+                _membersGroup.Add(row);
             }
             if (totalMembers > users.Count && _entry.PeerInfo is Channel mgAll)
             {
-                var all = new ProfileRow(_dark, _accentColor)
-                { Glyph = "◎", Label = "Show all " + totalMembers.ToString("N0") + " members", Width = ContentW - 32 };
+                var all = new ProfileRow { Icon = ProfileIcon.Members, Label = "Show all " + totalMembers.ToString("N0") + " members" };
                 all.Clicked += () =>
                 {
-                    using (var f = new Admin.ChatMembersForm(_service, mgAll, Admin.ChatMembersForm.Mode.Members, _dark, _accentColor))
+                    using (var f = new Admin.ChatMembersForm(_service, mgAll, Admin.ChatMembersForm.Mode.Members, Pal.Dark, Pal.Accent))
                         f.ShowDialog(this);
                 };
-                _membersPanel.Controls.Add(all);
+                _membersGroup.Add(all);
             }
         }
 
@@ -1144,23 +1233,28 @@ namespace TelegArm.UI
         }
 
         /// <summary>One member row: avatar (store-cached or initials), name, status sublabel via the SAME
-        /// formatter the chat header uses ("online" in accent). Owner-drawn, no per-row RPCs.</summary>
-        private sealed class MemberRow : Control
+        /// formatter the chat header uses ("online" in accent). Owner-drawn, no per-row RPCs. A <see cref="SettingRow"/>, so
+        /// it sits in the members card like any other row (the card draws its rounded ends).</summary>
+        private sealed class MemberRow : SettingRow
         {
             private readonly User _u;
-            private readonly bool _dark;
-            private readonly Color _accent;
             public Image Avatar;
             public long UserId => _u.id;
             public event Action Clicked;
 
-            public MemberRow(User u, bool dark, Color accent)
+            public MemberRow(User u) : base(NameOf(u), true)
             {
-                _u = u; _dark = dark; _accent = accent;
-                Height = 52;
-                Cursor = Cursors.Hand;
-                SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true);
-                Click += (s, e) => Clicked?.Invoke();
+                _u = u;
+                SetStyle(ControlStyles.StandardDoubleClick, true);   // SettingRow turns it off for steppers; a double tap here must open ONE profile
+                AccessibleRole = AccessibleRole.ListItem;
+                Refit();
+            }
+
+            private static string NameOf(User u)
+            {
+                string nm = ((u.first_name ?? "") + " " + (u.last_name ?? "")).Trim();
+                if (nm.Length == 0) nm = !string.IsNullOrEmpty(u.username) ? u.username : "User " + u.id;
+                return nm;
             }
 
             public void RefreshStatus(UserStatus status)
@@ -1169,46 +1263,56 @@ namespace TelegArm.UI
                 Invalidate();
             }
 
+            protected override void OnMouseClick(MouseEventArgs e)
+            {
+                base.OnMouseClick(e);
+                if (e.Button == MouseButtons.Left) Clicked?.Invoke();
+            }
+
+            protected override void OnKeyDown(KeyEventArgs e)
+            {
+                base.OnKeyDown(e);
+                if (e.KeyCode != Keys.Space) return;
+                Clicked?.Invoke();
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+            }
+
             protected override void OnPaint(PaintEventArgs e)
             {
+                var pal = ThemeHelper.Palette;
                 var g = e.Graphics;
-                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                g.Clear(Parent?.BackColor ?? (_dark ? Color.FromArgb(40, 40, 44) : Color.White));
+                int dpi = Dpi.Of(this);
+                PaintBack(g, pal);
+                g.SmoothingMode = SmoothingMode.AntiAlias;
 
-                const int d = 40, ax = 0;
+                int d = Dpi.Px(40, dpi), ax = Dpi.Px(PadX, dpi);
                 int ay = (Height - d) / 2;
-                if (Avatar != null)
-                {
-                    using (var clip = new System.Drawing.Drawing2D.GraphicsPath())
-                    {
-                        clip.AddEllipse(ax, ay, d, d);
-                        var old = g.Clip;
-                        g.SetClip(clip);
-                        g.DrawImage(Avatar, ax, ay, d, d);
-                        g.Clip = old;
-                    }
-                }
+                var circle = new Rectangle(ax, ay, d, d);
+                if (Avatar != null) DrawHelper.DrawCircularImage(g, circle, Avatar);
                 else
                 {
-                    using (var b = new SolidBrush(DrawHelper.AvatarColor(_u.id))) g.FillEllipse(b, ax, ay, d, d);
+                    using (var b = new SolidBrush(DrawHelper.AvatarColor(_u.id))) g.FillEllipse(b, circle);
                     string name0 = ((_u.first_name ?? "") + (_u.username ?? "?"));
                     string initial = name0.Length > 0 ? name0.Substring(0, 1).ToUpperInvariant() : "?";
-                    TextRenderer.DrawText(g, initial, FontHelper.Ui(13f, FontStyle.Bold), new Rectangle(ax, ay, d, d),
+                    TextRenderer.DrawText(g, initial, FontHelper.UiAt(13f, dpi, FontStyle.Bold), circle,
                         Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
                 }
 
-                string nm = ((_u.first_name ?? "") + " " + (_u.last_name ?? "")).Trim();
-                if (nm.Length == 0) nm = !string.IsNullOrEmpty(_u.username) ? _u.username : "User " + _u.id;
-                Color fg = _dark ? Color.FromArgb(235, 235, 235) : Color.FromArgb(20, 20, 20);
-                Color sub = _dark ? Color.FromArgb(150, 150, 150) : Color.FromArgb(120, 120, 120);
-                int tx = ax + d + 12, tw = Width - tx;
-                TextRenderer.DrawText(g, nm, FontHelper.Ui(10.5f, FontStyle.Bold), new Rectangle(tx, 7, tw, 20), fg,
+                int tx = ax + d + Dpi.Px(12, dpi), right = Width - Dpi.Px(PadX, dpi);
+                // Fonts without the text argument = the Roboto face, as in 1.x: GDI substitutes Persian glyphs, and the
+                // taller Vazirmatn line would not fit these fixed name / status bands.
+                TextRenderer.DrawText(g, NameOf(_u), FontHelper.UiAt(10.5f, dpi, FontStyle.Bold),
+                    Rectangle.FromLTRB(tx, Dpi.Px(7, dpi), Math.Max(tx + 1, right), Dpi.Px(27, dpi)), pal.Text,
                     TextFormatFlags.Left | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
                 string st = MainForm.StatusText(_u);
                 if (st.Length == 0) st = !string.IsNullOrEmpty(_u.username) ? "@" + _u.username : "member";
-                TextRenderer.DrawText(g, st, FontHelper.Ui(8.5f), new Rectangle(tx, 28, tw, 18),
-                    st == "online" ? _accent : sub,
+                TextRenderer.DrawText(g, st, FontHelper.UiAt(8.5f, dpi),
+                    Rectangle.FromLTRB(tx, Dpi.Px(28, dpi), Math.Max(tx + 1, right), Dpi.Px(46, dpi)),
+                    st == "online" ? pal.AccentFg : pal.TextDim,
                     TextFormatFlags.Left | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+
+                PaintFocusRing(g, pal, Rectangle.Inflate(ClientRectangle, -Dpi.Px(7, dpi), -Dpi.Px(5, dpi)), Dpi.Px(6, dpi), dpi);
             }
         }
 
@@ -1242,32 +1346,17 @@ namespace TelegArm.UI
         }
 
         // ── Shared helpers ───────────────────────────────────────────────────
-        private TextBox ReadOnlyBox(int x, int y, int w, int h, bool multiline)
-        {
-            return new TextBox
-            {
-                Location = new Point(x, y),
-                Width = w,
-                Height = h,
-                Multiline = multiline,
-                ReadOnly = true,
-                BorderStyle = BorderStyle.None,
-                TabStop = false,
-                BackColor = BackColor,
-                ForeColor = _dark ? Color.FromArgb(225, 225, 225) : Color.FromArgb(35, 35, 35),
-                Font = new Font("Segoe UI", 9.75f)
-            };
-        }
-
         private static string FullName(User u)
         {
             if (u == null) return "";
             return string.Join(" ", new[] { u.first_name, u.last_name }).Trim();
         }
 
-        private MaterialLabel SmallLabel(string text, int x, int y)
+        /// <summary>The avatar circle inside its canvas: centred, a logical 8 px from the top.</summary>
+        private Rectangle AvatarRect(Control canvas, int diameterLogical)
         {
-            return new MaterialLabel { Text = text, Location = new Point(x, y), AutoSize = false, Size = new Size(372, 20), FontType = MaterialSkinManager.fontType.Caption };
+            int d = Px(diameterLogical);
+            return new Rectangle((canvas.Width - d) / 2, Px(8), d, d);
         }
 
         private void PaintAvatar(Graphics g, Rectangle rect, float fontSize)
@@ -1275,21 +1364,14 @@ namespace TelegArm.UI
             g.SmoothingMode = SmoothingMode.AntiAlias;
             if (_avatar != null)
             {
-                using (var clip = new GraphicsPath())
-                {
-                    clip.AddEllipse(rect);
-                    g.SetClip(clip);
-                    g.DrawImage(_avatar, rect);
-                    g.ResetClip();
-                }
+                DrawHelper.DrawCircularImage(g, rect, _avatar);
             }
             else
             {
                 using (var b = new SolidBrush(DrawHelper.AvatarColor(AvatarColorKey)))
                     g.FillEllipse(b, rect);
-                using (var f = new Font("Segoe UI", fontSize, FontStyle.Bold))
-                    TextRenderer.DrawText(g, DisplayLetter(), f, rect, Color.White,
-                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                TextRenderer.DrawText(g, DisplayLetter(), FontHelper.UiAt(fontSize, WindowDpiValue, FontStyle.Bold), rect, Color.White,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             }
         }
 
@@ -1343,13 +1425,13 @@ namespace TelegArm.UI
 
         private async void OnSave(object sender, EventArgs e)
         {
-            string first = _first.Text.Trim();
+            string first = _first.Value.Trim();
             if (first.Length == 0) { ThemedDialog.Show(this, "Profile", "A first name is required.", "OK"); return; }   // name required
-            string last = _last.Text.Trim();
-            string about = _aboutBox.Text.Trim();
+            string last = _last.Value.Trim();
+            string about = _about.Value.Trim();
 
             // USERNAME gate (PART 3): a CHANGED username must be confirmed available, else block the whole save.
-            string newUn = (_username?.Text ?? "").Trim();
+            string newUn = (_username?.Value ?? "").Trim();
             string curUn = SelfUser?.MainUsername ?? "";
             bool unChanged = newUn.Length > 0 && newUn != curUn;   // empty = leave username unchanged (no removal)
             if (unChanged && !_usernameOk)
@@ -1365,7 +1447,7 @@ namespace TelegArm.UI
                     try { await _service.UpdateSelfUsernameAsync(newUn); }   // only after CheckUsername said available
                     catch (Exception ux)
                     {
-                        _usernameOk = false; SetUsernameStatus("✗ Taken — pick another", Color.FromArgb(210, 90, 90));
+                        _usernameOk = false; SetUsernameStatus("Taken — pick another", StatusTone.Bad);
                         ThemedDialog.Show(this, "Username", "Couldn't set that username (it may have just been taken): " + ux.Message, "OK");
                         return;   // race (USERNAME_OCCUPIED) → don't save the rest, don't claim success
                     }
@@ -1384,7 +1466,7 @@ namespace TelegArm.UI
         private void OnUsernameChanged(object sender, EventArgs e)
         {
             _usernameOk = false;
-            if (_usernameStatus != null) _usernameStatus.Text = "";
+            if (_usernameStatus != null) { _usernameStatus.Tone = StatusTone.Neutral; _usernameStatus.Text = ""; }
             _usernameCheckTimer?.Stop();
             _usernameCheckTimer?.Start();   // debounce → CheckUsernameNow after 500ms idle
         }
@@ -1392,25 +1474,25 @@ namespace TelegArm.UI
         private async void CheckUsernameNow()
         {
             _usernameCheckTimer?.Stop();
-            string u = (_username.Text ?? "").Trim();
+            string u = (_username.Value ?? "").Trim();
             string cur = SelfUser?.MainUsername ?? "";
-            if (u.Length == 0) { SetUsernameStatus("", null); _usernameOk = true; return; }                 // empty = no change
-            if (u == cur)      { SetUsernameStatus("This is your current username.", null); _usernameOk = true; return; }
-            if (!IsValidUsernameFormat(u)) { SetUsernameStatus("Invalid — 5–32 letters/digits/_ , starting with a letter.", Color.FromArgb(210, 90, 90)); _usernameOk = false; return; }
-            SetUsernameStatus("Checking…", null);
+            if (u.Length == 0) { SetUsernameStatus("", StatusTone.Neutral); _usernameOk = true; return; }                 // empty = no change
+            if (u == cur)      { SetUsernameStatus("This is your current username.", StatusTone.Neutral); _usernameOk = true; return; }
+            if (!IsValidUsernameFormat(u)) { SetUsernameStatus("Invalid — 5–32 letters/digits/_ , starting with a letter.", StatusTone.Bad); _usernameOk = false; return; }
+            SetUsernameStatus("Checking…", StatusTone.Neutral);
             bool free;
             try { free = await _service.CheckSelfUsernameAsync(u); }
-            catch { SetUsernameStatus("Couldn't check — is your VPN on?", null); _usernameOk = false; return; }
-            if (IsDisposed || (_username.Text ?? "").Trim() != u) return;   // stale: the user kept typing
+            catch { SetUsernameStatus("Couldn't check — is your VPN on?", StatusTone.Neutral); _usernameOk = false; return; }
+            if (IsDisposed || (_username.Value ?? "").Trim() != u) return;   // stale: the user kept typing
             _usernameOk = free;
-            SetUsernameStatus(free ? "✓ Available" : "✗ Taken or unavailable", free ? Color.FromArgb(60, 170, 90) : Color.FromArgb(210, 90, 90));
+            SetUsernameStatus(free ? "Available" : "Taken or unavailable", free ? StatusTone.Good : StatusTone.Bad);
         }
 
-        private void SetUsernameStatus(string text, Color? color)
+        private void SetUsernameStatus(string text, StatusTone tone)
         {
             if (_usernameStatus == null) return;
+            _usernameStatus.Tone = tone;
             _usernameStatus.Text = text;
-            _usernameStatus.ForeColor = color ?? (_dark ? Color.FromArgb(150, 150, 155) : Color.FromArgb(130, 130, 135));
         }
 
         private static bool IsValidUsernameFormat(string u)
@@ -1430,7 +1512,7 @@ namespace TelegArm.UI
             MenuItem(menu, "Set new photo…", SetProfilePhotoFlow);
             if (_avatar != null) MenuItem(menu, "Remove current photo", RemoveProfilePhotoFlow);
             menu.Closed += (s, e) => BeginInvoke((Action)menu.Dispose);
-            menu.Show(_pic, new Point(0, _pic.Height));
+            menu.Show(_pic, new Point(_pic.Width / 2 - Px(48), _pic.Height));
         }
 
         private async void SetProfilePhotoFlow()
@@ -1488,87 +1570,331 @@ namespace TelegArm.UI
                 if (_ownsAvatar && _avatar != null) { _avatar.Dispose(); _avatar = null; }
             }
             base.Dispose(disposing);
+            if (disposing && _detailsFont != null) { _detailsFont.Dispose(); _detailsFont = null; }   // after the label that used it
+        }
+
+        // ══ Icons: DRAWN with GDI+ lines/shapes, never font symbols (tofu boxes on RT 8.1) ══════════════════════════════
+        private enum ProfileIcon
+        {
+            None, Message, Bell, BellOff, Phone, More, Photo, Video, File, Audio, Link, Voice, Gif,
+            Edit, Trash, Block, Leave, Stories, Members, Dot, Check, Cross
+        }
+
+        private static class ProfileIcons
+        {
+            /// <summary>Draws <paramref name="icon"/> centred in the square <paramref name="area"/> in <paramref name="ink"/>.
+            /// The geometry lives on a 24-unit grid and scales with the area, so one icon serves the 14 px status mark and the
+            /// 26 px tile glyph at any DPI.</summary>
+            public static void Draw(Graphics g, ProfileIcon icon, Rectangle area, Color ink)
+            {
+                if (icon == ProfileIcon.None || area.Width < 6 || area.Height < 6) return;
+                var saved = g.Save();
+                try
+                {
+                    g.SmoothingMode = SmoothingMode.AntiAlias;
+                    float s = Math.Min(area.Width, area.Height) / 24f;
+                    float ox = area.X + (area.Width - 24f * s) / 2f, oy = area.Y + (area.Height - 24f * s) / 2f;
+                    float lw = Math.Max(1.25f, 1.7f * s);
+                    using (var pen = new Pen(ink, lw) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+                    using (var fill = new SolidBrush(ink))
+                    {
+                        PointF P(float x, float y) { return new PointF(ox + x * s, oy + y * s); }
+                        RectangleF R(float x, float y, float w, float h) { return new RectangleF(ox + x * s, oy + y * s, w * s, h * s); }
+                        void Ln(float x1, float y1, float x2, float y2) { g.DrawLine(pen, P(x1, y1), P(x2, y2)); }
+                        void Poly(bool closed, params float[] xy)
+                        {
+                            var pts = new PointF[xy.Length / 2];
+                            for (int i = 0; i < pts.Length; i++) pts[i] = P(xy[2 * i], xy[2 * i + 1]);
+                            if (closed) g.DrawPolygon(pen, pts); else g.DrawLines(pen, pts);
+                        }
+                        void RBox(float x, float y, float w, float h, float r)
+                        {
+                            using (var path = Round(R(x, y, w, h), r * s)) g.DrawPath(pen, path);
+                        }
+                        void BellShape()
+                        {
+                            using (var path = new GraphicsPath())
+                            {
+                                path.AddArc(R(6.5f, 3.5f, 11f, 11f), 180f, 180f);   // the dome, left to right over the top
+                                path.AddLine(P(17.5f, 9f), P(17.5f, 13f));
+                                path.AddLine(P(17.5f, 13f), P(19.5f, 16.5f));
+                                path.AddLine(P(19.5f, 16.5f), P(4.5f, 16.5f));
+                                path.AddLine(P(4.5f, 16.5f), P(6.5f, 13f));
+                                path.AddLine(P(6.5f, 13f), P(6.5f, 9f));
+                                path.CloseFigure();
+                                g.DrawPath(pen, path);
+                            }
+                            g.DrawArc(pen, R(9.5f, 14.5f, 5f, 6f), 0f, 180f);        // the clapper
+                            Ln(12f, 2.3f, 12f, 3.6f);                                 // the nub
+                        }
+
+                        switch (icon)
+                        {
+                            case ProfileIcon.Message:
+                                RBox(3f, 5.5f, 18f, 13f, 2.5f);
+                                Poly(false, 3.8f, 7.2f, 12f, 13.2f, 20.2f, 7.2f);
+                                break;
+                            case ProfileIcon.Bell:
+                                BellShape();
+                                break;
+                            case ProfileIcon.BellOff:
+                                BellShape();
+                                Ln(4f, 4f, 20f, 20f);
+                                break;
+                            case ProfileIcon.Phone:
+                                RBox(7f, 2.5f, 10f, 19f, 2.2f);
+                                Ln(10.5f, 18.4f, 13.5f, 18.4f);
+                                break;
+                            case ProfileIcon.More:
+                                g.FillEllipse(fill, R(3.1f, 10.1f, 3.8f, 3.8f));
+                                g.FillEllipse(fill, R(10.1f, 10.1f, 3.8f, 3.8f));
+                                g.FillEllipse(fill, R(17.1f, 10.1f, 3.8f, 3.8f));
+                                break;
+                            case ProfileIcon.Photo:
+                                RBox(3f, 4.5f, 18f, 15f, 2.5f);
+                                g.FillEllipse(fill, R(7.2f, 8.2f, 3.2f, 3.2f));
+                                Poly(false, 4.5f, 17.5f, 10f, 12.5f, 14f, 16.5f, 16.5f, 14.2f, 19.5f, 17.5f);
+                                break;
+                            case ProfileIcon.Video:
+                                RBox(3f, 5.5f, 18f, 13f, 2.5f);
+                                g.FillPolygon(fill, new[] { P(10f, 9f), P(10f, 15f), P(15.2f, 12f) });
+                                break;
+                            case ProfileIcon.File:
+                                Poly(true, 6.5f, 3f, 14f, 3f, 18.5f, 7.5f, 18.5f, 21f, 6.5f, 21f);
+                                Poly(false, 14f, 3.4f, 14f, 7.8f, 18.1f, 7.8f);
+                                Ln(9.5f, 13f, 15.5f, 13f);
+                                Ln(9.5f, 16.5f, 15.5f, 16.5f);
+                                break;
+                            case ProfileIcon.Audio:
+                                g.FillEllipse(fill, R(5.5f, 15f, 5.5f, 4.2f));
+                                g.FillEllipse(fill, R(14.5f, 13f, 5.5f, 4.2f));
+                                Ln(10.7f, 17f, 10.7f, 6f);
+                                Ln(19.7f, 15f, 19.7f, 4.5f);
+                                Ln(10.7f, 6.2f, 19.7f, 4.7f);
+                                break;
+                            case ProfileIcon.Link:
+                                {
+                                    // Two pill-shaped chain links, interlocked, on a 45 degree slant.
+                                    var st = g.Save();
+                                    g.TranslateTransform(ox + 12f * s, oy + 12f * s);
+                                    g.RotateTransform(-45f);
+                                    using (var a = Round(new RectangleF(-10.5f * s, -3.6f * s, 11.5f * s, 7.2f * s), 3.6f * s)) g.DrawPath(pen, a);
+                                    using (var b = Round(new RectangleF(-1f * s, -3.6f * s, 11.5f * s, 7.2f * s), 3.6f * s)) g.DrawPath(pen, b);
+                                    g.Restore(st);
+                                    break;
+                                }
+                            case ProfileIcon.Voice:
+                                RBox(9.2f, 2.8f, 5.6f, 10.5f, 2.8f);
+                                g.DrawArc(pen, R(6f, 7f, 12f, 10.5f), 0f, 180f);
+                                Ln(12f, 17.5f, 12f, 21f);
+                                Ln(9f, 21f, 15f, 21f);
+                                break;
+                            case ProfileIcon.Gif:
+                                g.DrawEllipse(pen, R(3.2f, 3.2f, 17.6f, 17.6f));
+                                g.FillPolygon(fill, new[] { P(10.3f, 8.4f), P(10.3f, 15.6f), P(16f, 12f) });
+                                break;
+                            case ProfileIcon.Edit:
+                                Poly(true, 5f, 19f, 5.8f, 15f, 15.8f, 5f, 19f, 8.2f, 9f, 18.2f);
+                                Ln(13.8f, 7f, 17f, 10.2f);
+                                break;
+                            case ProfileIcon.Trash:
+                                Ln(5f, 7f, 19f, 7f);
+                                Poly(false, 9.5f, 7f, 9.5f, 4.5f, 14.5f, 4.5f, 14.5f, 7f);
+                                Poly(false, 6.8f, 7.2f, 7.8f, 20f, 16.2f, 20f, 17.2f, 7.2f);
+                                Ln(10.5f, 10.5f, 10.5f, 16.8f);
+                                Ln(13.5f, 10.5f, 13.5f, 16.8f);
+                                break;
+                            case ProfileIcon.Block:
+                                g.DrawEllipse(pen, R(3.5f, 3.5f, 17f, 17f));
+                                Ln(6f, 6f, 18f, 18f);
+                                break;
+                            case ProfileIcon.Leave:
+                                Poly(false, 10f, 4f, 4.5f, 4f, 4.5f, 20f, 10f, 20f);
+                                Ln(9f, 12f, 20f, 12f);
+                                Poly(false, 16f, 7.5f, 20.5f, 12f, 16f, 16.5f);
+                                break;
+                            case ProfileIcon.Stories:
+                                RBox(4f, 4f, 7f, 7f, 1.8f);
+                                RBox(13f, 4f, 7f, 7f, 1.8f);
+                                RBox(4f, 13f, 7f, 7f, 1.8f);
+                                RBox(13f, 13f, 7f, 7f, 1.8f);
+                                break;
+                            case ProfileIcon.Members:
+                                g.DrawEllipse(pen, R(8.6f, 4.2f, 6.8f, 6.8f));
+                                g.DrawArc(pen, R(5f, 13.5f, 14f, 12f), 180f, 180f);
+                                break;
+                            case ProfileIcon.Dot:
+                                g.FillEllipse(fill, R(8.8f, 8.8f, 6.4f, 6.4f));
+                                break;
+                            case ProfileIcon.Check:
+                                Poly(false, 5f, 12.5f, 10f, 17.5f, 19f, 7f);
+                                break;
+                            case ProfileIcon.Cross:
+                                Ln(6f, 6f, 18f, 18f);
+                                Ln(18f, 6f, 6f, 18f);
+                                break;
+                        }
+                    }
+                }
+                finally { g.Restore(saved); }
+            }
+
+            /// <summary>A rounded rectangle in float pixels (DrawHelper.RoundedRect is int-only, too coarse at icon size).</summary>
+            private static GraphicsPath Round(RectangleF rc, float radius)
+            {
+                var path = new GraphicsPath();
+                float d = Math.Min(radius, Math.Min(rc.Width, rc.Height) / 2f) * 2f;
+                if (d < 0.5f) { path.AddRectangle(rc); return path; }
+                path.AddArc(rc.X, rc.Y, d, d, 180f, 90f);
+                path.AddArc(rc.Right - d, rc.Y, d, d, 270f, 90f);
+                path.AddArc(rc.Right - d, rc.Bottom - d, d, d, 0f, 90f);
+                path.AddArc(rc.X, rc.Bottom - d, d, d, 90f, 90f);
+                path.CloseFigure();
+                return path;
+            }
+        }
+
+        /// <summary>The big avatar's canvas: a double-buffered Panel that paints through the form's PaintAvatar. Its background
+        /// is the ambient page colour (never Transparent), so it follows the theme by itself.</summary>
+        private sealed class AvatarCanvas : Panel
+        {
+            public AvatarCanvas() { DoubleBuffered = true; }
+        }
+
+        private enum StatusTone { Neutral, Good, Bad }
+
+        /// <summary>One line of status under a field (the username's availability): dim, or a green tick / red cross with
+        /// text. Palette colours at paint time, so it follows the theme; the tick and cross are drawn, not font glyphs.</summary>
+        private sealed class StatusLine : Control
+        {
+            private StatusTone _tone;
+
+            public StatusLine()
+            {
+                SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+                SetStyle(ControlStyles.Selectable, false);
+                TabStop = false;
+            }
+
+            public StatusTone Tone
+            {
+                get { return _tone; }
+                set { if (_tone == value) return; _tone = value; Invalidate(); }
+            }
+
+            public override string Text
+            {
+                get { return base.Text; }
+                set { base.Text = value ?? ""; Invalidate(); }
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                var pal = ThemeHelper.Palette;
+                var g = e.Graphics;
+                int dpi = Dpi.Of(this);
+                g.Clear(Parent != null ? Parent.BackColor : pal.Window);
+                string text = Text;
+                if (text.Length == 0) return;
+                Color ink = _tone == StatusTone.Good ? pal.Success : _tone == StatusTone.Bad ? pal.Danger : pal.TextDim;
+                int x = Dpi.Px(SettingRow.PadX, dpi);   // lines up with the captions inside the card above
+                if (_tone != StatusTone.Neutral)
+                {
+                    int d = Dpi.Px(14, dpi);
+                    ProfileIcons.Draw(g, _tone == StatusTone.Good ? ProfileIcon.Check : ProfileIcon.Cross, Rectangle.FromLTRB(x, (Height - d) / 2, x + d, (Height - d) / 2 + d), ink);
+                    x += d + Dpi.Px(6, dpi);
+                }
+                TextRenderer.DrawText(g, text, FontHelper.ForAt(text, 9f, dpi), Rectangle.FromLTRB(x, 0, Math.Max(x + 1, Width), Height), ink,
+                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+            }
         }
 
         // ── Owner-painted action tile (icon over label) ──────────────────────
         private sealed class ActionTile : Control
         {
-            private bool _dark;
-            private Color _accent;
             private bool _hover;
             private readonly ToolTip _tip = new ToolTip();
 
-            public string Glyph, Label;
+            public ProfileIcon Icon;
+            public string Label;
             public bool Enabled2 = true;
             public string ToolTipText { set { if (!string.IsNullOrEmpty(value)) _tip.SetToolTip(this, value); } }
             public event Action Clicked;
 
-            /// <summary>Live retheme (UI-FIX-T1) — everything else is derived at paint time.</summary>
-            public void SetTheme(bool dark, Color accent) { _dark = dark; _accent = accent; Invalidate(); }
-
-            public ActionTile(bool dark, Color accent)
+            public ActionTile()
             {
-                _dark = dark; _accent = accent;
-                Size = new Size(92, 64);
                 Cursor = Cursors.Hand;
                 SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
                          | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             }
 
-            protected override void OnMouseClick(MouseEventArgs e) { base.OnMouseClick(e); if (Enabled2) Clicked?.Invoke(); }
+            protected override void OnMouseClick(MouseEventArgs e) { base.OnMouseClick(e); if (e.Button == MouseButtons.Left && Enabled2) Clicked?.Invoke(); }
             protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }
             protected override void OnMouseLeave(EventArgs e) { _hover = false; Invalidate(); base.OnMouseLeave(e); }
 
+            protected override void Dispose(bool disposing)
+            {
+                if (disposing) _tip.Dispose();
+                base.Dispose(disposing);
+            }
+
             protected override void OnPaint(PaintEventArgs e)
             {
+                var pal = ThemeHelper.Palette;
                 var g = e.Graphics;
-                g.Clear(Parent?.BackColor ?? BackColor);
+                int dpi = Dpi.Of(this);
+                g.Clear(Parent != null ? Parent.BackColor : pal.Window);
                 g.SmoothingMode = SmoothingMode.AntiAlias;
-                var r = new Rectangle(0, 0, Width - 1, Height - 1);
-                Color fill = _hover && Enabled2
-                    ? (_dark ? Color.FromArgb(54, 54, 58) : Color.FromArgb(232, 236, 240))
-                    : (_dark ? Color.FromArgb(42, 42, 46) : Color.FromArgb(243, 245, 248));
+                var r = new Rectangle(Point.Empty, new Size(Math.Max(1, Width - 1), Math.Max(1, Height - 1)));
+                Color fill = _hover && Enabled2 ? ColorMath.Mix(pal.Card, pal.Text, 0.07f) : pal.Card;
                 using (var b = new SolidBrush(fill))
-                using (var p = DrawHelper.RoundedRect(r, 10))
-                    g.FillPath(b, p);
+                using (var pen = new Pen(pal.Divider, 1f))
+                using (var path = DrawHelper.RoundedRect(r, Dpi.Px(10, dpi)))
+                {
+                    g.FillPath(b, path);
+                    g.DrawPath(pen, path);
+                }
 
-                Color fg = Enabled2 ? _accent : (_dark ? Color.FromArgb(110, 110, 114) : Color.FromArgb(170, 170, 174));
-                using (var gf = FontHelper.Ui(14f))
-                    TextRenderer.DrawText(g, Glyph, gf, new Rectangle(0, 7, Width, 24), fg,
-                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-                Color lc = Enabled2 ? (_dark ? Color.FromArgb(220, 220, 224) : Color.FromArgb(60, 60, 64)) : fg;
-                using (var lf = FontHelper.Ui(8f))
-                    TextRenderer.DrawText(g, Label, lf, new Rectangle(0, 36, Width, 20), lc,
-                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                Color ink = Enabled2 ? pal.AccentFg : pal.TextDisabled;
+                int isz = Dpi.Px(26, dpi);
+                ProfileIcons.Draw(g, Icon, new Rectangle((Width - isz) / 2, Dpi.Px(8, dpi), isz, isz), ink);
+                Color lc = Enabled2 ? pal.Text : pal.TextDisabled;
+                string label = Label ?? "";
+                TextRenderer.DrawText(g, label, FontHelper.ForAt(label, 9f, dpi),
+                    Rectangle.FromLTRB(0, Dpi.Px(38, dpi), Width, Dpi.Px(58, dpi)), lc,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
             }
         }
 
         // ── Owner-painted list row (icon + label + trailing count) ───────────
-        private sealed class ProfileRow : Control
+        /// <summary>A tappable row: drawn icon, label, optional trailing count, optional right-click / long-press. A
+        /// <see cref="SettingRow"/>: inside a <see cref="SettingGroup"/> it takes the card's width, its hairlines and its
+        /// rounded ends; outside one (the gallery's list) it clears to the page. A tab stop, Space activates it.</summary>
+        private sealed class ProfileRow : SettingRow
         {
-            private bool _dark;
-            private Color _accent;
+            private const int RowLogical = 48, IconBox = 22, IconGap = 14;
             private bool _hover;
 
-            public string Glyph, Label, Trailing;
+            public ProfileIcon Icon;
+            public string Trailing;
             public bool Danger;
             public event Action Clicked;
-
-            /// <summary>Live retheme (UI-FIX-T1) — everything else is derived at paint time.</summary>
-            public void SetTheme(bool dark, Color accent) { _dark = dark; _accent = accent; Invalidate(); }
 
             /// <summary>Right-click / touch-and-hold / menu key (screen point). Only fires if subscribed.</summary>
             public event EventHandler<Point> ContextMenuRequested;
             private const int WM_CONTEXTMENU = 0x007B;
 
-            public ProfileRow(bool dark, Color accent)
+            /// <summary>The row's text (the base caption).</summary>
+            public string Label { get { return Text; } set { Text = value; } }
+
+            public ProfileRow() : base("", true)
             {
-                _dark = dark; _accent = accent;
-                Height = 48;
-                Cursor = Cursors.Hand;
-                SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
-                         | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+                SetStyle(ControlStyles.StandardDoubleClick, true);   // SettingRow turns it off for steppers; a double tap here must act ONCE (Block has no confirm)
+                AccessibleRole = AccessibleRole.PushButton;
+                Refit();
             }
+
+            public override int HeightFor(int width, int dpi) { return Dpi.Px(RowLogical, dpi); }
 
             protected override void WndProc(ref System.Windows.Forms.Message m)
             {
@@ -1584,42 +1910,62 @@ namespace TelegArm.UI
                 base.WndProc(ref m);
             }
 
-            protected override void OnMouseClick(MouseEventArgs e) { base.OnMouseClick(e); Clicked?.Invoke(); }
+            protected override void OnMouseClick(MouseEventArgs e) { base.OnMouseClick(e); if (e.Button == MouseButtons.Left) Clicked?.Invoke(); }
             protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }
             protected override void OnMouseLeave(EventArgs e) { _hover = false; Invalidate(); base.OnMouseLeave(e); }
 
+            protected override void OnKeyDown(KeyEventArgs e)
+            {
+                base.OnKeyDown(e);
+                if (e.KeyCode != Keys.Space) return;
+                Clicked?.Invoke();
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+            }
+
             protected override void OnPaint(PaintEventArgs e)
             {
+                var pal = ThemeHelper.Palette;
                 var g = e.Graphics;
-                g.Clear(Parent?.BackColor ?? BackColor);
-                if (_hover)
-                    using (var b = new SolidBrush(_dark ? Color.FromArgb(46, 46, 50) : Color.FromArgb(236, 239, 243)))
-                        g.FillRectangle(b, 0, 0, Width, Height);
+                int dpi = Dpi.Of(this);
+                PaintBack(g, pal);
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                int padX = Dpi.Px(PadX, dpi);
 
-                Color danger = Color.FromArgb(222, 74, 74);
-                Color glyphC = Danger ? danger : _accent;
-                using (var gf = FontHelper.Ui(12f))
-                    TextRenderer.DrawText(g, Glyph, gf, new Rectangle(12, 0, 28, Height), glyphC,
-                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                if (_hover && Enabled)
+                {
+                    // An inset pill, never the full row: a full-width fill would square off the card's rounded ends.
+                    int ix = Dpi.Px(4, dpi), iy = Dpi.Px(2, dpi);
+                    var hr = new Rectangle(ix, iy, Math.Max(1, Width - 2 * ix - 1), Math.Max(1, Height - 2 * iy - 1));
+                    using (var path = DrawHelper.RoundedRect(hr, Dpi.Px(6, dpi)))
+                    using (var b = new SolidBrush(ColorMath.Mix(Backdrop(pal), pal.Text, 0.07f)))
+                        g.FillPath(b, path);
+                }
 
-                Color labelC = Danger ? danger : (_dark ? Color.FromArgb(228, 228, 232) : Color.FromArgb(35, 35, 38));
-                using (var lf = FontHelper.Ui(10f))
-                    TextRenderer.DrawText(g, Label, lf, new Rectangle(50, 0, Width - 120, Height), labelC,
-                        TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                int isz = Dpi.Px(IconBox, dpi);
+                ProfileIcons.Draw(g, Icon, new Rectangle(padX, (Height - isz) / 2, isz, isz), Danger ? pal.Danger : pal.AccentFg);
+                int tx = padX + isz + Dpi.Px(IconGap, dpi);
 
-                if (!string.IsNullOrEmpty(Trailing))
-                    using (var tf = FontHelper.Ui(9.5f))
-                        TextRenderer.DrawText(g, Trailing, tf, new Rectangle(Width - 72, 0, 60, Height),
-                            _dark ? Color.FromArgb(150, 150, 155) : Color.FromArgb(135, 135, 140),
-                            TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
+                int right = Width - padX;
+                string trailing = Trailing;
+                if (!string.IsNullOrEmpty(trailing))
+                {
+                    Font tf = FontHelper.ForAt(trailing, 9.5f, dpi);
+                    int tw = TextRenderer.MeasureText(trailing, tf, Size.Empty, BaseFlags | TextFormatFlags.SingleLine).Width;
+                    DrawTextLine(g, trailing, tf, pal.TextDim, Rectangle.FromLTRB(right - tw, 0, right, Height), true, false);
+                    right -= tw + Dpi.Px(IconGap, dpi);
+                }
+                DrawTextLine(g, Text, FontHelper.ForAt(Text, CaptionPt, dpi), Danger ? pal.Danger : pal.Text,
+                    Rectangle.FromLTRB(tx, 0, Math.Max(tx + 1, right), Height), false, true);
+
+                PaintFocusRing(g, pal, Rectangle.Inflate(ClientRectangle, -Dpi.Px(7, dpi), -Dpi.Px(5, dpi)), Dpi.Px(6, dpi), dpi);
             }
         }
 
-        /// <summary>One owner-painted media thumbnail (image, or a file icon + name).</summary>
+        /// <summary>One owner-painted media thumbnail (image, or a file icon + name). The creator sets Size.</summary>
         private sealed class MediaThumb : Control
         {
             private readonly int _index;
-            private readonly bool _dark;
             private Image _img;
             private string _file;
 
@@ -1629,10 +1975,9 @@ namespace TelegArm.UI
             public event EventHandler<Point> ContextMenuRequested;
             private const int WM_CONTEXTMENU = 0x007B;
 
-            public MediaThumb(int index, bool dark)
+            public MediaThumb(int index)
             {
-                _index = index; _dark = dark;
-                Size = new Size(88, 88);
+                _index = index;
                 Cursor = Cursors.Hand;
                 SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
                          | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
@@ -1659,8 +2004,10 @@ namespace TelegArm.UI
 
             protected override void OnPaint(PaintEventArgs e)
             {
+                var pal = ThemeHelper.Palette;
                 var g = e.Graphics;
-                g.Clear(_dark ? Color.FromArgb(50, 50, 53) : Color.FromArgb(228, 228, 232));
+                int dpi = Dpi.Of(this);
+                g.Clear(ColorMath.Mix(pal.Window, pal.Text, 0.10f));
                 if (_img != null)
                 {
                     g.InterpolationMode = InterpolationMode.HighQualityBicubic;
@@ -1670,9 +2017,11 @@ namespace TelegArm.UI
                 }
                 else if (_file != null)
                 {
-                    DrawHelper.DrawFileIcon(g, new Rectangle(20, 12, 48, 48), _file);
-                    TextRenderer.DrawText(g, _file, FontHelper.Ui(7.5f), new Rectangle(2, 64, 84, 22),
-                        _dark ? Color.FromArgb(210, 210, 215) : Color.FromArgb(60, 60, 65),
+                    int isz = Dpi.Px(48, dpi);
+                    DrawHelper.DrawFileIcon(g, new Rectangle((Width - isz) / 2, Dpi.Px(12, dpi), isz, isz), _file);
+                    TextRenderer.DrawText(g, _file, FontHelper.UiAt(7.5f, dpi),
+                        Rectangle.FromLTRB(Dpi.Px(2, dpi), Dpi.Px(64, dpi), Width - Dpi.Px(2, dpi), Dpi.Px(86, dpi)),
+                        pal.Text,
                         TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.EndEllipsis | TextFormatFlags.WordBreak);
                 }
             }
@@ -1694,56 +2043,69 @@ namespace TelegArm.UI
             public string Url;         // link rows only
         }
 
-        private sealed class MediaCategoryForm : Form
+        /// <summary>The category gallery: a fixed-size <see cref="AppForm"/> (the app's own title bar, like every other
+        /// window since 2.x) holding the thumbnail grid or the list rows in the scroll stack.</summary>
+        private sealed class MediaCategoryForm : AppForm
         {
             private readonly ProfileForm _owner;
             private readonly TelegramService _service;
             private readonly InputPeer _peer;
             private readonly MessagesFilter _filter;
-            private readonly bool _listMode, _dark;
-            private readonly Color _accent;
+            private readonly bool _listMode;
+            private readonly int _rowWidth;
 
             private readonly FlowLayoutPanel _grid;
-            private readonly Controls.NoNativeScrollPanel _scroll;
+            private readonly NoNativeScrollPanel _scroll;
             private readonly List<MediaItem> _items = new List<MediaItem>();
             private int _offsetId;
             private bool _loading, _end;
 
             public MediaCategoryForm(ProfileForm owner, TelegramService service, InputPeer peer, MessagesFilter filter,
-                                     string title, bool listMode, bool dark, Color accent)
+                                     string title, bool listMode) : base(false)
             {
-                _owner = owner; _service = service; _peer = peer; _filter = filter; _listMode = listMode; _dark = dark; _accent = accent;
+                _owner = owner; _service = service; _peer = peer; _filter = filter; _listMode = listMode;
 
                 Text = title;
-                FormBorderStyle = FormBorderStyle.FixedDialog;
-                MaximizeBox = false; MinimizeBox = false;
-                TelegArm.Helpers.ThemedChrome.SetAppIcon(this);   // app icon in the taskbar / Alt-Tab / title bar
                 StartPosition = FormStartPosition.CenterParent;
-                ClientSize = new Size(listMode ? 420 : 380, 560);
-                BackColor = dark ? Color.FromArgb(34, 34, 37) : Color.FromArgb(248, 248, 250);
-                KeyPreview = true;
-                KeyDown += (s, e) => { if (e.KeyCode == Keys.Escape) Close(); };
+                ShowInTaskbar = false;
+                MinimizeBox = false; MaximizeBox = false;
+                Bar.CanMinimize = false;
+                int inner = Px(listMode ? 420 : 380);   // the 1.x client width; the title bar and frame come on top
+                Size = new Size(inner + Padding.Horizontal, Bar.Height + Px(560) + Padding.Bottom);
 
-                _scroll = new Controls.NoNativeScrollPanel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = BackColor };
+                var pal = ThemeHelper.Palette;
+                var host = new Panel { Dock = DockStyle.Fill };
+                Content.Controls.Add(host);
+                _scroll = ScrollHost.Wrap(host, pal.Dark, pal.Accent);   // NoNativeScrollPanel + themed bar + touch momentum
+                _rowWidth = inner - ThemedScrollBar.LaneWidth(WindowDpiValue) - 2 * Px(8);
                 _grid = new FlowLayoutPanel
                 {
                     Dock = DockStyle.Top,
                     AutoSize = true,
                     WrapContents = !listMode,
                     FlowDirection = listMode ? FlowDirection.TopDown : FlowDirection.LeftToRight,
-                    BackColor = BackColor,
-                    Padding = new Padding(8)
+                    Padding = PadPx(WindowDpiValue, 8, 8, 8, 8)
                 };
                 _scroll.Controls.Add(_grid);
-                Controls.Add(_scroll);
-                Controls.Add(new Controls.ThemedScrollBar(_scroll, dark, accent) { Dock = DockStyle.Right });
                 _scroll.Scroll += (s, e) => MaybeMore();
-                TelegArm.UI.Controls.TouchScroller.Enable(_scroll, horizontal: false);
                 // Tiles/rows live in the inner _grid (not the surface), so register each for WM_TOUCH
                 // ourselves — long-press over a thumb then synthesizes WM_CONTEXTMENU (pan still pans _scroll).
-                _grid.ControlAdded += (s, e) => TelegArm.UI.Controls.TouchScroller.RegisterControl(e.Control);
+                _grid.ControlAdded += (s, e) => TouchScroller.RegisterControl(e.Control);
 
                 Load += (s, e) => LoadPage();
+            }
+
+            protected override void OnThemeChanged()
+            {
+                base.OnThemeChanged();
+                Invalidate(true);
+            }
+
+            /// <summary>Esc closes the gallery (1.x: KeyPreview + KeyDown).</summary>
+            protected override bool ProcessDialogKey(Keys keyData)
+            {
+                if (keyData == Keys.Escape) { Close(); return true; }
+                return base.ProcessDialogKey(keyData);
             }
 
             private void MaybeMore()
@@ -1780,7 +2142,7 @@ namespace TelegArm.UI
                 if (mi == null) return;
                 int index = _items.Count;
                 _items.Add(mi);
-                var tile = new MediaThumb(index, _dark) { Margin = new Padding(2) };
+                var tile = new MediaThumb(index) { Margin = PadPx(WindowDpiValue, 2, 2, 2, 2), Size = new Size(Px(88), Px(88)) };
                 var entry = new GalleryEntry { Ctl = tile, Item = mi, MessageId = m.ID, Type = mi.Type };
                 tile.Clicked += i => OpenEntry(entry);
                 tile.ContextMenuRequested += (s, pt) => ShowItemMenu(entry, pt);
@@ -1809,7 +2171,7 @@ namespace TelegArm.UI
 
             private void AddListRow(TL.Message m)
             {
-                var row = new ProfileRow(_dark, _accent) { Glyph = "•", Label = ListRowText(m), Width = 392 };
+                var row = new ProfileRow { Icon = ProfileIcon.Dot, Label = ListRowText(m), Width = _rowWidth };
                 var mi = MediaClassifier.FromMessage(m);
                 var entry = new GalleryEntry { Ctl = row, Item = mi, MessageId = m.ID };
                 if (mi != null) { _items.Add(mi); entry.Type = mi.Type; }
@@ -1884,7 +2246,7 @@ namespace TelegArm.UI
 
             private void MenuItem(ContextMenuStrip menu, string text, Action action)
             {
-                var it = new ToolStripMenuItem(text) { ForeColor = _dark ? Color.White : Color.FromArgb(30, 30, 30) };
+                var it = new ToolStripMenuItem(text);   // the themed menu supplies the ink
                 it.Click += (s, e) => BeginInvoke(action);
                 menu.Items.Add(it);
             }

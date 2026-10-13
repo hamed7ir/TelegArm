@@ -114,7 +114,33 @@ namespace TelegArm.UI.Controls
         /// <summary>The height this row needs at outer width <paramref name="width"/> on a <paramref name="dpi"/> display.
         /// Fixed rows return their logical height in pixels; rows whose height follows their width (NoteRow, a stacked
         /// SegmentedRow) measure. Also lets a page size a dialog before it is shown.</summary>
-        public virtual int HeightFor(int width, int dpi) { return Dpi.Px(DefaultHeight, dpi); }
+        public virtual int HeightFor(int width, int dpi) { return RowHeight(dpi); }
+
+        // ── the subtitle (step 2.6) ──────────────────────────────────────────────────────────────────────────
+
+        /// <summary>The height of a row with a subtitle, in logical pixels.</summary>
+        public const int SubtitledHeight = 64;
+        protected const float SubtitlePt = 8.75f;
+        private string _subtitle;
+
+        /// <summary>A dim second line under the caption (Settings explains rows this way: "Off silences everything…").
+        /// Null or empty = none. One line, ellipsized; a row with one is <see cref="SubtitledHeight"/> tall.</summary>
+        public string Subtitle
+        {
+            get { return _subtitle; }
+            set
+            {
+                value = string.IsNullOrEmpty(value) ? null : value;
+                if (value == _subtitle) return;
+                _subtitle = value;
+                _fitWidth = -1;
+                if (!Dpi.Busy) Refit();
+                Invalidate();
+            }
+        }
+
+        /// <summary>The fixed height of this row at <paramref name="dpi"/>: taller when it has a subtitle.</summary>
+        protected int RowHeight(int dpi) { return Dpi.Px(_subtitle == null ? DefaultHeight : SubtitledHeight, dpi); }
 
         /// <summary>Sets Height to <see cref="HeightFor"/> at the DPI of the row's window. SettingGroup calls it on every
         /// stack; a row calls it itself when it is parented, resized, re-captioned or its DPI changes.</summary>
@@ -233,10 +259,21 @@ namespace TelegArm.UI.Controls
             TextRenderer.DrawText(g, text, font, r, ink, flags);
         }
 
-        /// <summary>The caption, left-aligned and vertically centred in <paramref name="r"/>.</summary>
+        /// <summary>The caption, left-aligned and vertically centred in <paramref name="r"/> — with the subtitle (when there
+        /// is one) under it, the pair centred together.</summary>
         protected void DrawCaption(Graphics g, Palette p, Rectangle r, int dpi)
         {
-            DrawTextLine(g, Text, FontHelper.ForAt(Text, CaptionPt, dpi), Dimmed ? p.TextDisabled : p.Text, r, false, true);
+            var capFont = FontHelper.ForAt(Text, CaptionPt, dpi);
+            if (_subtitle == null)
+            {
+                DrawTextLine(g, Text, capFont, Dimmed ? p.TextDisabled : p.Text, r, false, true);
+                return;
+            }
+            var subFont = FontHelper.ForAt(_subtitle, SubtitlePt, dpi);
+            int capH = LineHeight(capFont), subH = LineHeight(subFont), gap = Dpi.Px(2, dpi);
+            int top = r.Y + Math.Max(0, (r.Height - capH - gap - subH) / 2);
+            DrawTextLine(g, Text, capFont, Dimmed ? p.TextDisabled : p.Text, new Rectangle(r.X, top, r.Width, capH), false, true);
+            DrawTextLine(g, _subtitle, subFont, p.TextDim, new Rectangle(r.X, top + capH + gap, r.Width, subH), false, true);
         }
 
         /// <summary>The accent focus ring: a rounded outline a few pixels outside <paramref name="target"/>, drawn only
@@ -764,7 +801,7 @@ namespace TelegArm.UI.Controls
 
         public override int HeightFor(int width, int dpi)
         {
-            if (_box == null) return Dpi.Px(DefaultHeight, dpi);
+            if (_box == null) return RowHeight(dpi);
             EnsureFont(dpi);
             return Dpi.Px(TopPad, dpi) + CaptionBand(dpi) + _box.PreferredFieldHeight + Dpi.Px(BottomPad, dpi);
         }
@@ -1078,7 +1115,7 @@ namespace TelegArm.UI.Controls
             int stripW = segW * n;
             if (!geo.Stacked)
             {
-                geo.Height = Dpi.Px(DefaultHeight, dpi);
+                geo.Height = RowHeight(dpi);
                 geo.Strip = new Rectangle(width - padX - stripW, (geo.Height - stripH) / 2, stripW, stripH);
                 geo.Caption = new Rectangle(padX, 0, Math.Max(1, geo.Strip.X - gap - padX), geo.Height);
             }

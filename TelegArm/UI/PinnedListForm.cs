@@ -32,7 +32,7 @@ namespace TelegArm.UI
             ShowInTaskbar = false;
             StartPosition = FormStartPosition.Manual;
             Size = new Size(380, 460);
-            TelegArm.Helpers.ThemedChrome.SetAppIcon(this);   // app icon in Alt-Tab
+            TelegArm.Helpers.AppIcon.Set(this);   // app icon in Alt-Tab
             BackColor = dark ? Color.FromArgb(30, 30, 33) : Color.FromArgb(248, 248, 250);
 
             var header = new Panel { Dock = DockStyle.Top, Height = 38, BackColor = dark ? Color.FromArgb(40, 40, 44) : Color.FromArgb(238, 238, 242) };

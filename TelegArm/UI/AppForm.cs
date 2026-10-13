@@ -59,7 +59,7 @@ namespace TelegArm.UI
             AutoScaleMode = AutoScaleMode.None;
             DoubleBuffered = true;
             StartPosition = FormStartPosition.CenterScreen;
-            ThemedChrome.SetAppIcon(this);
+            AppIcon.Set(this);
             MaximizeBox = resizable;
             MinimizeBox = true;
             FormBorderStyle = CustomChrome ? FormBorderStyle.None : (resizable ? FormBorderStyle.Sizable : FormBorderStyle.FixedSingle);
@@ -72,6 +72,22 @@ namespace TelegArm.UI
             Recolor();
             ThemeHelper.ThemeChanged += OnThemeChangedInternal;
         }
+
+        /// <summary>Redesign step 2.5 — this window is EMBEDDED as a pane (TopLevel = false inside another form, e.g. the
+        /// profile in MainForm's Info dock): no title bar, no custom chrome, no resize gutter, no hit-testing of our own
+        /// (a pane must never answer HTCAPTION — the user would drag it around inside its host). Call in the subclass
+        /// constructor, before the handle exists; the caller then sets TopLevel = false.</summary>
+        protected void UseAsPane()
+        {
+            CustomChrome = false;
+            FormBorderStyle = FormBorderStyle.None;
+            if (Bar != null) Bar.Visible = false;
+            Padding = Padding.Empty;
+            IsPane = true;
+        }
+
+        /// <summary>True after <see cref="UseAsPane"/>.</summary>
+        public bool IsPane { get; private set; }
 
         int IDpiHost.Dpi { get { return _windowDpi.Dpi; } }
 

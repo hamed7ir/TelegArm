@@ -11,47 +11,34 @@ namespace TelegArm.UI
     /// current names. No network here: the caller reads <see cref="FirstNameValue"/>/<see cref="LastNameValue"/>
     /// on <see cref="DialogResult.OK"/> and pushes them via <c>TelegramService.EditContactAsync</c>
     /// (contacts.addContact re-adds the existing user = a rename). A first name is required (Telegram needs one).
+    ///
+    /// Redesign step 2.6b: a <see cref="DialogForm"/> (was a plain Form + ThemedChrome.Apply) — the reference conversion
+    /// for the other ThemedChrome callers (see mdfiles/PHASE2-CONVERSION-GUIDE.md). <paramref name="dark"/> and
+    /// <paramref name="accent"/> are kept for the callers and no longer read: the palette follows the theme live.
     /// </summary>
-    public sealed class EditContactForm : Form
+    public sealed class EditContactForm : DialogForm
     {
-        private readonly TextBox _first, _last;
+        private readonly TextRow _first, _last;
 
-        public string FirstNameValue { get { return _first.Text.Trim(); } }
-        public string LastNameValue { get { return _last.Text.Trim(); } }
+        public string FirstNameValue { get { return _first.Value.Trim(); } }
+        public string LastNameValue { get { return _last.Value.Trim(); } }
 
-        public EditContactForm(string first, string last, bool dark, Color accent)
+        public EditContactForm(string first, string last, bool dark, Color accent) : base("Edit contact", 380, 260)
         {
-            Color fg = dark ? Color.FromArgb(235, 235, 235) : Color.FromArgb(20, 20, 20);
-            Color sub = dark ? Color.FromArgb(155, 155, 155) : Color.FromArgb(120, 120, 120);
-            Color field = dark ? Color.FromArgb(54, 54, 58) : Color.White;
+            _first = new TextRow("First name", first ?? "");
+            _last = new TextRow("Last name", last ?? "");
+            PopulateBody(_first, _last);
 
-            Text = "Edit contact";
-            StartPosition = FormStartPosition.CenterParent;
-            MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
-            ClientSize = new Size(360, 210 + ThemedChrome.BarH);
-            var content = ThemedChrome.Apply(this, "Edit contact", accent, dark);
-
-            int y = 16;
-            content.Controls.Add(new Label { Text = "First name", Left = 16, Top = y, Width = 320, ForeColor = sub, Font = FontHelper.Ui(9f) }); y += 22;
-            _first = new TextBox { Left = 16, Top = y, Width = 324, Height = 28, Text = first ?? "", BackColor = field, ForeColor = fg, BorderStyle = BorderStyle.FixedSingle, Font = FontHelper.Ui(11f) };
-            content.Controls.Add(_first); y += 44;
-
-            content.Controls.Add(new Label { Text = "Last name", Left = 16, Top = y, Width = 320, ForeColor = sub, Font = FontHelper.Ui(9f) }); y += 22;
-            _last = new TextBox { Left = 16, Top = y, Width = 324, Height = 28, Text = last ?? "", BackColor = field, ForeColor = fg, BorderStyle = BorderStyle.FixedSingle, Font = FontHelper.Ui(11f) };
-            content.Controls.Add(_last); y += 48;
-
-            var save = new RoundedButton { Text = "Save", Left = content.Width - 104, Top = y, Width = 92, Height = 38, Kind = RoundedButtonKind.Primary, Font = FontHelper.Ui(10.5f, FontStyle.Bold) };
+            var save = AddFooterButton("Save", RoundedButtonKind.Primary, DialogResult.None);   // first added = rightmost
             save.Click += (s, e) =>
             {
-                if (_first.Text.Trim().Length == 0) { ThemedDialog.Show(this, "Edit contact", "A contact needs a first name.", "OK"); return; }
-                DialogResult = DialogResult.OK; Close();
+                if (_first.Value.Trim().Length == 0) { ThemedDialog.Show(this, "Edit contact", "A contact needs a first name.", "OK"); return; }
+                DialogResult = DialogResult.OK;
             };
-            var cancel = new RoundedButton { Text = "Cancel", Left = content.Width - 200, Top = y, Width = 86, Height = 38, Kind = RoundedButtonKind.Secondary };
-            cancel.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
-            content.Controls.Add(save); content.Controls.Add(cancel);
-
-            AcceptButton = save; CancelButton = cancel;
-            ActiveControl = _first;
+            CancelButton = AddFooterButton("Cancel", RoundedButtonKind.Neutral, DialogResult.Cancel);
+            AcceptButton = save;
+            FocusOnShow(_first.Field.Inner);
+            FitToContent();
         }
     }
 }

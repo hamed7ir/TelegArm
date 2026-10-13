@@ -56,7 +56,7 @@ namespace TelegArm.UI
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.Manual;
             ShowInTaskbar = false;
-            TelegArm.Helpers.ThemedChrome.SetAppIcon(this);   // app icon in Alt-Tab
+            TelegArm.Helpers.AppIcon.Set(this);   // app icon in Alt-Tab
             Size = new Size(380, 380);
             BackColor = dark ? Color.FromArgb(40, 40, 43) : Color.FromArgb(245, 245, 247);
             if (!embedded)

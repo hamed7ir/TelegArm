@@ -20,6 +20,9 @@ namespace TelegArm.UI
     /// What must never happen is the secret reaching durable storage we control: no log line beyond
     /// <see cref="ProxyUrl.SafeForLog"/> (host:port), no temp file, no saved image, no Clipboard.SetImage.
     /// §2d's rule covers anything DERIVED from the secret, and a QR is the secret in another alphabet.
+    ///
+    /// Redesign step 2.6b: this is a static helper, not a form — the one window it opens, the QR sheet, is a private
+    /// <see cref="DialogForm"/> (was a plain Form + ThemedChrome.Apply). The public surface is unchanged.
     /// </summary>
     public static class ProxyShare
     {
@@ -72,41 +75,70 @@ namespace TelegArm.UI
             if (string.IsNullOrEmpty(url)) return;
             Logger.Diag("[PROXYSHARE] QR shown for " + ProxyUrl.SafeForLog(url));   // host:port — NEVER the payload
 
-            bool dark = ThemeHelper.IsDark;
-            Color accent = ThemeHelper.GetWindowsAccentColor();
-            Color bg = dark ? Color.FromArgb(40, 40, 44) : Color.FromArgb(248, 248, 250);
-            Color sub = dark ? Color.FromArgb(150, 150, 156) : Color.FromArgb(120, 120, 126);
-
-            const int Side = 300, Pad = 16;
-            using (var f = new Form())
+            using (var f = new QrDialog(url))
             {
-                f.MaximizeBox = false; f.MinimizeBox = false;
-                f.StartPosition = FormStartPosition.CenterParent;
-                f.Font = FontHelper.Ui(9.5f);
-                // ⚠ + BarH — ThemedChrome carves its caption OUT of the client area (ThemedChrome.cs:11).
-                f.ClientSize = new Size(Side + Pad * 2, Side + Pad * 2 + 22 + ThemedChrome.BarH);
-                var content = ThemedChrome.Apply(f, "Proxy QR Code", accent, dark);
-                content.BackColor = bg;
-
-                // ⚠ BLACK ON WHITE REGARDLESS OF THEME. A theme-tinted QR is a QR that doesn't scan, and
-                // that failure looks like a bad link rather than a bad render.
-                var qr = new QrControl
-                {
-                    Left = Pad, Top = Pad, Width = Side, Height = Side,
-                    Dark = Color.Black, Light = Color.White
-                };
-                qr.SetPayload(url);
-                content.Controls.Add(qr);
-
-                var cap = new Label
-                {
-                    Left = Pad, Top = Pad + Side + 2, Width = Side, Height = 20,
-                    Text = ProxyUrl.SafeForLog(url), ForeColor = sub, BackColor = bg,
-                    Font = FontHelper.Ui(9f), TextAlign = ContentAlignment.MiddleCenter
-                };
-                content.Controls.Add(cap);
-
                 if (owner != null) f.ShowDialog(owner); else f.ShowDialog();
+            }
+        }
+
+        /// <summary>The QR sheet: the code and, under it, host:port. Esc, Enter, Close and ✕ all dismiss it.</summary>
+        private sealed class QrDialog : DialogForm
+        {
+            private const int SheetW = 360;
+
+            public QrDialog(string url) : base("Proxy QR Code", SheetW, 480)
+            {
+                PopulateBody(new QrRow(url));
+                var close = AddFooterButton("Close", RoundedButtonKind.Neutral, DialogResult.Cancel);
+                CancelButton = close;
+                AcceptButton = close;
+                FitToContent();
+            }
+        }
+
+        /// <summary>The code, centred in the row, with host:port under it (the caption — never the payload).
+        /// A SettingRow so it brings the kit's DPI refit and theme handling; it paints on the window colour.
+        /// ⚠ BLACK ON WHITE REGARDLESS OF THEME. A theme-tinted QR is a QR that doesn't scan, and that failure
+        /// looks like a bad link rather than a bad render.</summary>
+        private sealed class QrRow : SettingRow
+        {
+            private const int Side = 300, PadTop = 12, PadBottom = 10, CaptionGap = 4, CaptionH = 20;
+            private const float CapPt = 9f;
+            private readonly QrControl _qr;
+
+            public QrRow(string url) : base(ProxyUrl.SafeForLog(url), false)
+            {
+                _qr = new QrControl { Dark = Color.Black, Light = Color.White, AccessibleName = "QR code" };
+                _qr.SetPayload(url);
+                Controls.Add(_qr);
+                AccessibleRole = AccessibleRole.Grouping;
+                Refit();
+            }
+
+            public override int HeightFor(int width, int dpi)
+            {
+                return Dpi.Px(PadTop + Side + CaptionGap + CaptionH + PadBottom, dpi);
+            }
+
+            protected override void OnLayout(LayoutEventArgs e)
+            {
+                base.OnLayout(e);
+                if (_qr == null) return;
+                int dpi = Dpi.Of(this);
+                int side = Math.Max(1, Math.Min(Dpi.Px(Side, dpi), Width - 2 * Dpi.Px(PadX, dpi)));
+                _qr.SetBounds((Width - side) / 2, Dpi.Px(PadTop, dpi), side, side);
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                var p = ThemeHelper.Palette;
+                var g = e.Graphics;
+                int dpi = Dpi.Of(this), padX = Dpi.Px(PadX, dpi);
+                PaintBack(g, p);
+                if (Text.Length == 0 || _qr == null) return;
+                var r = new Rectangle(padX, _qr.Bottom + Dpi.Px(CaptionGap, dpi), Math.Max(1, Width - 2 * padX), Dpi.Px(CaptionH, dpi));
+                TextRenderer.DrawText(g, Text, FontHelper.ForAt(Text, CapPt, dpi), r, p.TextDim,
+                    BaseFlags | TextFormatFlags.SingleLine | TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
             }
         }
     }

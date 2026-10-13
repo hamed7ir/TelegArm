@@ -56,6 +56,7 @@ namespace TelegArm.UI
                 Padding = new Padding(0, Px(11), Px(14), Px(11)),
             };
             var bodyHost = new Panel { Dock = DockStyle.Fill };
+            BodyHost = bodyHost;
             Content.Controls.Add(bodyHost);   // Fill first: docking takes the last-added (the footer) first
             Content.Controls.Add(Footer);
             Body = ScrollHost.Wrap(bodyHost, p.Dark, p.Accent);
@@ -84,6 +85,47 @@ namespace TelegArm.UI
             };
             Footer.Controls.Add(b);
             return b;
+        }
+
+        /// <summary>The panel between the title bar and the footer. It holds <see cref="Body"/> (the scrolling row stack) and
+        /// its scrollbar. A dialog whose content scrolls by itself — a picker's list, a grid — calls
+        /// <see cref="UseOwnBody"/> instead of stacking rows.</summary>
+        protected readonly Panel BodyHost;
+
+        /// <summary>Replaces the row stack with <paramref name="content"/>, docked Fill (step 2.6b: pickers and lists bring their
+        /// own ScrollHost / list). Keep TelegArm's scroll stack inside it — never a native scrollbar (white on RT).</summary>
+        protected void UseOwnBody(Control content)
+        {
+            BodyHost.SuspendLayout();
+            try
+            {
+                foreach (Control c in BodyHost.Controls) c.Visible = false;   // the row stack and its bar stay, unused
+                content.Dock = DockStyle.Fill;
+                BodyHost.Controls.Add(content);
+                content.BringToFront();
+            }
+            finally { BodyHost.ResumeLayout(true); }
+        }
+
+        /// <summary>Sets the dialog's height to fit its rows at the current width: title bar + rows + footer, the body capped at
+        /// <paramref name="maxBodyLogical"/> (taller content scrolls in the body). Call after PopulateBody and the footer.</summary>
+        protected void FitToContent(int maxBodyLogical = 560)
+        {
+            _fitMax = maxBodyLogical;
+            Fit();
+        }
+
+        // Called from a constructor, FitToContent measures before the dialog is shown, when a wrapped row can still be
+        // at an interim width — so it fits once more on Shown (re-centred on the change), with the real width.
+        private int _fitMax = -1;
+
+        private void Fit()
+        {
+            Restack();
+            int rows = Px(RowGap) * 2;
+            foreach (Control r in Body.Controls) rows += r.Height;
+            int bodyH = Math.Min(Px(_fitMax), rows);
+            Size = new Size(Width, Bar.Height + bodyH + Px(FooterHeight) + 1);
         }
 
         /// <summary>Stacks <paramref name="rows"/> top-down in the body, each stretched to its width.</summary>
@@ -134,6 +176,12 @@ namespace TelegArm.UI
         {
             base.OnShown(e);
             Restack();   // the body had no width when the rows were added
+            if (_fitMax > 0 && Body.Visible)
+            {
+                int before = Height;
+                Fit();
+                if (Height != before && StartPosition == FormStartPosition.CenterParent) Top -= (Height - before) / 2;
+            }
             // Listen only while shown: KeyboardInset.Listening is what makes Part B look for the keyboard at all.
             KeyboardInset.KeyboardRectChanged -= OnKeyboardRect;
             KeyboardInset.KeyboardRectChanged += OnKeyboardRect;

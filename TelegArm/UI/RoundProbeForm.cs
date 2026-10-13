@@ -35,7 +35,7 @@ namespace TelegArm.UI
         public RoundProbeForm()
         {
             Text = "Camera capture probe (debug)";
-            TelegArm.Helpers.ThemedChrome.SetAppIcon(this);   // app icon in the taskbar / Alt-Tab
+            TelegArm.Helpers.AppIcon.Set(this);   // app icon in the taskbar / Alt-Tab
             StartPosition = FormStartPosition.CenterParent;
             ClientSize = new Size(560, 540);
             MinimizeBox = false; MaximizeBox = false;

@@ -132,9 +132,11 @@ namespace TelegArm.Helpers
             using (var b = new SolidBrush(bg))
             using (var path = RoundedRect(rect, Math.Max(4, rect.Height / 8)))
                 g.FillPath(b, path);
-            using (var f = new Font("Segoe UI", Math.Max(7f, rect.Height / 4.5f), FontStyle.Bold))
+            // PIXEL units, sized from the rect: the old size was in POINTS from a pixel height, so it grew twice at 150%
+            // ("PD / F" wrapped in the media viewer). Same size as before at 96 DPI (21 pt = 28 px for a 96 px icon).
+            using (var f = new Font("Segoe UI", Math.Max(9f, rect.Height / 3.4f), FontStyle.Bold, GraphicsUnit.Pixel))
             using (var wb = new SolidBrush(Color.White))
-            using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+            using (var sf = new StringFormat(StringFormatFlags.NoWrap) { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
                 g.DrawString(label, f, wb, rect, sf);
         }
 

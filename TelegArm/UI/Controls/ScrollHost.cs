@@ -7,8 +7,8 @@ namespace TelegArm.UI.Controls
     /// Wraps a host container with a vertically-scrolling body whose scrollbar is DARK on every Windows version
     /// including RT 8.1 — a <see cref="NoNativeScrollPanel"/> (AutoScroll, native bars suppressed) + the
     /// owner-drawn <see cref="ThemedScrollBar"/> overlay. Add your (top-anchored, growing-downward) child
-    /// controls to the returned panel; it scrolls when they exceed the height. Used inside a ThemedChrome
-    /// content panel so every long admin form satisfies the scrollable + RT-dark-scrollbar checklist for free.
+    /// controls to the returned panel; it scrolls when they exceed the height. DialogForm's body and Settings'
+    /// pages are built on it, so every long form satisfies the scrollable + RT-dark-scrollbar checklist for free.
     /// </summary>
     public static class ScrollHost
     {
