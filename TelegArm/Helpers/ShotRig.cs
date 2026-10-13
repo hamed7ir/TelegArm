@@ -109,6 +109,17 @@ namespace TelegArm.Helpers
                 WithForm("about-" + t, () => new AboutForm(ThemeHelper.IsDark, ThemeHelper.GetWindowsAccentColor()),
                          f => Capture(f, "about-" + t));
                 WithForm("proxy-" + t, () => new ProxyForm(), f => Capture(f, "proxy-" + t));
+                WithForm("gallery-" + t, () => new DesignGalleryForm(), f =>
+                {
+                    Capture(f, "gallery-" + t);   // step 1.3+
+                    // Step 1.6: the page scrolls — one shot per screen of it, so every kit control is seen.
+                    var g = (DesignGalleryForm)f;
+                    for (int n = 1; n <= 8 && g.ScrollPage(n); n++) Capture(f, "gallery-" + t + "-" + n);
+                });
+                WithForm("confirm-" + t, () => ConfirmDialog.Create("Delete chat", "Delete this chat for you? This cannot be undone.", "Delete", "No", true),
+                         f => Capture(f, "confirm-" + t));   // step 1.4+
+                WithForm("input-" + t, () => InputDialog.Create("Rename", "New name", "Family group"), f => Capture(f, "input-" + t));
+                WithForm("closechoice-" + t, () => new CloseChoiceDialog(), f => Capture(f, "closechoice-" + t));
                 ShootMenu("menu-" + t);
             }
 

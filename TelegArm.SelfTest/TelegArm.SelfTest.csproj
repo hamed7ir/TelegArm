@@ -50,6 +50,8 @@
     <Compile Include="V19Settings.cs" />
     <Compile Include="SettingsTests.cs" />
     <Compile Include="DpiTests.cs" />
+    <Compile Include="PaletteTests.cs" />
+    <Compile Include="ChromeTests.cs" />
   </ItemGroup>
   <!-- The app sources under test. Add a file here when a test needs it (and whatever it depends on). -->
   <ItemGroup>
@@ -61,6 +63,11 @@
     <Compile Include="..\TelegArm\Helpers\DpiScaler.cs"><Link>Linked\Helpers\DpiScaler.cs</Link></Compile>
     <Compile Include="..\TelegArm\Helpers\FontCache.cs"><Link>Linked\Helpers\FontCache.cs</Link></Compile>
     <Compile Include="..\TelegArm\Helpers\FontHelper.cs"><Link>Linked\Helpers\FontHelper.cs</Link></Compile>
+    <Compile Include="..\TelegArm\Helpers\Palette.cs"><Link>Linked\Helpers\Palette.cs</Link></Compile>
+    <Compile Include="..\TelegArm\Helpers\ColorMath.cs"><Link>Linked\Helpers\ColorMath.cs</Link></Compile>
+    <Compile Include="..\TelegArm\Helpers\ThemeHelper.cs"><Link>Linked\Helpers\ThemeHelper.cs</Link></Compile>
+    <Compile Include="..\TelegArm\Helpers\WindowHit.cs"><Link>Linked\Helpers\WindowHit.cs</Link></Compile>
+    <Compile Include="..\TelegArm\Helpers\KeyboardInset.cs"><Link>Linked\Helpers\KeyboardInset.cs</Link></Compile>
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Fixtures\settings-1.9.0.json"><LogicalName>settings-1.9.0.json</LogicalName></EmbeddedResource>

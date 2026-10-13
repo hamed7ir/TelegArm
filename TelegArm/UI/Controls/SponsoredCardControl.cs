@@ -141,7 +141,7 @@ namespace TelegArm.UI.Controls
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
-            g.Clear(IsDark ? Color.FromArgb(30, 30, 30) : Color.FromArgb(245, 245, 245));
+            g.Clear(ThemeHelper.PaletteFor(IsDark).ChatBg);
 
             _cardRect = new Rectangle(SideGap, VMargin, Width - 2 * SideGap, Height - 2 * VMargin);
             Color cardBg = IsDark ? Color.FromArgb(48, 48, 52) : Color.FromArgb(255, 255, 255);

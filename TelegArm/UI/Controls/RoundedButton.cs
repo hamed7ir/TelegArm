@@ -19,6 +19,11 @@ namespace TelegArm.UI.Controls
     ///   Secondary = accent-outlined (secondary action: Cancel / Check)
     ///   Neutral   = subtle surface  (list-row / low-emphasis)
     ///   Danger    = red             (destructive: Delete / Remove / Leave / Unlink — NEVER forced to accent)
+    ///
+    /// Redesign step 1.4: it is a Button, so it already IS an IButtonControl — AcceptButton / CancelButton and
+    /// DialogResult work on it (DroidFinestra's comment "RoundedButton isn't an IButtonControl" was about its own
+    /// Control-based copy). Colours now come from the cached <see cref="ThemeHelper.Palette"/> (same values, no
+    /// registry read per paint). <see cref="Modern"/> opts a button into the 2.x behaviour.
     /// </summary>
     public sealed class RoundedButton : Button
     {
@@ -28,6 +33,13 @@ namespace TelegArm.UI.Controls
 
         public RoundedButtonKind Kind { get { return _kind; } set { _kind = value; Invalidate(); } }
         public int Radius { get { return _radius; } set { _radius = value; Invalidate(); } }
+
+        /// <summary>Redesign step 1.4 — the 2.x button: radius and text insets in logical pixels (Px at the window's
+        /// DPI), text that keeps its contrast on any accent (OnAccent / AccentFg), and a focus ring when the keyboard
+        /// is in use. FALSE by default so the 17 forms that use this button today stay pixel-identical (zero diff vs
+        /// B1); DialogForm and every new 2.x surface set it. The flag goes when the last 1.x form does.</summary>
+        public bool Modern { get { return _modern; } set { _modern = value; Invalidate(); } }
+        private bool _modern;
 
         public RoundedButton()
         {
@@ -51,13 +63,17 @@ namespace TelegArm.UI.Controls
         protected override void OnMouseDown(MouseEventArgs e) { _down = true; Invalidate(); base.OnMouseDown(e); }
         protected override void OnMouseUp(MouseEventArgs e) { _down = false; Invalidate(); base.OnMouseUp(e); }
         protected override void OnEnabledChanged(EventArgs e) { Invalidate(); base.OnEnabledChanged(e); }
+        protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
+        protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
 
         protected override void OnPaint(PaintEventArgs e)
         {
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            bool dark = ThemeHelper.IsDark;
-            Color accent = ThemeHelper.GetWindowsAccentColor();
+            var pal = ThemeHelper.Palette;
+            bool dark = pal.Dark;
+            Color accent = pal.Accent;
+            int dpi = _modern ? Dpi.Of(this) : Dpi.Logical;
             Color pbg = Parent != null ? Parent.BackColor : (dark ? Color.FromArgb(40, 40, 44) : Color.FromArgb(248, 248, 250));
             g.Clear(pbg);   // so the rounded corners reveal the form behind, not a square
 
@@ -65,14 +81,20 @@ namespace TelegArm.UI.Controls
             switch (_kind)
             {
                 case RoundedButtonKind.Danger:
-                    fill = Color.FromArgb(222, 74, 74); text = Color.White; break;
+                    fill = pal.Danger; text = _modern ? ColorMath.OnColor(fill) : Color.White; break;
                 case RoundedButtonKind.Neutral:
+                    if (_modern)
+                    {
+                        // On DroidFinestra's footer the 1.x light fill (234,234,238) vanishes into (236,236,240): a card
+                        // with a hairline reads as a button on any surface, both themes.
+                        fill = pal.Card; text = pal.Text; border = pal.Divider; break;
+                    }
                     fill = dark ? Color.FromArgb(60, 60, 64) : Color.FromArgb(234, 234, 238);
                     text = dark ? Color.FromArgb(230, 230, 234) : Color.FromArgb(35, 35, 40); break;
                 case RoundedButtonKind.Secondary:
-                    fill = pbg; text = accent; border = accent; break;
+                    fill = pbg; text = _modern ? pal.AccentFg : accent; border = accent; break;
                 default:   // Primary
-                    fill = accent; text = Color.White; break;
+                    fill = accent; text = _modern ? pal.OnAccent : Color.White; break;
             }
 
             if (!Enabled)
@@ -83,19 +105,31 @@ namespace TelegArm.UI.Controls
             }
             else if (_down) fill = Blend(fill, Color.Black, 0.16f);
             else if (_hover) fill = _kind == RoundedButtonKind.Secondary ? Blend(pbg, accent, 0.12f)
+                                  : _modern && _kind == RoundedButtonKind.Neutral ? Blend(fill, pal.Text, 0.07f)   // a white card cannot lighten
                                                                          : Blend(fill, Color.White, dark ? 0.10f : 0.06f);
 
+            int radius = Dpi.Px(_radius, dpi);
             var r = new Rectangle(0, 0, Math.Max(1, Width - 1), Math.Max(1, Height - 1));
-            using (var path = DrawHelper.RoundedRect(r, _radius))
+            using (var path = DrawHelper.RoundedRect(r, radius))
             {
                 using (var b = new SolidBrush(fill)) g.FillPath(b, path);
-                if (border != Color.Empty && Enabled) using (var p = new Pen(border, 1.4f)) g.DrawPath(p, path);
+                if (border != Color.Empty && Enabled) using (var p = new Pen(border, Dpi.F(1.4f, dpi))) g.DrawPath(p, path);
+            }
+            // Modern: the keyboard focus ring — inside the button, in the text colour, so it shows on every kind
+            // (an accent ring would vanish around an accent-filled Primary). Only when focus cues are on (keyboard).
+            if (_modern && Focused && ShowFocusCues && Enabled)
+            {
+                int inset = Dpi.Px(3, dpi);
+                var fr = Rectangle.Inflate(r, -inset, -inset);
+                if (fr.Width > 4 && fr.Height > 4)
+                    using (var path = DrawHelper.RoundedRect(fr, Math.Max(1, radius - inset)))
+                    using (var p = new Pen(text, Dpi.F(1.5f, dpi))) g.DrawPath(p, path);
             }
             var flags = TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
             bool left = TextAlign == ContentAlignment.MiddleLeft || TextAlign == ContentAlignment.TopLeft || TextAlign == ContentAlignment.BottomLeft;
             bool right = TextAlign == ContentAlignment.MiddleRight || TextAlign == ContentAlignment.TopRight || TextAlign == ContentAlignment.BottomRight;
             flags |= left ? TextFormatFlags.Left : right ? TextFormatFlags.Right : TextFormatFlags.HorizontalCenter;
-            var tr = new Rectangle(Padding.Left + (left ? 8 : 2), 0, Math.Max(1, Width - Padding.Left - Padding.Right - (left ? 10 : 4)), Height);
+            var tr = new Rectangle(Padding.Left + Dpi.Px(left ? 8 : 2, dpi), 0, Math.Max(1, Width - Padding.Left - Padding.Right - Dpi.Px(left ? 10 : 4, dpi)), Height);
             TextRenderer.DrawText(g, Text ?? "", Font, tr, text, flags);
         }
 

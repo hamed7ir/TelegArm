@@ -17,18 +17,36 @@ namespace TelegArm.Helpers
         private static Icon _appIcon;
         private static bool _appIconTried;
 
-        /// <summary>Sets the app's window icon (the exe's own icon) on a form — so every window (taskbar /
-        /// Alt-Tab / title bar) bears the app icon instead of the WinForms default. RT-safe: a no-op if the
-        /// icon can't be extracted (the form still opens). Cached once. Call from any form's setup.</summary>
+        /// <summary>Redesign step 1.8 (DroidFinestra's pattern) — the app icon at ALL its sizes: img-icon/icon.ico embedded
+        /// as the resource "app.ico" (16/20/24/28/32/40/48/64/128/256). Form.Icon takes the small title-bar icon from it at
+        /// SystemInformation.SmallIconSize and the big (taskbar / Alt-Tab) one at SM_CXICON, so both are a real frame at
+        /// 100/125/150% instead of 1.x's ExtractAssociatedIcon, which hands back ONE size for Windows to stretch.
+        /// Falls back to the exe's associated icon, then null. Shared by every window: never dispose it.</summary>
+        public static Icon AppIcon
+        {
+            get
+            {
+                if (_appIconTried) return _appIcon;
+                _appIconTried = true;
+                try
+                {
+                    using (var s = typeof(ThemedChrome).Assembly.GetManifestResourceStream("app.ico"))
+                        if (s != null) _appIcon = new Icon(s);
+                }
+                catch { }
+                if (_appIcon == null)
+                    try { _appIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
+                return _appIcon;
+            }
+        }
+
+        /// <summary>Sets the app icon on a form — so every window (taskbar / Alt-Tab / title bar) bears it instead of the
+        /// WinForms default. RT-safe: a no-op if there is no icon (the form still opens). Call from any form's setup.</summary>
         public static void SetAppIcon(Form form)
         {
             if (form == null) return;
-            if (!_appIconTried)
-            {
-                _appIconTried = true;
-                try { _appIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
-            }
-            if (_appIcon != null) try { form.Icon = _appIcon; } catch { }
+            var ico = AppIcon;
+            if (ico != null) try { form.Icon = ico; } catch { }
         }
 
         /// <param name="onOverflow">BATCH-TA-18a — OPTIONAL. When supplied, a "⋮" overflow button is placed
@@ -53,7 +71,9 @@ namespace TelegArm.Helpers
             header.Paint += (s, e) => TextRenderer.DrawText(e.Graphics, title ?? "", FontHelper.Ui(12.5f, FontStyle.Bold),
                 new Rectangle(16, 0, w - 60, BarH), Color.White, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
 
-            var close = new Label { Text = "✕", Left = w - 42, Top = 0, Width = 38, Height = BarH, ForeColor = Color.White, Font = FontHelper.Ui(12f, FontStyle.Bold), TextAlign = ContentAlignment.MiddleCenter, Cursor = Cursors.Hand };
+            // Redesign step 1.3: drawn glyphs (GlyphButton), no longer the "✕" / "⋮" font characters — symbol glyphs
+            // are font-dependent and have come out as tofu boxes on RT 8.1. Same place, same size, same behaviour.
+            var close = new TelegArm.UI.Controls.GlyphButton(TelegArm.UI.Controls.GlyphButton.Glyph.Close) { Left = w - 42, Top = 0, Width = 38, Height = BarH, BarColor = accent, GlyphColor = Color.White, DangerHover = true };
             close.Click += (s, e) => { if (form.DialogResult == DialogResult.None) form.DialogResult = DialogResult.Cancel; form.Close(); };
             header.Controls.Add(close);
 
@@ -61,7 +81,7 @@ namespace TelegArm.Helpers
             {
                 // Same white-on-accent treatment as ✕, immediately to its left. Deliberately NOT accent-
                 // themed or restyled: this is title-bar chrome and must read as part of the bar.
-                var more = new Label { Text = "⋮", Left = w - 80, Top = 0, Width = 34, Height = BarH, ForeColor = Color.White, Font = FontHelper.Ui(13f, FontStyle.Bold), TextAlign = ContentAlignment.MiddleCenter, Cursor = Cursors.Hand };
+                var more = new TelegArm.UI.Controls.GlyphButton(TelegArm.UI.Controls.GlyphButton.Glyph.More) { Left = w - 80, Top = 0, Width = 34, Height = BarH, BarColor = accent, GlyphColor = Color.White };
                 more.Click += (s, e) =>
                 {
                     // Screen point at the button's bottom-left, so the menu hangs below it like every other

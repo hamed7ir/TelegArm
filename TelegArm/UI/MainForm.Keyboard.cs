@@ -116,6 +116,7 @@ namespace TelegArm.UI
             try
             {
                 if (IsDisposed || WindowState == FormWindowState.Minimized) return;
+                if (KeyboardInset.Listening) PublishKeyboardForDialogs();   // redesign 1.4; inert with no DialogForm open
 
                 // The keyboard matters only when a text field is focused (the reliable "keyboard is up" signal —
                 // and it means focus-out is a reliable RESTORE trigger, unlike the flaky keyboard-hide detection).
@@ -216,6 +217,36 @@ namespace TelegArm.UI
                 if (_kbTimer != null && _kbTimer.Interval != wantInterval) _kbTimer.Interval = wantInterval;
             }
             catch { /* detection/resize is best-effort — never break the app over the keyboard */ }
+        }
+
+        /// <summary>Redesign step 1.4 — Part B stays the ONE keyboard detector; a dialog does not poll. When another of our
+        /// windows is active with a text field focused, the same detection runs for it and the keyboard rectangle goes
+        /// to <see cref="KeyboardInset"/> (DialogForm shifts itself above it). Same rules as this form's own shrink: no
+        /// shift with a hardware keyboard attached or with "Resize for keyboard" off. Runs only while something
+        /// listens, so the live app — which opens no DialogForm yet — is unchanged.</summary>
+        private void PublishKeyboardForDialogs()
+        {
+            var kb = Rectangle.Empty;
+            try
+            {
+                var active = Form.ActiveForm;
+                if (active != null && !ReferenceEquals(active, this) && active.ContainsFocus && FocusedIsText(active)
+                    && AppSettings.Instance.ResizeForKeyboard && !Helpers.TouchKeyboard.HasHardwareKeyboard()
+                    && DetectKeyboard(out int kbTop, out string via) && kbTop > 0)
+                {
+                    var screen = Screen.FromControl(active).Bounds;
+                    if (kbTop < screen.Bottom) kb = Rectangle.FromLTRB(screen.Left, kbTop, screen.Right, screen.Bottom);
+                }
+            }
+            catch { kb = Rectangle.Empty; }
+            KeyboardInset.Publish(kb);
+        }
+
+        private static bool FocusedIsText(Form f)
+        {
+            Control c = f.ActiveControl;
+            while (c is ContainerControl cc && cc.ActiveControl != null) c = cc.ActiveControl;
+            return c is TextBoxBase && c.Focused;
         }
 
         private void RestoreFromKeyboard()
@@ -371,6 +402,14 @@ namespace TelegArm.UI
         /// following focus-gain during post-dismiss suppression is recognised as a genuine re-tap and allowed.</summary>
         private void NoteRealEditTouch() { _lastRealEditTouchTick = Environment.TickCount; }
 
+        /// <summary>Is the message being handled now from a real finger/mouse (IMO_HARDWARE), not injected or synthetic?
+        /// The same test EditInputProbe makes; false where the API does not exist (before Windows 8).</summary>
+        private static bool IsHardwareInputNow()
+        {
+            try { INPUT_MESSAGE_SOURCE s; return GetCurrentInputMessageSource(out s) && s.originId == 1; }
+            catch { return false; }
+        }
+
         /// <summary>KBD-DISMISS-v3.1 (the fix): EditInputProbe calls this on a composer/search WM_SETFOCUS. When NOT
         /// suppressed, inert (normal tap-to-type). While SUPPRESSED (after a dismiss), the focus is allowed ONLY if a
         /// genuine hardware tap on the box landed within RealTouchWindowMs — that ends suppression; otherwise it's the
@@ -410,8 +449,21 @@ namespace TelegArm.UI
         /// <summary>[KBD] flicker diagnostics: log focus GOT/LOST (outer + inner native EDIT) and keystroke
         /// arrival on a composer/search box — so the RT log shows if focus toggles in a loop and whether
         /// keystrokes reach the box with the WinRT keyboard (vs the legacy keyboard that types fine).</summary>
-        private void HookKbdDiag(MaterialTextBox2 box, string name)
+        private void HookKbdDiag(UI.Controls.InputBox field, string name)
         {
+            if (field == null) return;
+            if (field.Plain != null)
+            {
+                // Redesign 1.5 — the Plain engine: the EDIT is ThemedTextBox.Inner, reached without reflection. Same
+                // diagnostics on it, and the SAME input shim (EditInputProbe) the Legacy inner box gets.
+                HookInnerKbdDiag(field.Plain, field.Plain.Inner, name);
+                // A tap on the FRAME around the EDIT never reaches EditInputProbe (it subclasses the EDIT only), so record a
+                // genuine finger/mouse tap here — raised before the frame focuses the EDIT — or the post-dismiss suppression
+                // bounces that focus straight back to the sink (review 1.5).
+                field.Plain.MouseDown += (s, e) => { if (IsHardwareInputNow()) NoteRealEditTouch(); };
+                return;
+            }
+            var box = field.Legacy;
             if (box == null) return;
             try
             {
@@ -437,7 +489,17 @@ namespace TelegArm.UI
                         + " inner.Text=" + Quote(inner != null ? inner.Text : "<null>"));
                 };
 
-                if (inner != null)
+                if (inner != null) HookInnerKbdDiag(box, inner, name);
+            }
+            catch { }
+        }
+
+        /// <summary>The inner-EDIT half of <see cref="HookKbdDiag"/> (extracted unchanged in redesign 1.5 so the Plain engine's
+        /// EDIT gets exactly what the Legacy inner box gets): focus/keystroke tracing, the IMM heartbeat, the input shim.</summary>
+        private void HookInnerKbdDiag(Control box, Control inner, string name)
+        {
+            try
+            {
                 {
                     // Runtime-state snapshot at hook time — one-shot launch breadcrumb (unconditional).
                     var tbState = inner as System.Windows.Forms.TextBoxBase;
@@ -722,7 +784,10 @@ namespace TelegArm.UI
             private void HandleEditingChar(ref System.Windows.Forms.Message m, char ch, bool isBackspace)
             {
                 var tb = _edit as System.Windows.Forms.TextBoxBase;
-                if (tb == null) { base.WndProc(ref m); return; }
+                // ⚠ Redesign 1.5: a READ-ONLY edit declines every keystroke by design — that is not dead input, and
+                //   forcing it would type into a disabled field (the Plain composer is ReadOnly instead of Enabled=false).
+                //   Inert on the Legacy path: its inner box is never read-only.
+                if (tb == null || tb.ReadOnly) { base.WndProc(ref m); return; }
                 CorrectYank(tb);
                 string before = _edit.Text ?? "";
                 int caretBefore = tb.SelectionStart;
@@ -803,7 +868,7 @@ namespace TelegArm.UI
             private void HandleNavKey(ref System.Windows.Forms.Message m, int vk)
             {
                 var tb = _edit as System.Windows.Forms.TextBoxBase;
-                if (tb == null) { base.WndProc(ref m); return; }
+                if (tb == null || tb.ReadOnly) { base.WndProc(ref m); return; }   // read-only: not dead input (see HandleEditingChar)
 
                 // Shift+nav = selection intent — do NOT force selection math; observe and drop the expectation
                 // (a selection may now exist). Long-press/mouse selection remains the supported path.
@@ -1114,7 +1179,9 @@ namespace TelegArm.UI
             {
                 if (!Logger.Enabled) return;   // hot-path rule: no log formatting when logging is off
                 string outer = _messageInput != null ? (_messageInput.Text ?? "") : "";
-                var inner = (_messageInput != null && _baseTextBoxField != null) ? _baseTextBoxField.GetValue(_messageInput) as Control : null;
+                Control inner = _messageInput == null ? null
+                    : _messageInput.Plain != null ? _messageInput.Plain.Inner
+                    : _baseTextBoxField != null ? _baseTextBoxField.GetValue(_messageInput.Legacy) as Control : null;
                 string innerT = inner != null ? (inner.Text ?? "") : "";
                 System.Diagnostics.Debug.WriteLine("[KBD] SEND via=" + via + " outer.len=" + outer.Length
                     + " inner.len=" + innerT.Length + " text=" + Quote(outer));

@@ -424,7 +424,7 @@ namespace TelegArm.UI
             y = SectionLabel(p, "DIAGNOSTICS", y);
             bool logsExist = false;
             try { logsExist = FileLog.LogsDirectory != null && Directory.Exists(FileLog.LogsDirectory); } catch { }
-            var diag = Card(p, y, logsExist ? 7 : 6); y += diag.Height + SecGap;   // +composited-scroll A/B +proportional-scaling +display-scaling +copy-diagnostics rows
+            var diag = Card(p, y, logsExist ? 8 : 7); y += diag.Height + SecGap;   // +composited-scroll A/B +plain-text-boxes +proportional-scaling +display-scaling +copy-diagnostics rows
             RowTitle(diag, 0, "Enable diagnostic logging", "Writes session logs for troubleshooting. Leave off for best performance.");
             var logSw = RowSwitch(diag, 0, s.FileLogging);
             logSw.CheckedChanged += (snd, ev) =>
@@ -486,10 +486,19 @@ namespace TelegArm.UI
             compSw.CheckedChanged += (snd, ev) => { s.CompositedScroll = compSw.Checked; s.Save(); };
             RowClickable(diag, compRow, () => compSw.Flip());
 
+            // REDESIGN 1.5 — the composer / search engine for device gate G1: Legacy (MaterialTextBox2, 1.x) or Plain
+            // (ThemedTextBox). Chosen once at startup, so restart-applied like the rows around it.
+            int engineRow = compRow + 1;
+            Divider(diag, compRow);
+            RowTitle(diag, engineRow, "Plain text boxes (test)", "New composer and search box. Takes effect after restart.");
+            var engineSw = RowSwitch(diag, engineRow, string.Equals(s.ComposerEngine, "Plain", StringComparison.OrdinalIgnoreCase));
+            engineSw.CheckedChanged += (snd, ev) => { s.ComposerEngine = engineSw.Checked ? "Plain" : ""; s.Save(); };
+            RowClickable(diag, engineRow, () => engineSw.Flip());
+
             // DPI-MODE-TOGGLE: opt-in DPI-unaware declaration — read at the very top of startup, so it
             // can only ever be restart-applied (same pattern as composited scroll above).
-            int dpiRow = compRow + 1;
-            Divider(diag, compRow);
+            int dpiRow = engineRow + 1;
+            Divider(diag, engineRow);
             RowTitle(diag, dpiRow, "Proportional scaling on high-DPI displays", "Fixes mismatched sizes on scaled screens; blurry. Restart to apply.");
             var dpiSw = RowSwitch(diag, dpiRow, s.DpiUnaware);
             // STEP 0.4: DpiMode is the source of truth ("" = build default); Save mirrors it into DpiUnaware.

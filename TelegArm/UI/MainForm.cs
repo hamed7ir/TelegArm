@@ -102,7 +102,7 @@ namespace TelegArm.UI
         private EmojiPicker _dockEmoji;      // THE composer's panel, embedded — not a second grid
         private ProfileForm _dockProfile;    // THE profile, embedded — the Info pane has no separate content
         private long _dockProfilePeerId;     // which peer that profile is built for (0 = none)
-        private MaterialTextBox2 _searchBox;
+        private UI.Controls.InputBox _searchBox;   // redesign 1.5: MaterialTextBox2 or ThemedTextBox (ComposerEngine)
         private FlowLayoutPanel _chatListPanel;
         private MaterialLabel _chatTitle;
         private MaterialLabel _chatStatus;            // online / last seen / typing… subtitle
@@ -116,7 +116,7 @@ namespace TelegArm.UI
         private System.Windows.Forms.Timer _typingTimer;
         private bool _typing;
         private FlowLayoutPanel _messagePanel;
-        private MaterialTextBox2 _messageInput;
+        private UI.Controls.InputBox _messageInput;   // redesign 1.5: MaterialTextBox2 or ThemedTextBox (ComposerEngine)
         // COMPOSER-full-revert: the composer's inner native TextBox is left UNTOUCHED — no font-swap fields, no
         // reflection font manipulation (that work was reverted in case it broke WM_CHAR capture on RT). _baseTextBoxField
         // stays: it's used ONLY by the [KBD] diagnostics (HookKbdDiag), never to change the composer's font.
@@ -326,8 +326,8 @@ namespace TelegArm.UI
             AutoScaleMode = AutoScaleMode.Font;
 
             Text = "TelegArm";   // taskbar / alt-tab identity — the tall title action bar that drew it is removed below
-            try { Icon = System.Drawing.Icon.ExtractAssociatedIcon(System.Windows.Forms.Application.ExecutablePath); } catch { }
-            PerfLog.Boot("  ctor: window icon decoded (ExtractAssociatedIcon)");
+            ThemedChrome.SetAppIcon(this);   // redesign 1.8: the embedded multi-size app.ico (falls back to the exe's icon)
+            PerfLog.Boot("  ctor: window icon decoded (app.ico)");
             ClientSize = new Size(960, 600);
             MinimumSize = new Size(720, 480);
             StartPosition = FormStartPosition.CenterScreen;
@@ -370,12 +370,11 @@ namespace TelegArm.UI
             Activated += (s, e) => _isForeground = true;
             Deactivate += (s, e) => _isForeground = false;
 
-            ThemeHelper.StartListening();
+            // The system-change listener itself is process-wide since step 1.2 (Program.Run starts and stops it).
             ThemeHelper.ThemeChanged += OnSystemThemeChanged;
             FormClosed += (s, e) =>
             {
                 ThemeHelper.ThemeChanged -= OnSystemThemeChanged;
-                ThemeHelper.StopListening();
                 try { _kbTimer?.Stop(); _kbTimer?.Dispose(); } catch { }
                 try { _perfTimer?.Stop(); _perfTimer?.Dispose(); } catch { }
                 try { _scrollWatch?.Stop(); _scrollWatch?.Dispose(); } catch { }

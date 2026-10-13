@@ -18,6 +18,11 @@ namespace TelegArm.UI
     /// </summary>
     public class ThemedContextMenuStrip : ContextMenuStrip
     {
+        /// <summary>Redesign step 1.6 — the 2.x menu: colours from <see cref="ThemeHelper.Palette"/> and the row padding /
+        /// icon slot in logical pixels at the DPI of the control the menu opens over. OFF until step 2.0 (a visible
+        /// change; 1.7's zero-diff check runs against today's menus). Read when a menu opens and when it paints.</summary>
+        public static bool Restyled { get; set; }
+
         static ThemedContextMenuStrip()
         {
             // One renderer for ALL menus + their sub-menus (ManagerRenderMode is the default).
@@ -33,7 +38,13 @@ namespace TelegArm.UI
             ThemeHelper.ThemeChanged += OnThemeChanged;
             // Just before the menu shows: touch-size the rows + give each known action an emoji icon (moving any
             // text-emoji prefix into the icon slot). Centralized here → EVERY themed menu in the app is enhanced.
-            Opening += (s, e) => MenuIcons.Decorate(this);
+            Opening += (s, e) =>
+            {
+                int dpi = Restyled ? Dpi.Of(SourceControl ?? (Control)this) : Dpi.Logical;
+                if (Restyled) { BackColor = ThemedMenuColors.Background; ForeColor = ThemedMenuColors.Text; }
+                ImageScalingSize = new Size(Dpi.Px(MenuIcons.IconSize, dpi), Dpi.Px(MenuIcons.IconSize, dpi));
+                MenuIcons.Decorate(this, dpi);
+            };
         }
 
         private void OnThemeChanged()
@@ -41,14 +52,22 @@ namespace TelegArm.UI
             if (IsDisposed) return;
             try
             {
-                BeginInvoke((Action)(() =>
-                {
-                    BackColor = ThemedMenuColors.Background;
-                    ForeColor = ThemedMenuColors.Text;
-                    Invalidate(true);
-                }));
+                // DroidFinestra's fix (redesign 1.6): a ContextMenuStrip has a handle ONLY while it is open. Closed — the
+                // usual case — BeginInvoke threw "cannot call BeginInvoke until the window handle has been created",
+                // the catch swallowed it, and BackColor/ForeColor stayed at the theme the menu was BUILT in, for good
+                // (the composer's format menu is built once). No handle means nothing to marshal: set them directly.
+                if (IsHandleCreated) BeginInvoke((Action)ApplyThemeColors);
+                else ApplyThemeColors();
             }
             catch { }
+        }
+
+        private void ApplyThemeColors()
+        {
+            if (IsDisposed) return;
+            BackColor = ThemedMenuColors.Background;
+            ForeColor = ThemedMenuColors.Text;
+            try { Invalidate(true); } catch { }
         }
 
         protected override void Dispose(bool disposing)
@@ -67,23 +86,26 @@ namespace TelegArm.UI
     /// </summary>
     internal static class MenuIcons
     {
-        public const int IconSize = 22;                       // icon slot px (also the rendered emoji size)
-        private static readonly Padding RowPad = new Padding(4, 8, 12, 8);   // taller + wider rows for touch
+        public const int IconSize = 22;                       // icon slot, LOGICAL px (also the rendered emoji size)
+        /// <summary>THE row padding token (taller + wider rows for touch), logical px. DroidFinestra's copy had its own
+        /// (4,7,14,7); one token now (redesign 1.6). Scaled to the menu's DPI only when the menu is Restyled.</summary>
+        private static readonly Padding RowPad = new Padding(4, 8, 12, 8);
         private static readonly Dictionary<string, Image> _icons = new Dictionary<string, Image>();
 
-        /// <summary>Touch-size + icon every item in a menu (recursively into sub-menus). Idempotent per open.</summary>
-        public static void Decorate(ToolStrip strip)
+        /// <summary>Touch-size + icon every item in a menu (recursively into sub-menus). Idempotent per open.
+        /// <paramref name="dpi"/> is Dpi.Logical (= today's pixels) unless the menu is Restyled.</summary>
+        public static void Decorate(ToolStrip strip, int dpi = Dpi.Logical)
         {
             if (strip == null) return;
-            foreach (ToolStripItem it in strip.Items) DecorateItem(it);
+            foreach (ToolStripItem it in strip.Items) DecorateItem(it, dpi);
         }
 
-        private static void DecorateItem(ToolStripItem it)
+        private static void DecorateItem(ToolStripItem it, int dpi)
         {
             var mi = it as ToolStripMenuItem;
             if (mi == null) return;                            // separators etc. — leave alone
 
-            mi.Padding = RowPad;                               // touch-size the row
+            mi.Padding = new Padding(Dpi.Px(RowPad.Left, dpi), Dpi.Px(RowPad.Top, dpi), Dpi.Px(RowPad.Right, dpi), Dpi.Px(RowPad.Bottom, dpi));   // touch-size the row
 
             if (mi.Image == null && !string.IsNullOrEmpty(mi.Text))
             {
@@ -92,20 +114,20 @@ namespace TelegArm.UI
                 string emoji = EmojiFor(clean);
                 if (emoji != null)
                 {
-                    var icon = RenderIcon(emoji);
+                    var icon = RenderIcon(emoji, Dpi.Px(IconSize, dpi));
                     if (icon != null) mi.Image = icon;          // mapped action → its emoji in the icon slot
                 }
                 else if (IsPureEmoji(clean))                    // a lone emoji (a reaction) → render via the SAME Noto engine, icon-only
                 {
-                    var icon = RenderIcon(clean);
+                    var icon = RenderIcon(clean, Dpi.Px(IconSize, dpi));
                     if (icon != null) { mi.AccessibleName = clean; mi.Image = icon; mi.Text = ""; }
                 }
             }
 
             if (mi.HasDropDownItems)                           // sub-menus get the same treatment
             {
-                mi.DropDown.ImageScalingSize = new Size(IconSize, IconSize);
-                foreach (ToolStripItem sub in mi.DropDownItems) DecorateItem(sub);
+                mi.DropDown.ImageScalingSize = new Size(Dpi.Px(IconSize, dpi), Dpi.Px(IconSize, dpi));
+                foreach (ToolStripItem sub in mi.DropDownItems) DecorateItem(sub, dpi);
             }
         }
 
@@ -167,27 +189,28 @@ namespace TelegArm.UI
         }
 
         /// <summary>Renders an emoji to an IconSize bitmap via the shared engine (cached; null if unavailable).</summary>
-        private static Image RenderIcon(string emoji)
+        private static Image RenderIcon(string emoji, int size)
         {
-            if (_icons.TryGetValue(emoji, out var cached)) return cached;
+            string key = size == IconSize ? emoji : emoji + "@" + size;   // one bitmap per emoji per slot size (Restyled menus scale)
+            if (_icons.TryGetValue(key, out var cached)) return cached;
             Image icon = null;
             try
             {
                 var src = EmojiRenderer.Get(emoji);   // Noto bitmap (engine cache owns it — don't dispose)
                 if (src != null)
                 {
-                    var bmp = new Bitmap(IconSize, IconSize, PixelFormat.Format32bppArgb);
+                    var bmp = new Bitmap(size, size, PixelFormat.Format32bppArgb);
                     using (var g = Graphics.FromImage(bmp))
                     {
                         g.InterpolationMode = InterpolationMode.HighQualityBicubic;
                         g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                        g.DrawImage(src, new Rectangle(0, 0, IconSize, IconSize));
+                        g.DrawImage(src, new Rectangle(0, 0, size, size));
                     }
                     icon = bmp;
                 }
             }
             catch { icon = null; }
-            _icons[emoji] = icon;   // cache misses (null) too — don't retry
+            _icons[key] = icon;   // cache misses (null) too — don't retry
             return icon;
         }
     }
@@ -195,13 +218,15 @@ namespace TelegArm.UI
     /// <summary>Menu palette derived from ThemeHelper (no hard-coded theme colors).</summary>
     internal static class ThemedMenuColors
     {
-        public static bool Dark => ThemeHelper.IsDark;
-        public static Color Background => Dark ? Color.FromArgb(43, 43, 46) : Color.FromArgb(245, 245, 247);
-        public static Color Text => Dark ? Color.FromArgb(235, 235, 235) : Color.FromArgb(25, 25, 25);
-        public static Color Disabled => Dark ? Color.FromArgb(120, 120, 120) : Color.FromArgb(165, 165, 165);
-        public static Color Accent => ThemeHelper.GetWindowsAccentColor();
-        public static Color Highlight => Blend(Accent, Background, Dark ? 0.42f : 0.28f);
-        public static Color Border => Blend(Background, Dark ? Color.White : Color.Black, 0.16f);
+        // Restyled (redesign 1.6, on in 2.0): the cached Palette — no registry read per menu paint. Otherwise 1.x's values.
+        private static bool R => ThemedContextMenuStrip.Restyled;
+        public static bool Dark => R ? ThemeHelper.Palette.Dark : ThemeHelper.IsDark;
+        public static Color Background => R ? ThemeHelper.Palette.Card : Dark ? Color.FromArgb(43, 43, 46) : Color.FromArgb(245, 245, 247);
+        public static Color Text => R ? ThemeHelper.Palette.Text : Dark ? Color.FromArgb(235, 235, 235) : Color.FromArgb(25, 25, 25);
+        public static Color Disabled => R ? ThemeHelper.Palette.TextDisabled : Dark ? Color.FromArgb(120, 120, 120) : Color.FromArgb(165, 165, 165);
+        public static Color Accent => R ? ThemeHelper.Palette.Accent : ThemeHelper.GetWindowsAccentColor();
+        public static Color Highlight => R ? ThemeHelper.Palette.AccentSoft : Blend(Accent, Background, Dark ? 0.42f : 0.28f);
+        public static Color Border => R ? ThemeHelper.Palette.Divider : Blend(Background, Dark ? Color.White : Color.Black, 0.16f);
 
         public static Color Blend(Color a, Color b, float t)
         {

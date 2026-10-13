@@ -52,12 +52,22 @@ namespace TelegArm.UI
             // CompositedScroll CreateParams all apply exactly as today (Part 0.2 invariants preserved).
             bool sidebar = AppSettings.Instance.FolderSidebar;
 
-            _searchBox = new MaterialTextBox2
-            {
-                Hint = "Search",
-                Dock = DockStyle.Fill,
-                Margin = new Padding(2, 12, 10, 6)
-            };
+            // Redesign 1.5: the engine is chosen once (AppSettings.ComposerEngine, restart to apply). Legacy is 1.x unchanged.
+            if (UI.Controls.InputBox.UsePlain)
+                _searchBox = UI.Controls.InputBox.CreatePlain(new UI.Controls.ThemedTextBox(false)
+                {
+                    Hint = "Search",
+                    Dock = DockStyle.Fill,
+                    Margin = new Padding(2, 12, 10, 6),
+                    FontPoints = 10.5f
+                });
+            else
+                _searchBox = UI.Controls.InputBox.CreateLegacy(new MaterialTextBox2
+                {
+                    Hint = "Search",
+                    Dock = DockStyle.Fill,
+                    Margin = new Padding(2, 12, 10, 6)
+                });
             _searchBox.TextChanged += (s, e) => OnSearchTextChanged();
             // First MaterialTextBox2 in the process — MaterialSkin resolves its own font stack here, so this
             // rung isolates that from our control-tree construction.
@@ -95,7 +105,7 @@ namespace TelegArm.UI
             searchRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 52));
             searchRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             searchRow.Controls.Add(_hamburger, 0, 0);
-            searchRow.Controls.Add(_searchBox, 1, 0);
+            searchRow.Controls.Add(_searchBox.Control, 1, 0);
 
             _chatListPanel = new NoNativeScrollFlowPanel
             {
@@ -447,16 +457,33 @@ namespace TelegArm.UI
             };
             _attachButton.Click += (s, e) => ShowAttachMenu();
 
-            _messageInput = new MaterialTextBox2
+            if (UI.Controls.InputBox.UsePlain)
             {
-                Hint = "Write a message…",
-                Dock = DockStyle.Fill,
-                Margin = new Padding(12, 10, 6, 10),
-                Enabled = false
-            };
-            EnableComposerMultiline(_messageInput);   // TA-40 — or Shift+Enter has nothing to insert into
+                // Redesign 1.5 — the plain composer: multiline from birth (Shift+Enter needs no reflection), fixed 64 px
+                // row like Legacy (no auto-grow), "disabled" = read-only, never Enabled=false (ThemedTextBox notes).
+                _messageInput = UI.Controls.InputBox.CreatePlain(new UI.Controls.ThemedTextBox(true)
+                {
+                    Hint = "Write a message…",
+                    Dock = DockStyle.Fill,
+                    Margin = new Padding(12, 10, 6, 10),
+                    FontPoints = 11f
+                });
+                _messageInput.Enabled = false;
+            }
+            else
+            {
+                _messageInput = UI.Controls.InputBox.CreateLegacy(new MaterialTextBox2
+                {
+                    Hint = "Write a message…",
+                    Dock = DockStyle.Fill,
+                    Margin = new Padding(12, 10, 6, 10),
+                    Enabled = false
+                });
+                EnableComposerMultiline(_messageInput.Legacy);   // TA-40 — or Shift+Enter has nothing to insert into
+            }
             _messageInput.KeyDown += (s, e) =>
             {
+                if (!_messageInput.Enabled) return;   // review 1.5: the Plain "disabled" composer is read-only, not Enabled=false
                 // ── COMPOSER SEND KEY (TA-36) ────────────────────────────────────────────────────
                 // ⚠ SHIFT+ENTER IS ALWAYS A NEWLINE, in every mode. It is the one convention every chat
                 //   client shares; a setting that changed it would be a trap, not a preference. Falling
@@ -536,7 +563,7 @@ namespace TelegArm.UI
 
             bottomBar.Controls.Add(_botMenuButton, 0, 0);
             bottomBar.Controls.Add(_attachButton, 1, 0);
-            bottomBar.Controls.Add(_messageInput, 2, 0);
+            bottomBar.Controls.Add(_messageInput.Control, 2, 0);
             bottomBar.Controls.Add(_recordingBar, 2, 0);   // same cell as the input (toggled)
             bottomBar.Controls.Add(_emojiButton, 3, 0);
             bottomBar.Controls.Add(_micButton, 4, 0);

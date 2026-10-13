@@ -121,6 +121,18 @@ namespace TelegArm
             string shootDir = ShotRig.ParseDir(Environment.GetCommandLineArgs());
             if (shootDir != null) { RunShoot(shootDir); return; }
 
+            // STEP 1.3 — the design gallery (--gallery) and its real-window chrome probe (--gallery-probe <file>).
+            // Same rules as --shoot: before the mutex, storage isolated, never a Telegram client.
+            string probe = null; bool gallery = false;
+            var cmd = Environment.GetCommandLineArgs();
+            for (int i = 1; i < cmd.Length; i++)
+            {
+                if (string.Equals(cmd[i], "--gallery", StringComparison.OrdinalIgnoreCase)) gallery = true;
+                else if (string.Equals(cmd[i], "--gallery-probe", StringComparison.OrdinalIgnoreCase))
+                { gallery = true; probe = i + 1 < cmd.Length ? System.IO.Path.GetFullPath(cmd[i + 1]) : System.IO.Path.GetFullPath("gallery-probe.txt"); }
+            }
+            if (gallery) { RunGallery(probe); return; }
+
             Mutex mutex;
             try
             {
@@ -304,6 +316,16 @@ namespace TelegArm
             ThemeMode mode;
             if (!Enum.TryParse(settings.ThemeMode, true, out mode)) mode = ThemeMode.System;
             ThemeHelper.InitMode(mode);
+            // Step 1.2 — the user's accent (or TELEGARM_ACCENT) BEFORE anything reads it: VlcBootstrap below does.
+            InitAccent(settings);
+
+            // Step 1.2 — the theme listener is process-wide now (it was MainForm's, so the login screen never
+            // followed a live Windows change, and a logout-to-login stopped it). Installed on THIS thread's WinForms
+            // context first: SystemEvents raises on the context it captures, and before any Control exists there
+            // is none — ThemeChanged would arrive on a background thread.
+            if (!(System.Threading.SynchronizationContext.Current is WindowsFormsSynchronizationContext))
+                System.Threading.SynchronizationContext.SetSynchronizationContext(new WindowsFormsSynchronizationContext());
+            ThemeHelper.StartListening();
 
             System.Threading.Tasks.Task.Run(() =>
             {
@@ -354,6 +376,20 @@ namespace TelegArm
                 Application.Run(new MainForm(service, StartupLaunch));   // STARTUP: silent tray start when launched with --startup
             else
                 Application.Run(new LoginForm(service));
+            ThemeHelper.StopListening();
+        }
+
+        /// <summary>Step 1.2 — the accent override: TELEGARM_ACCENT=#RRGGBB (testing) wins over the AccentColor
+        /// setting; neither set (or invalid) = follow the Windows accent, exactly as 1.x did.</summary>
+        private static void InitAccent(AppSettings settings)
+        {
+            string env = null;
+            try { env = Environment.GetEnvironmentVariable("TELEGARM_ACCENT"); } catch { }
+            var accent = ThemeHelper.ParseAccent(env) ?? ThemeHelper.ParseAccent(settings.AccentColor);
+            ThemeHelper.InitAccent(accent);
+            Logger.Diag("[ACCENT] " + (accent.HasValue
+                ? "fixed " + ThemeHelper.FormatAccent(accent) + (ThemeHelper.ParseAccent(env).HasValue ? " (TELEGARM_ACCENT)" : " (setting)")
+                : "follows Windows"));
         }
 
         /// <summary>The one DPI declaration, shared by Run() and the --shoot rig so both declare exactly the same thing
@@ -364,6 +400,47 @@ namespace TelegArm
         {
             Dpi.Init();
             Logger.Diag("[DPI] touch moveThreshold=" + TelegArm.UI.Controls.TouchScroller.MoveThresholdPx + "px");
+        }
+
+        private static void ProbeCrashed(string file, string where, Exception ex)
+        {
+            try { System.IO.File.AppendAllText(file, "FAIL  probe crashed (" + where + "): " + ex + Environment.NewLine, new System.Text.UTF8Encoding(true)); } catch { }
+            Logger.Diag("[PROBE] crashed (" + where + "): " + ex);
+            Environment.Exit(98);
+        }
+
+        /// <summary>STEP 1.3 — the design gallery, with the same isolation and startup as the screenshot rig. With a
+        /// probe file it runs the real-window chrome checks and exits with the number of failures.</summary>
+        private static void RunGallery(string probeFile)
+        {
+            string iso = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+                                                "TelegArm-gallery-" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            StoragePaths.UseIsolatedRoot(iso);
+            DeclareDpiAwareness();
+            InitAccent(AppSettings.Instance);
+            NativeLibraries.Init();
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            if (probeFile != null)
+            {
+                // A probe that dies must say where and why — RunGallery returns before Run() installs the app's handlers,
+                // and an intermittent no-report exit was seen. The report is written as it goes (RunProbe); this appends
+                // the exception and exits 98.
+                // ⚠ BEFORE the synchronization context below: it creates a hidden marshaling control, and
+                //   SetUnhandledExceptionMode throws once any control exists on the thread (measured: every run crashed).
+                Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+                Application.ThreadException += (s, e) => ProbeCrashed(probeFile, "UI thread", e.Exception);
+                AppDomain.CurrentDomain.UnhandledException += (s, e) => ProbeCrashed(probeFile, "AppDomain", e.ExceptionObject as Exception);
+            }
+            if (!(System.Threading.SynchronizationContext.Current is WindowsFormsSynchronizationContext))
+                System.Threading.SynchronizationContext.SetSynchronizationContext(new WindowsFormsSynchronizationContext());
+            ThemeHelper.StartListening();
+            int code = 0;
+            if (probeFile != null) code = DesignGalleryForm.RunProbe(probeFile);
+            else Application.Run(new DesignGalleryForm());
+            ThemeHelper.StopListening();
+            try { System.IO.Directory.Delete(iso, true); } catch { }
+            Environment.Exit(code);
         }
 
         /// <summary>STEP 0.1 — runs the screenshot rig, then exits the process.
@@ -378,6 +455,7 @@ namespace TelegArm
                                                 "TelegArm-shoot-" + Guid.NewGuid().ToString("N").Substring(0, 8));
             StoragePaths.UseIsolatedRoot(iso);
             DeclareDpiAwareness();
+            InitAccent(AppSettings.Instance);   // the isolated settings have none: TELEGARM_ACCENT shoots an accent set
             NativeLibraries.Init();
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);

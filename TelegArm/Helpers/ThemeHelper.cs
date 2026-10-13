@@ -31,13 +31,82 @@ namespace TelegArm.Helpers
         /// Sets the mode WITHOUT notifying listeners. Use once at startup to apply the
         /// persisted choice before any form reads the theme.
         /// </summary>
-        public static void InitMode(ThemeMode mode) => _mode = mode;
+        public static void InitMode(ThemeMode mode) { _mode = mode; _palette = null; }
 
         /// <summary>Sets the mode and raises <see cref="ThemeChanged"/> if it actually changed.</summary>
         public static void SetMode(ThemeMode mode)
         {
             if (_mode == mode) return;
             _mode = mode;
+            Raise();
+        }
+
+        // ── Redesign step 1.2: the accent override (ported from DroidFinestra's ThemeHelper) ─────────────────────
+        private static Color? _accentOverride;   // null = follow the Windows accent (1.x's only behaviour)
+
+        /// <summary>The user's fixed accent, or null when the app follows the Windows accent.</summary>
+        public static Color? AccentOverride => _accentOverride;
+
+        /// <summary>Sets the accent override WITHOUT notifying (startup, before any form reads it).</summary>
+        public static void InitAccent(Color? accent) { _accentOverride = accent; _palette = null; }
+
+        /// <summary>Sets (or clears, with null) the accent override and raises <see cref="ThemeChanged"/> — every
+        /// themed control recolors live, the same path a Windows accent change takes.</summary>
+        public static void SetAccent(Color? accent)
+        {
+            if (_accentOverride.HasValue == accent.HasValue
+                && (!accent.HasValue || _accentOverride.Value.ToArgb() == accent.Value.ToArgb())) return;
+            _accentOverride = accent;
+            Raise();
+        }
+
+        /// <summary>"#RRGGBB" (the "#" optional) → Color, or null for empty/invalid (= follow Windows).</summary>
+        public static Color? ParseAccent(string s)
+        {
+            s = (s ?? "").Trim().TrimStart('#');
+            int v;
+            if (s.Length != 6 || !int.TryParse(s, System.Globalization.NumberStyles.HexNumber, null, out v)) return null;
+            return Color.FromArgb((v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF);
+        }
+
+        public static string FormatAccent(Color? c) => c.HasValue ? "#" + (c.Value.ToArgb() & 0xFFFFFF).ToString("X6") : "";
+
+        // ── Redesign step 1.2: the cached palette ─────────────────────────────────────────────────────────────
+        private static Palette _palette;
+
+        /// <summary>The current colour tokens (<see cref="Helpers.Palette"/>). Built once and rebuilt BEFORE
+        /// <see cref="ThemeChanged"/> fires, so a handler reads the new colours — and a paint handler reads a field
+        /// instead of the registry, which <see cref="IsDark"/> and <see cref="GetWindowsAccentColor"/> hit on every
+        /// call. New code uses this; the existing call sites move to it in steps 1.7 and 5.1.</summary>
+        public static Palette Palette
+        {
+            get
+            {
+                var p = _palette;
+                if (p == null) _palette = p = Helpers.Palette.Build(IsDark, GetWindowsAccentColor());
+                return p;
+            }
+        }
+
+        private static Palette _otherMode;
+
+        /// <summary>Redesign step 1.7 — the palette for a GIVEN mode. The chat surfaces carry their own dark flag (set by
+        /// MainForm, which follows ThemeHelper — so in practice it is the cached <see cref="Palette"/>), and `dark ? X : Y`
+        /// becomes `PaletteFor(dark).Token` with the SAME meaning even if the two ever disagree for a moment. The other
+        /// mode is built once and rebuilt when the accent moves.</summary>
+        public static Palette PaletteFor(bool dark)
+        {
+            var p = Palette;
+            if (p.Dark == dark) return p;
+            var o = _otherMode;
+            if (o == null || o.Dark != dark || o.Accent != p.Accent) _otherMode = o = Helpers.Palette.Build(dark, p.Accent);
+            return o;
+        }
+
+        /// <summary>The one way ThemeChanged is raised: palette first, then the event.</summary>
+        private static void Raise()
+        {
+            try { _palette = Helpers.Palette.Build(IsDark, GetWindowsAccentColor()); } catch { _palette = null; }
             ThemeChanged?.Invoke();
         }
 
@@ -56,9 +125,11 @@ namespace TelegArm.Helpers
         ///     the DWM key only holds ColorizationColor — the composed frame TINT, not the picked swatch)
         /// Both are DWORDs in AABBGGRR (ABGR) byte order — low byte is red. Alpha is dropped (opaque).
         /// Never throws: any failure falls back to the DWM read, then the Windows default blue.
+        /// A user-picked accent (<see cref="SetAccent"/>, or TELEGARM_ACCENT) takes precedence over all of the above.
         /// </summary>
         public static Color GetWindowsAccentColor()
         {
+            if (_accentOverride.HasValue) return _accentOverride.Value;   // step 1.2: the user's accent wins
             if (!IsWindows10OrGreater())
             {
                 LogAccentDiagOnce();   // one-shot [ACCENT] truth line so the 8.1 read + decode is verifiable by log
@@ -151,10 +222,16 @@ namespace TelegArm.Helpers
 
         private static bool _listening;
 
-        /// <summary>Begins listening for system theme/color changes (idempotent).</summary>
+        /// <summary>Begins listening for system theme/color changes (idempotent). Process-wide since step 1.2 —
+        /// Program.Run starts it, so the login screen follows a live change too (MainForm used to own it).
+        /// ⚠ CALL IT ON THE UI THREAD WITH A WINFORMS SYNCHRONIZATION CONTEXT INSTALLED. SystemEvents delivers to
+        ///   the context captured at subscription; with none (before any Control exists) it would raise ThemeChanged
+        ///   on its own thread, and every subscriber touches UI. The captured context also carries the accent
+        ///   debounce's timer back to the UI thread.</summary>
         public static void StartListening()
         {
             if (_listening) return;
+            _ui = System.Threading.SynchronizationContext.Current;
             SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
             _listening = true;
         }
@@ -175,28 +252,52 @@ namespace TelegArm.Helpers
             if (e.Category == UserPreferenceCategory.Color)
                 NotifyAccentChanged();   // route through the debounce so it coalesces with the WM_DWMCOLORIZATION path (2.2/2.3)
             else if (e.Category == UserPreferenceCategory.General && _mode == ThemeMode.System)
-                ThemeChanged?.Invoke();
+                Raise();
         }
 
         // ── Live accent-change fan-out (Part 2) ──
         // Called from BOTH MainForm's WM_DWMCOLORIZATIONCOLORCHANGED handler (the reliable signal — it fires on
         // 8.1 AND 10/11 when the accent/colorization changes) and the SystemEvents Color category. Fires
-        // ThemeChanged so every subscriber re-reads GetWindowsAccentColor() and recolors live — no restart.
-        // Debounced: a single user change often emits the notification several times, so repeats within ~300ms
-        // collapse to one recolor.
-        private static int _lastAccentTick;
+        // ThemeChanged so every subscriber re-reads the accent and recolors live — no restart.
+        // ★ STEP 1.2: TRAILING-EDGE DEBOUNCE. One user change emits the notification several times, and Windows may
+        //   write the accent in steps. The old leading-edge debounce fired on the FIRST notification and dropped the
+        //   rest for 300 ms, so the app could recolor with an intermediate value and miss the final one. Now every
+        //   notification restarts a 300 ms timer and the recolor happens once, after the burst, with the value that
+        //   stuck. The timer's callback is posted back to the UI thread (_ui, captured in StartListening).
+        // ★ A user-picked accent ignores Windows' accent: nothing to recolor, so nothing is raised.
+        private const int AccentSettleMs = 300;
+        private static readonly object _accentLock = new object();
+        private static System.Threading.Timer _accentTimer;
+        private static System.Threading.SynchronizationContext _ui;
+
         public static void NotifyAccentChanged()
         {
-            int now = Environment.TickCount;
-            if (_lastAccentTick != 0 && unchecked((uint)(now - _lastAccentTick)) < 300) return;   // coalesce bursts (2.3)
-            _lastAccentTick = now;
+            if (_accentOverride.HasValue) return;
+            if (_ui == null) _ui = System.Threading.SynchronizationContext.Current;
+            lock (_accentLock)
+            {
+                if (_accentTimer == null)
+                    _accentTimer = new System.Threading.Timer(OnAccentSettled, null, System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
+                _accentTimer.Change(AccentSettleMs, System.Threading.Timeout.Infinite);
+            }
+        }
+
+        private static void OnAccentSettled(object state)
+        {
+            var ui = _ui;
+            if (ui != null) ui.Post(s => AccentSettled(), null);
+            else AccentSettled();
+        }
+
+        private static void AccentSettled()
+        {
             try
             {
-                Debug.WriteLine("[ACCENT] change os=" + OsLabel()
+                Logger.Diag("[ACCENT] change os=" + OsLabel()
                     + " → picked 0x" + ((uint)GetWindowsAccentColor().ToArgb()).ToString("X8"));
             }
             catch { }
-            ThemeChanged?.Invoke();
+            Raise();
         }
 
         // ── OS version via RtlGetVersion (Environment.OSVersion caps at 6.2 on an unmanifested app) ──

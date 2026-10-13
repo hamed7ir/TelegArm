@@ -25,6 +25,8 @@ namespace TelegArm.SelfTest
             var tests = new List<KeyValuePair<string, Action>>();
             SettingsTests.Register(tests);
             DpiTests.Register(tests);
+            PaletteTests.Register(tests);
+            ChromeTests.Register(tests);
 
             string filter = args.Length > 0 ? args[0] : null;
             int pass = 0, fail = 0;

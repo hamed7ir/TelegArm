@@ -203,6 +203,40 @@
     <Compile Include="Helpers\IDpiAware.cs" />
     <Compile Include="Helpers\DpiScaler.cs" />
     <Compile Include="Helpers\FontCache.cs" />
+    <Compile Include="Helpers\Palette.cs" />
+    <Compile Include="Helpers\ColorMath.cs" />
+    <Compile Include="Helpers\WindowDpi.cs" />
+    <Compile Include="Helpers\WindowHit.cs" />
+    <Compile Include="UI\Controls\GlyphButton.cs" />
+    <Compile Include="UI\Controls\TitleBar.cs" />
+    <Compile Include="UI\AppForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="UI\DesignGalleryForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Helpers\KeyboardInset.cs" />
+    <Compile Include="Core\CloseAction.cs" />
+    <Compile Include="UI\Controls\DialogRows.cs" />
+    <Compile Include="UI\Controls\ThemedTextBox.cs" />
+    <Compile Include="UI\Controls\InputBox.cs" />
+    <Compile Include="UI\Controls\ThemedLabel.cs" />
+    <Compile Include="UI\Controls\EmptyState.cs" />
+    <Compile Include="UI\Controls\SettingRows.cs" />
+    <Compile Include="UI\DialogProbe.cs" />
+    <Compile Include="UI\TextBoxProbe.cs" />
+    <Compile Include="UI\DialogForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="UI\ConfirmDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="UI\InputDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="UI\CloseChoiceDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="UI\Controls\SendButton.cs" />
     <Compile Include="UI\EditContactForm.cs" />
     <Compile Include="UI\ProfilePhotoViewer.cs" />
@@ -358,6 +392,11 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <!-- Tray icons (unread-aware): swapped live by unread count. Repo root → copied beside the exe. -->
+    <!-- Redesign 1.8 (DroidFinestra pattern): the multi-size app icon, embedded, for every window (ThemedChrome.AppIcon). -->
+    <EmbeddedResource Include="..\img-icon\icon.ico">
+      <Link>app.ico</Link>
+      <LogicalName>app.ico</LogicalName>
+    </EmbeddedResource>
     <Content Include="..\img-icon\trayicon.ico">
       <Link>trayicon.ico</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

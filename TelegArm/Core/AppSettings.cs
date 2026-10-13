@@ -168,6 +168,23 @@ namespace TelegArm.Core
         /// so the file stays human-readable; parsed into ThemeHelper.ThemeMode at startup.</summary>
         public string ThemeMode { get; set; } = "System";
 
+        /// <summary>Redesign step 1.2 — the user's accent as "#RRGGBB", or "" to follow the Windows accent (the
+        /// default, and 1.x's only behaviour). GLOBAL, not per account: the login screen exists before any account.
+        /// The environment variable TELEGARM_ACCENT=#RRGGBB overrides it, so accents can be tested before the
+        /// Appearance page exists (step 5.2).</summary>
+        public string AccentColor { get; set; } = "";
+
+        /// <summary>Redesign step 1.3 — window chrome: "" = build default (TelegArm's own title bar), "Custom", or
+        /// "Native" = the ordinary Windows frame (the escape hatch if the custom chrome misbehaves on a device).
+        /// --native-caption and TELEGARM_CHROME=native|custom override it. Restart to apply.</summary>
+        public string ChromeMode { get; set; } = "";
+
+        /// <summary>Redesign step 1.5 — the text box behind the composer and the chat-list search: "" / "Legacy" =
+        /// MaterialSkin's MaterialTextBox2 (1.x, the known-good RT input path), "Plain" = ThemedTextBox (a plain native
+        /// TextBox in a painted frame). Legacy until device gate G1 passes on the RT; step 1.5b then deletes Legacy and
+        /// this setting. TELEGARM_COMPOSER=plain|legacy overrides it. Restart to apply.</summary>
+        public string ComposerEngine { get; set; } = "";
+
         // ── Storage ──────────────────────────────────────────────────────────
         // Cache root is resolved at load time (Documents-first write-test probe — see StoragePaths) rather
         // than hard-wired to %APPDATA%, which is unreliable on RT 8.1. Left null here so a fresh instance
@@ -227,6 +244,9 @@ namespace TelegArm.Core
             if (DefaultSaveFolder == null)
                 DefaultSaveFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "TelegArm");
             if (DpiMode == null) DpiMode = "";
+            if (AccentColor == null) AccentColor = "";
+            if (ChromeMode == null) ChromeMode = "";
+            if (ComposerEngine == null) ComposerEngine = "";
             // MediaCacheFolder: null is meaningful (unresolved) — NormalizeCachePath resolves it.
         }
 

@@ -71,7 +71,7 @@ namespace TelegArm.UI
             var msA = (Accent)(uint)_accent.ToArgb();   // accent slot = Windows accent (shared singleton — no blue re-poison)
             _skin.ColorScheme = new ColorScheme(a, a, a, msA, TextShade.WHITE);
 
-            try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
+            ThemedChrome.SetAppIcon(this);   // redesign 1.8: the embedded multi-size app.ico
 
             AuthManager.Reset();
             BuildUi();

@@ -233,16 +233,16 @@ namespace TelegArm.UI.Controls
         {
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            Color baseBg = IsDark ? Color.FromArgb(30, 30, 30) : Color.FromArgb(245, 245, 245);
+            Color baseBg = ThemeHelper.PaletteFor(IsDark).ChatBg;
             g.Clear((SelectionMode && Selected) ? Blend(AccentColor, baseBg, 0.18f) : baseBg);
 
             int bx = _outgoing ? Width - CardW - SideGap : SideGap;
             int by = VMargin;
             var card = new Rectangle(bx, by, CardW, CardH);
 
-            Color bubble = _outgoing ? AccentColor : (IsDark ? Color.FromArgb(60, 60, 63) : Color.FromArgb(226, 226, 226));
-            Color fg = _outgoing ? Color.White : (IsDark ? Color.FromArgb(235, 235, 235) : Color.FromArgb(20, 20, 20));
-            Color sub = _outgoing ? Color.FromArgb(210, 255, 255, 255) : (IsDark ? Color.FromArgb(160, 160, 160) : Color.FromArgb(110, 110, 110));
+            Color bubble = _outgoing ? AccentColor : (ThemeHelper.PaletteFor(IsDark).BubbleIn);
+            Color fg = _outgoing ? Color.White : (ThemeHelper.PaletteFor(IsDark).BubbleInText);
+            Color sub = _outgoing ? Color.FromArgb(210, 255, 255, 255) : (ThemeHelper.PaletteFor(IsDark).BubbleInSub);
 
             using (var b = new SolidBrush(bubble))
             using (var path = DrawHelper.RoundedRect(card, 12))

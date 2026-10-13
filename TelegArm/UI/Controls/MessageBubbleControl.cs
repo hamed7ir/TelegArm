@@ -432,8 +432,8 @@ namespace TelegArm.UI.Controls
             var rect = new Rectangle(bx, by, bubbleW, bubbleH);
             _bodyRect = rect;
 
-            Color bubbleColor = _outgoing ? AccentColor : (IsDark ? Color.FromArgb(60, 60, 63) : Color.FromArgb(226, 226, 226));
-            Color textColor = _outgoing ? Color.White : (IsDark ? Color.FromArgb(235, 235, 235) : Color.FromArgb(20, 20, 20));
+            Color bubbleColor = _outgoing ? AccentColor : (ThemeHelper.PaletteFor(IsDark).BubbleIn);
+            Color textColor = _outgoing ? Color.White : (ThemeHelper.PaletteFor(IsDark).BubbleInText);
             using (var b = new SolidBrush(bubbleColor))
             using (var path = DrawHelper.RoundedRect(rect, 14))
                 g.FillPath(b, path);
@@ -449,7 +449,7 @@ namespace TelegArm.UI.Controls
             if (_albumAudio)   // vertical audio row list (Telegram-Desktop style)
             {
                 Color subColor = _outgoing ? Color.FromArgb(210, 255, 255, 255)
-                                           : (IsDark ? Color.FromArgb(160, 160, 160) : Color.FromArgb(110, 110, 110));
+                                           : (ThemeHelper.PaletteFor(IsDark).BubbleInSub);
                 for (int i = 0; i < n; i++)
                 {
                     var rowRect = new Rectangle(innerX, ty + i * AudioRowH, contentW, AudioRowH - 4);
@@ -493,7 +493,7 @@ namespace TelegArm.UI.Controls
             }
 
             Color timeColor = _outgoing ? Color.FromArgb(220, 255, 255, 255)
-                                        : (IsDark ? Color.FromArgb(160, 160, 160) : Color.FromArgb(120, 120, 120));
+                                        : (ThemeHelper.PaletteFor(IsDark).BubbleInTime);
             using (var timeSf = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Far })
             using (var tcb = new SolidBrush(timeColor))
                 g.DrawString(StampText(), _timeFont, tcb, new RectangleF(bx + Pad, by + bubbleH - TimeH, bubbleW - 2 * Pad, TimeH), timeSf);
@@ -1241,9 +1241,9 @@ namespace TelegArm.UI.Controls
             var rect = new Rectangle(bx, by, bubbleW, bodyH);
             _bodyRect = rect;
 
-            Color bubbleColor = _outgoing ? AccentColor : (IsDark ? Color.FromArgb(60, 60, 63) : Color.FromArgb(226, 226, 226));
-            Color fg = _outgoing ? Color.White : (IsDark ? Color.FromArgb(235, 235, 235) : Color.FromArgb(20, 20, 20));
-            Color sub = _outgoing ? Color.FromArgb(210, 255, 255, 255) : (IsDark ? Color.FromArgb(160, 160, 160) : Color.FromArgb(110, 110, 110));
+            Color bubbleColor = _outgoing ? AccentColor : (ThemeHelper.PaletteFor(IsDark).BubbleIn);
+            Color fg = _outgoing ? Color.White : (ThemeHelper.PaletteFor(IsDark).BubbleInText);
+            Color sub = _outgoing ? Color.FromArgb(210, 255, 255, 255) : (ThemeHelper.PaletteFor(IsDark).BubbleInSub);
             using (var b = new SolidBrush(bubbleColor))
             using (var path = DrawHelper.RoundedRect(rect, 14))
                 g.FillPath(b, path);
@@ -1299,7 +1299,7 @@ namespace TelegArm.UI.Controls
                 : (_pollTotal + (_pollMultiple ? (_pollTotal == 1 ? " answer" : " answers") : (_pollTotal == 1 ? " voter" : " voters")));
             TextRenderer.DrawText(g, footer, _timeFont, new Rectangle(innerX, ty, contentW, PollFooterH), sub, tf);
 
-            Color timeColor = _outgoing ? Color.FromArgb(220, 255, 255, 255) : (IsDark ? Color.FromArgb(160, 160, 160) : Color.FromArgb(120, 120, 120));
+            Color timeColor = _outgoing ? Color.FromArgb(220, 255, 255, 255) : (ThemeHelper.PaletteFor(IsDark).BubbleInTime);
             using (var timeSf = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Far })
             using (var tcb = new SolidBrush(timeColor))
                 g.DrawString(StampText(), _timeFont, tcb, new RectangleF(bx + Pad, by + bodyH - TimeH, bubbleW - 2 * Pad, TimeH), timeSf);
@@ -1642,7 +1642,7 @@ namespace TelegArm.UI.Controls
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
 
-            Color basePanelBg = IsDark ? Color.FromArgb(30, 30, 30) : Color.FromArgb(245, 245, 245);
+            Color basePanelBg = ThemeHelper.PaletteFor(IsDark).ChatBg;
             Color panelBg = (SelectionMode && Selected) ? Blend(AccentColor, basePanelBg, 0.18f) : basePanelBg;
             g.Clear(panelBg);
             DrawSenderAvatar(g);
@@ -1663,10 +1663,10 @@ namespace TelegArm.UI.Controls
 
                 Color bubbleColor = _outgoing
                     ? AccentColor
-                    : (IsDark ? Color.FromArgb(60, 60, 63) : Color.FromArgb(226, 226, 226));
+                    : (ThemeHelper.PaletteFor(IsDark).BubbleIn);
                 Color textColor = _outgoing
                     ? Color.White
-                    : (IsDark ? Color.FromArgb(235, 235, 235) : Color.FromArgb(20, 20, 20));
+                    : (ThemeHelper.PaletteFor(IsDark).BubbleInText);
 
                 using (var b = new SolidBrush(bubbleColor))
                 using (var path = DrawHelper.RoundedRect(rect, 14))
@@ -1702,7 +1702,7 @@ namespace TelegArm.UI.Controls
 
                 Color timeColor = _outgoing
                     ? Color.FromArgb(220, 255, 255, 255)
-                    : (IsDark ? Color.FromArgb(160, 160, 160) : Color.FromArgb(120, 120, 120));
+                    : (ThemeHelper.PaletteFor(IsDark).BubbleInTime);
                 using (var timeSf = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Far })
                 using (var tcb = new SolidBrush(timeColor))
                     g.DrawString(StampText(), _timeFont, tcb,
@@ -1789,9 +1789,9 @@ namespace TelegArm.UI.Controls
             var rect = new Rectangle(bx, by + fwdOff + replyOff, cardW, FileCardH);
             _fileRect = rect;
 
-            Color bubbleColor = _outgoing ? AccentColor : (IsDark ? Color.FromArgb(60, 60, 63) : Color.FromArgb(226, 226, 226));
-            Color textColor = _outgoing ? Color.White : (IsDark ? Color.FromArgb(235, 235, 235) : Color.FromArgb(20, 20, 20));
-            Color subColor = _outgoing ? Color.FromArgb(220, 255, 255, 255) : (IsDark ? Color.FromArgb(160, 160, 160) : Color.FromArgb(110, 110, 110));
+            Color bubbleColor = _outgoing ? AccentColor : (ThemeHelper.PaletteFor(IsDark).BubbleIn);
+            Color textColor = _outgoing ? Color.White : (ThemeHelper.PaletteFor(IsDark).BubbleInText);
+            Color subColor = _outgoing ? Color.FromArgb(220, 255, 255, 255) : (ThemeHelper.PaletteFor(IsDark).BubbleInSub);
 
             if (HasForward) DrawForwardHeader(g, bx, by, cardW);
             if (HasReply) DrawReplyHeader(g, bx, by + fwdOff, cardW);
@@ -1837,10 +1837,10 @@ namespace TelegArm.UI.Controls
 
             Color bubbleColor = _outgoing
                 ? AccentColor
-                : (IsDark ? Color.FromArgb(60, 60, 63) : Color.FromArgb(226, 226, 226));
+                : (ThemeHelper.PaletteFor(IsDark).BubbleIn);
             Color textColor = _outgoing
                 ? Color.White
-                : (IsDark ? Color.FromArgb(235, 235, 235) : Color.FromArgb(20, 20, 20));
+                : (ThemeHelper.PaletteFor(IsDark).BubbleInText);
 
             if (!IsSticker && !IsRoundVideo)   // stickers + round video notes have no bubble background
                 using (var b = new SolidBrush(bubbleColor))
@@ -1937,7 +1937,7 @@ namespace TelegArm.UI.Controls
 
             Color timeColor = _outgoing
                 ? Color.FromArgb(220, 255, 255, 255)
-                : (IsDark ? Color.FromArgb(160, 160, 160) : Color.FromArgb(120, 120, 120));
+                : (ThemeHelper.PaletteFor(IsDark).BubbleInTime);
             using (var timeSf = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Far })
             using (var tcb = new SolidBrush(timeColor))
                 g.DrawString(StampText(), _timeFont, tcb,
@@ -2337,7 +2337,7 @@ namespace TelegArm.UI.Controls
                 }
             }
 
-            Color titleC = _outgoing ? Color.White : (IsDark ? Color.FromArgb(235, 235, 235) : Color.FromArgb(20, 20, 20));
+            Color titleC = _outgoing ? Color.White : (ThemeHelper.PaletteFor(IsDark).BubbleInText);
             Color descC = _outgoing ? Color.FromArgb(220, 255, 255, 255) : (IsDark ? Color.FromArgb(180, 180, 185) : Color.FromArgb(90, 90, 95));
             int ty = y + CardPad;
             if (_cardSiteH > 0) { DrawCardLine(g, _cardSite, _cardSiteFont, textLeft, ty, _cardTextColW, _cardSiteH, barC, false); ty += _cardSiteH + 2; }

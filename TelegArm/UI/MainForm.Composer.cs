@@ -84,7 +84,7 @@ namespace TelegArm.UI
         //    turns it into MessageEntity[] on send. Uses only public SelectionStart/SelectionLength/Text (no internals).
         private void WrapComposerSelection(string open, string close)
         {
-            var tb = _messageInput; if (tb == null) return;
+            var tb = _messageInput; if (tb == null || !tb.Enabled) return;   // review 1.5: never write into a disabled composer
             try
             {
                 string t = tb.Text ?? "";
@@ -101,7 +101,7 @@ namespace TelegArm.UI
 
         private void InsertComposerLink()
         {
-            var tb = _messageInput; if (tb == null) return;
+            var tb = _messageInput; if (tb == null || !tb.Enabled) return;   // review 1.5: never write into a disabled composer
             try
             {
                 string t = tb.Text ?? "";
@@ -119,7 +119,7 @@ namespace TelegArm.UI
 
         private void PasteIntoComposer()
         {
-            var tb = _messageInput; if (tb == null) return;
+            var tb = _messageInput; if (tb == null || !tb.Enabled) return;   // review 1.5: never write into a disabled composer
             try
             {
                 if (!Clipboard.ContainsText()) return;

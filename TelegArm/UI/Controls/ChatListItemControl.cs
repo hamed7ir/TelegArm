@@ -82,11 +82,11 @@ namespace TelegArm.UI.Controls
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
 
-            Color bg = IsDark ? Color.FromArgb(40, 40, 40) : Color.White;
-            Color nameColor = IsDark ? Color.White : Color.FromArgb(30, 30, 30);
-            Color subColor = IsDark ? Color.FromArgb(150, 150, 150) : Color.FromArgb(120, 120, 120);
+            Color bg = ThemeHelper.PaletteFor(IsDark).ListBg;
+            Color nameColor = ThemeHelper.PaletteFor(IsDark).ListName;
+            Color subColor = ThemeHelper.PaletteFor(IsDark).ListSub;
             if (_selected)
-                bg = IsDark ? Color.FromArgb(55, 55, 58) : Color.FromArgb(225, 235, 245);
+                bg = ThemeHelper.PaletteFor(IsDark).ListSelected;
             g.Clear(bg);
 
             const int d = 48, ax = 8, ay = 8;
@@ -167,7 +167,7 @@ namespace TelegArm.UI.Controls
             {
                 // DRAFTS: "Draft: " in red (Telegram-style), then the draft text in the normal sub color.
                 const string lbl = "Draft: ";
-                Color draftColor = IsDark ? Color.FromArgb(240, 116, 116) : Color.FromArgb(214, 69, 69);
+                Color draftColor = ThemeHelper.PaletteFor(IsDark).ListDraft;
                 using (var pf = FontHelper.For(Entry.DraftText ?? "", 9f))
                 {
                     var mf = TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix;
@@ -189,7 +189,7 @@ namespace TelegArm.UI.Controls
             if (clusterW > 0)
             {
                 int rx = Width - rightPad;   // right edge, walked leftward per indicator
-                Color mutedGrey = IsDark ? Color.FromArgb(120, 120, 124) : Color.FromArgb(178, 178, 184);
+                Color mutedGrey = ThemeHelper.PaletteFor(IsDark).ListMuted;
                 if (hasBadge)
                 {
                     var badge = new Rectangle(rx - unreadW, 36, unreadW, bh);
@@ -223,7 +223,7 @@ namespace TelegArm.UI.Controls
             else if (PinnedInView)
                 DrawPinIcon(g, new Rectangle(Width - rightPad - 16, 38, 14, 14), subColor);
 
-            using (var p = new Pen(IsDark ? Color.FromArgb(55, 55, 55) : Color.FromArgb(235, 235, 235)))
+            using (var p = new Pen(ThemeHelper.PaletteFor(IsDark).ListDivider))
                 g.DrawLine(p, textLeft, Height - 1, Width, Height - 1);
         }
 

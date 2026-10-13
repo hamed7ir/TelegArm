@@ -7,7 +7,7 @@
 # Raise -Step's default as the plan advances. Exit code 0 = every enforced gate passed and SelfTest passed.
 #
 # ASCII only: Windows PowerShell 5.1 reads a BOM-less script as ANSI.
-param([string]$Step = '1.1', [switch]$NoSelfTest)
+param([string]$Step = '1.8', [switch]$NoSelfTest)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $app = Join-Path $root 'TelegArm'
@@ -64,7 +64,7 @@ $gates = @(
     @{ From = '1.1'; Name = 'no Control.DeviceDpi (it reports the system DPI under PMv1 - track DPI per window)'; Test = { Hits $all '\.DeviceDpi\b' $null } }
     @{ From = '1.3'; Name = 'no ClientSize = in AppForm / DialogForm subclasses (set Size)'; Test = {
         $forms = @($all | Where-Object { (Select-String -LiteralPath $_.FullName -Pattern ':\s*(AppForm|DialogForm)\b' -Quiet) })
-        Hits $forms '\bClientSize\s*=' $null } }
+        Hits $forms '\bClientSize\s*=(?!=)' $null } }
     @{ From = '2.8'; Name = 'no MaterialSkin anywhere'; Test = { Hits $all '\bMaterial[A-Z]\w*|\bMaterialSkin\b' $null } }
     @{ From = '3.1'; Name = 'no CreateGraphics().Dpi'; Test = { Hits $all 'CreateGraphics\(\)\s*\.\s*Dpi' $null } }
     @{ From = '3.3'; Name = 'no new Font( or .SizeInPoints outside FontCache / FontHelper'; Test = { Hits $all 'new\s+Font\s*\(|\.SizeInPoints\b' '^(FontCache|FontHelper)\.cs$' } }

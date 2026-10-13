@@ -31,7 +31,7 @@ namespace TelegArm.UI.Controls
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
-            g.Clear(IsDark ? Color.FromArgb(30, 30, 30) : Color.FromArgb(245, 245, 245));
+            g.Clear(ThemeHelper.PaletteFor(IsDark).ChatBg);
             if (string.IsNullOrEmpty(_text) || Width < 40) return;
 
             using (var f = FontHelper.For(_text, 7.5f))
@@ -43,11 +43,11 @@ namespace TelegArm.UI.Controls
                 int pillH = Math.Min(Height - 4, sz.Height + 8);
                 var pill = new Rectangle((Width - pillW) / 2, (Height - pillH) / 2, pillW, pillH);
 
-                using (var b = new SolidBrush(IsDark ? Color.FromArgb(70, 0, 0, 0) : Color.FromArgb(26, 0, 0, 0)))
+                using (var b = new SolidBrush(ThemeHelper.PaletteFor(IsDark).ServicePillBg))
                 using (var p = DrawHelper.RoundedRect(pill, pillH / 2))
                     g.FillPath(b, p);
 
-                Color tc = IsDark ? Color.FromArgb(190, 190, 196) : Color.FromArgb(105, 105, 110);
+                Color tc = ThemeHelper.PaletteFor(IsDark).ServicePillText;
                 TextRenderer.DrawText(g, _text, f, pill, tc,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter
                     | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);

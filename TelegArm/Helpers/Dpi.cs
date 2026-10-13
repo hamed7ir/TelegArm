@@ -79,6 +79,28 @@ namespace TelegArm.Helpers
             return d > 0 ? d : SystemDpi;
         }
 
+        /// <summary>The DPI of the monitor <paramref name="hwnd"/> is on, AS THIS PROCESS SEES IT: the real per-monitor
+        /// value when per-monitor aware, the system DPI otherwise (Windows virtualizes it — measured in step 1.1).
+        /// So a system-aware build gets SystemDpi everywhere and every per-window path stays inert.</summary>
+        public static int ForWindow(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero) return SystemDpi;
+            try
+            {
+                if (Has("user32.dll", "GetDpiForWindow")) { int d = (int)GetDpiForWindow(hwnd); if (d > 0) return d; }   // 1607+
+                if (Has("shcore.dll", "GetDpiForMonitor"))                                                                 // 8.1 / RT 8.1
+                {
+                    uint x, y;
+                    if (GetDpiForMonitor(MonitorFromWindow(hwnd, 2), 0, out x, out y) == 0 && x > 0) return (int)x;
+                }
+            }
+            catch { }
+            return SystemDpi;
+        }
+
+        [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr hwnd);
+        [DllImport("user32.dll")] private static extern IntPtr MonitorFromWindow(IntPtr hwnd, int flags);
+
         // ── the declaration ──────────────────────────────────────────────────────────────────────────────────
 
         /// <summary>Declares the process's DPI awareness once, reads back what is really in force, and builds the

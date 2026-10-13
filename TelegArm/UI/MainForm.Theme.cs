@@ -38,15 +38,17 @@ namespace TelegArm.UI
 
         private void ApplyPanelColors()
         {
+            _searchBox?.Recolor();     // redesign 1.5: the Plain engine paints from the palette (Legacy: MaterialSkin)
+            _messageInput?.Recolor();
             if (_chatListPanel != null)
-                _chatListPanel.BackColor = _dark ? Color.FromArgb(40, 40, 40) : Color.White;
+                _chatListPanel.BackColor = ThemeHelper.PaletteFor(_dark).ListBg;
             if (_messagePanel != null)
-                _messagePanel.BackColor = _dark ? Color.FromArgb(30, 30, 30) : Color.FromArgb(245, 245, 245);
+                _messagePanel.BackColor = ThemeHelper.PaletteFor(_dark).ChatBg;
             foreach (var sb in _scrollBars)
             {
                 sb.IsDark = _dark;
                 sb.AccentColor = _accent;
-                if (sb.Parent != null) sb.Parent.BackColor = _dark ? Color.FromArgb(30, 30, 30) : Color.FromArgb(245, 245, 245);
+                if (sb.Parent != null) sb.Parent.BackColor = ThemeHelper.PaletteFor(_dark).ChatBg;
                 sb.Invalidate();
             }
             // SCROLLBTN-REGION: the jump button was themed only at construction — recolor it on live
@@ -134,7 +136,7 @@ namespace TelegArm.UI
             // UI-FIX-T1: the ctor-only color sites (UI-AUDIT A.3) — re-push/re-derive on a live theme switch.
             if (_folderBar != null)
             {
-                _folderBar.BackColor = _dark ? Color.FromArgb(40, 40, 40) : Color.White;
+                _folderBar.BackColor = ThemeHelper.PaletteFor(_dark).ListBg;
                 RebuildFolderBar();   // tab colors derive from _dark/_accent at build → rebuilding IS the recolor
             }
             RebuildTopicBar();        // FORUM-TOPICS: same immutable-chip pattern → rebuild to recolor on theme change (any folder mode)

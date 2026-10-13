@@ -315,7 +315,9 @@ namespace TelegArm.UI
             try
             {
                 string path = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, fileName);
-                if (System.IO.File.Exists(path)) return new Icon(path);
+                // Redesign 1.8: ask for the tray's own size (SM_CXSMICON: 16/20/24 px at 100/125/150%) — the .ico has every
+                // one of those frames now, so Windows no longer stretches a 32 px frame down (or a 16 px one up).
+                if (System.IO.File.Exists(path)) return new Icon(path, SystemInformation.SmallIconSize);
             }
             catch { }
             return null;
