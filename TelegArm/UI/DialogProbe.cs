@@ -105,6 +105,77 @@ namespace TelegArm.UI
             }
 
             ShowNew(owner, () => Confirm(false), x => { info("dialog at DPI " + ((AppForm)x).WindowDpiValue + ": confirm " + x.Size); Key(x, Keys.Escape); });
+
+            // Step 2.1: the ThemedDialog facade (157 callers) on DialogForm keeps 1.x's contract.
+            Expect(check, "ThemedDialog: Esc = -1", -1, LegacyResult(owner, x => Key(x, Keys.Escape)));
+            Expect(check, "ThemedDialog: Enter = the LAST button (1.x's initial focus: Cancel, not Delete)", 1, LegacyResult(owner, x => Key(x, Keys.Enter)));
+            Expect(check, "ThemedDialog: the leftmost button is index 0", 0, LegacyResult(owner, x =>
+            {
+                Control left = null;
+                foreach (var b in FindAll<Controls.RoundedButton>(x)) if (left == null || b.Left < left.Left) left = b;
+                ((Button)left).PerformClick();
+            }));
+            Expect(check, "ThemedDialog: closing it (✕) = -1", -1, LegacyResult(owner, x => x.Close()));
+            string copied = null;
+            var saved = ThemedDialog.CopyToClipboard;
+            ThemedDialog.CopyToClipboard = t => { copied = t; return true; };
+            try { LegacyResult(owner, x => { PostCtrl(x, Keys.C); x.BeginInvoke((Action)(() => Key(x, Keys.Escape))); }); }
+            finally { ThemedDialog.CopyToClipboard = saved; }
+            check(copied == LegacyMessage, "ThemedDialog: Ctrl+C copies the WHOLE message", copied == null ? "nothing copied" : "\"" + copied + "\"");
+            using (var d = NewLegacy())
+            {
+                var kinds = "";
+                foreach (var b in FindAll<Controls.RoundedButton>(d)) kinds += b.Text + "=" + b.Kind + " ";
+                check(kinds.Contains("Delete=Danger") && kinds.Contains("Cancel=Neutral"), "ThemedDialog: a destructive first action is Danger-red", kinds.Trim());
+            }
+        }
+
+        private const string LegacyMessage = "Delete this chat for everyone? This can't be undone.";
+
+        /// <summary>The facade's private dialog, built as the rig builds it (reflection), with ("Delete", "Cancel").</summary>
+        private static Form NewLegacy()
+        {
+            var t = typeof(ThemedDialog).GetNestedType("Dialog", System.Reflection.BindingFlags.NonPublic);
+            return (Form)Activator.CreateInstance(t, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic,
+                null, new object[] { "Delete chat", LegacyMessage, new[] { "Delete", "Cancel" } }, null);
+        }
+
+        /// <summary>Shows the facade's dialog, runs <paramref name="act"/>, returns its Result (the index Show would return).</summary>
+        private static int LegacyResult(IWin32Window owner, Action<Form> act)
+        {
+            using (var d = NewLegacy())
+            {
+                var r = Show(owner, d, act);
+                if (r == DialogResult.Abort) return -99;   // the guard fired: the key was ignored
+                return (int)d.GetType().GetField("Result").GetValue(d);
+            }
+        }
+
+        private static System.Collections.Generic.List<T> FindAll<T>(Control root) where T : Control
+        {
+            var list = new System.Collections.Generic.List<T>();
+            foreach (Control c in root.Controls) { if (c is T) list.Add((T)c); list.AddRange(FindAll<T>(c)); }
+            return list;
+        }
+
+        /// <summary>Ctrl+key as a keystroke: the key's WM_KEYDOWN with the Control state set for the posted message.</summary>
+        private static void PostCtrl(Form d, Keys k)
+        {
+            var target = d.ActiveControl != null && d.ActiveControl.IsHandleCreated ? d.ActiveControl.Handle : d.Handle;
+            var state = new byte[256];
+            GetKeyboardState(state);
+            byte old = state[0x11];
+            state[0x11] = 0x80; SetKeyboardState(state);
+            try { PostMessage(target, WM_KEYDOWN, (IntPtr)(int)k, IntPtr.Zero); Application.DoEvents(); }
+            finally { GetKeyboardState(state); state[0x11] = old; SetKeyboardState(state); }
+        }
+
+        [DllImport("user32.dll")] private static extern bool GetKeyboardState(byte[] state);
+        [DllImport("user32.dll")] private static extern bool SetKeyboardState(byte[] state);
+
+        private static void Expect(Action<bool, string, string> check, string name, int want, int got)
+        {
+            check(got == want, name, "got " + got + (got == -99 ? " (the key was ignored: guard timeout)" : ""));
         }
 
         private static ConfirmDialog Confirm(bool danger)

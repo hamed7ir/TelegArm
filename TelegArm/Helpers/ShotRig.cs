@@ -145,6 +145,12 @@ namespace TelegArm.Helpers
             try
             {
                 f = make();
+                // On the PRIMARY monitor, always: a hidden form otherwise lands wherever Windows' default placement puts
+                // it (the monitor under the cursor), and anything that depends on its monitor — AppForm's compact title
+                // bar (work area ≤ 800 logical px), per-monitor DPI — made the shots depend on where the mouse was
+                // (step 2.1: the gallery's bar flipped between compact and full between two runs).
+                f.StartPosition = FormStartPosition.Manual;
+                f.Location = Screen.PrimaryScreen.WorkingArea.Location;
                 Realize(f);
                 shoot(f);
             }
@@ -331,6 +337,7 @@ namespace TelegArm.Helpers
                 foreach (var s in new[] { "Reply", "Copy text", "Forward", "Pin", "Select" }) menu.Items.Add(s);
                 menu.Items.Add(new ToolStripSeparator());
                 menu.Items.Add("Delete");
+                menu.Prepare(null);   // step 2.0: what an opening does — icons, touch-sized rows (Restyled: at the DPI)
                 menu.Size = menu.GetPreferredSize(Size.Empty);
                 CreateControlIgnoringVisible.Invoke(menu, new object[] { true });
                 Capture(menu, name);

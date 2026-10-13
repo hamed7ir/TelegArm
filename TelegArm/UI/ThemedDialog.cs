@@ -1,17 +1,25 @@
 using System;
 using System.Drawing;
+using System.Text.RegularExpressions;
 using System.Windows.Forms;
-using MaterialSkin;
-using MaterialSkin.Controls;
 using TelegArm.Helpers;
+using TelegArm.UI.Controls;
 
 namespace TelegArm.UI
 {
     /// <summary>
-    /// Themed replacement for <see cref="MessageBox"/> — a MaterialForm styled from
-    /// <see cref="ThemeHelper"/> (dark/light + Windows accent) so confirmations/alerts
-    /// match the rest of the app instead of looking like a native Windows dialog.
-    /// <see cref="Show"/> returns the index of the clicked button, or -1 if dismissed.
+    /// Themed replacement for <see cref="MessageBox"/>. <see cref="Show"/> returns the index of the clicked button
+    /// (0 = the first), or -1 when dismissed (Esc, ✕).
+    ///
+    /// Redesign step 2.1: the dialog behind the facade is a <see cref="DialogForm"/> (was a MaterialForm); the 157
+    /// callers are unchanged, and so is what they rely on:
+    ///  • the button ORDER: index 0, the primary action, is the LEFTMOST — 1.x's layout, kept for muscle memory;
+    ///  • the INITIAL FOCUS: the LAST button (1.x's first tab stop), so Enter on ("Delete", "Cancel") is Cancel;
+    ///  • Esc = -1; Ctrl+C copies the WHOLE message; the message itself is selectable text.
+    /// What changed: sizes are logical (Px), so the dialog is right at 125/150% instead of 1.x's fixed pixels; a long
+    /// message scrolls in the body (themed bar, touch momentum) instead of growing past the screen; a destructive first
+    /// action ("Delete", "Leave", …) is drawn red; and it no longer registers with MaterialSkinManager — 1.x re-skinned
+    /// every managed window (BackColor/ForeColor/Font of every control) each time a dialog opened.
     /// </summary>
     public static class ThemedDialog
     {
@@ -29,106 +37,124 @@ namespace TelegArm.UI
             }
         }
 
-        private sealed class Dialog : MaterialForm
+        /// <summary>Where Ctrl+C sends the message; the probe swaps it so a test never touches the user's clipboard.</summary>
+        internal static Func<string, bool> CopyToClipboard = text =>
+        {
+            try { Clipboard.SetText(text.Length > 0 ? text : " "); return true; } catch { return false; }
+        };
+
+        // A first action that destroys or leaves something is drawn Danger-red, never accent.
+        private static readonly Regex Destructive = new Regex(@"^(delete|remove|leave|log ?out|sign out|block|ban|kick|clear|discard|revoke|unlink|terminate|reset|stop)\b",
+                                                             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        private sealed class Dialog : DialogForm
         {
             public int Result = -1;
 
-            private readonly string _title;
-            private readonly Color _accent;
-            private const int BarH = 44;   // accent title-bar height
+            private const int W = 440, MaxBody = 420, MinButton = 96, ButtonPad = 40;
+            private readonly string _message;
+            private readonly TextBox _text;
 
-            public Dialog(string title, string message, string[] buttons)
+            public Dialog(string title, string message, string[] buttons) : base(title ?? "", W, 200)
             {
-                _title = title ?? "";
-                _accent = ThemeHelper.GetWindowsAccentColor();
+                _message = message ?? "";
+                var p = ThemeHelper.Palette;
 
-                var skin = MaterialSkinManager.Instance;
-                skin.AddFormToManage(this);
-                skin.Theme = ThemeHelper.IsDark ? MaterialSkinManager.Themes.DARK : MaterialSkinManager.Themes.LIGHT;
-                var accent = (Primary)(uint)_accent.ToArgb();
-                var msAccent = (Accent)(uint)_accent.ToArgb();   // accent slot = Windows accent (shared singleton — no blue re-poison)
-                skin.ColorScheme = new ColorScheme(accent, accent, accent, msAccent, TextShade.WHITE);
-
-                FormStyle = FormStyles.ActionBar_None;
-                Text = title;
-                TelegArm.Helpers.ThemedChrome.SetAppIcon(this);   // app icon in the taskbar / Alt-Tab
-                AutoScaleMode = AutoScaleMode.Font;
-                StartPosition = FormStartPosition.CenterParent;
-                MaximizeBox = false;
-                MinimizeBox = false;
-                Sizable = false;
-                KeyPreview = true;
-
-                const int W = 440;
-                int msgLeft = 22, msgTop = BarH + 18, msgW = W - 44;
-
-                // Title is owner-painted onto the accent bar (OnPaint); message sits below it.
-                // COPYABLE message: a read-only, borderless TextBox styled like the old MaterialLabel — so the text
-                // can be SELECTED + copied (drag-select, right-click Copy, or Ctrl+C for the whole thing). Measured +
-                // sized exactly as before (long bodies still size to fit — the logout/probe-result case).
-                Font msgFont;
-                using (var fp = new MaterialLabel()) msgFont = fp.Font ?? new Font("Segoe UI", 10f);
-                Size measured = TextRenderer.MeasureText(message ?? "", msgFont,
-                    new Size(msgW, int.MaxValue), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
-                int msgH = Math.Max(44, measured.Height + 8);
-                var txtMsg = new TextBox
+                // COPYABLE message: a read-only, borderless TextBox (drag-select, right-click Copy, Ctrl+C for all) — as in
+                // 1.x, now sized by the body (it scrolls there when longer than the dialog may grow).
+                int dpi = WindowDpiValue;
+                _text = new TextBox
                 {
-                    Text = message ?? "",
-                    Location = new Point(msgLeft, msgTop),
-                    Size = new Size(msgW, msgH),
+                    Text = _message.Replace("\r\n", "\n").Replace("\n", "\r\n"),
                     Multiline = true, ReadOnly = true, WordWrap = true,
-                    BorderStyle = BorderStyle.None, TabStop = false,
-                    Font = msgFont,
-                    BackColor = skin.BackgroundColor,
-                    ForeColor = ThemeHelper.IsDark ? Color.FromArgb(230, 230, 234) : Color.FromArgb(40, 40, 44),
-                    Cursor = Cursors.IBeam
+                    BorderStyle = BorderStyle.None, TabStop = false, ScrollBars = ScrollBars.None,
+                    Font = FontHelper.ForAt(_message, 10.5f, dpi),
+                    BackColor = p.Window, ForeColor = p.Text, Cursor = Cursors.IBeam,
                 };
-                Controls.Add(txtMsg);
+                var row = new MessageHost(_text);
+                PopulateBody(row);
 
-                int btnTop = msgTop + msgH + 20;
-                ClientSize = new Size(W, btnTop + 36 + 18);
-
-                // Right-aligned buttons; index 0 is the primary (Contained) action.
-                int x = W - 16;
+                // First added = rightmost: add the LAST button first, so index 0 ends up leftmost (1.x's order).
+                RoundedButton last = null;
                 for (int i = buttons.Length - 1; i >= 0; i--)
                 {
                     int idx = i;
-                    int w = Math.Max(92, buttons[i].Length * 9 + 36);
-                    x -= w;
-                    var btn = new MaterialButton
-                    {
-                        Text = buttons[i],
-                        Type = i == 0 ? MaterialButton.MaterialButtonType.Contained
-                                      : MaterialButton.MaterialButtonType.Outlined,
-                        AutoSize = false,
-                        Width = w,
-                        Height = 36,
-                        Location = new Point(x, btnTop)
-                    };
-                    btn.Click += (s, e) => { Result = idx; Close(); };
-                    Controls.Add(btn);
-                    x -= 8;
+                    var kind = i == 0 ? (Destructive.IsMatch(buttons[i] ?? "") ? RoundedButtonKind.Danger : RoundedButtonKind.Primary)
+                                      : RoundedButtonKind.Neutral;
+                    var b = AddFooterButton(buttons[i] ?? "", kind, DialogResult.None, ButtonWidthFor(buttons[i] ?? ""));
+                    b.Click += (s, e) => { Result = idx; DialogResult = DialogResult.OK; };
+                    if (last == null) last = b;
                 }
+                ActiveControl = last;   // 1.x: the last button had focus, so Enter is the safe choice
 
-                KeyDown += (s, e) =>
-                {
-                    if (e.KeyCode == Keys.Escape) { Result = -1; Close(); }
-                    else if (e.Control && e.KeyCode == Keys.C)   // Ctrl+C copies the WHOLE message (not just a selection)
-                    { try { Clipboard.SetText(message ?? ""); } catch { } e.Handled = e.SuppressKeyPress = true; }
-                };
-                Shown += (s, e) => Invalidate();   // ensure the accent bar paints
+                // Height from the wrapped message at this width, capped (a longer message scrolls in the body).
+                int bodyWidth = Width - 2 - ThemedScrollBar.LaneWidth(dpi);
+                int bodyH = Math.Min(Px(MaxBody), row.HeightFor(bodyWidth) + Px(RowGap) * 2);
+                Size = new Size(Width, Bar.Height + bodyH + Px(FooterHeight) + 1);
             }
 
-            protected override void OnPaint(PaintEventArgs e)
+            /// <summary>Wide enough for the label (button font, logical px), at least <see cref="MinButton"/>.</summary>
+            private static int ButtonWidthFor(string text)
             {
-                base.OnPaint(e);
-                // Accent title bar (matches the app's other themed headers), title in white, dark+light alike.
-                using (var b = new SolidBrush(_accent))
-                    e.Graphics.FillRectangle(b, 0, 0, ClientSize.Width, BarH);
-                using (var f = new Font("Segoe UI", 11.5f, FontStyle.Bold))
-                    TextRenderer.DrawText(e.Graphics, _title, f, new Rectangle(20, 0, ClientSize.Width - 40, BarH),
-                        Color.White, TextFormatFlags.VerticalCenter | TextFormatFlags.Left
-                                     | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+                var f = FontHelper.UiAt(10f, Dpi.Logical, FontStyle.Bold);
+                int w = TextRenderer.MeasureText(text, f, Size.Empty, TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine).Width;
+                return Math.Max(MinButton, w + ButtonPad);
+            }
+
+            protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+            {
+                if (keyData == (Keys.Control | Keys.C))   // the WHOLE message, as 1.x (a selection is not needed)
+                {
+                    CopyToClipboard(_message);
+                    return true;
+                }
+                return base.ProcessCmdKey(ref msg, keyData);
+            }
+
+            protected override void ApplyDialogTheme()
+            {
+                base.ApplyDialogTheme();
+                if (_text == null) return;
+                var p = ThemeHelper.Palette;
+                _text.BackColor = p.Window; _text.ForeColor = p.Text;
+            }
+
+            /// <summary>The message TextBox inside a row whose height follows the wrapped text at the row's width.</summary>
+            private sealed class MessageHost : Control
+            {
+                private const int PadX = 14, PadY = 8;
+                private readonly TextBox _box;
+                private int _measuredWidth = -1;
+
+                public MessageHost(TextBox box)
+                {
+                    _box = box;
+                    TabStop = false;
+                    Controls.Add(box);
+                    BackColor = ThemeHelper.Palette.Window;
+                }
+
+                public int HeightFor(int width)
+                {
+                    int dpi = Dpi.Of(this), padX = Dpi.Px(PadX, dpi), padY = Dpi.Px(PadY, dpi);
+                    int textW = Math.Max(1, width - 2 * padX);
+                    var sz = TextRenderer.MeasureText(_box.Text, _box.Font, new Size(textW, 0),
+                        TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.TextBoxControl);
+                    return sz.Height + 2 * padY + Dpi.Px(4, dpi);   // a little slack: the EDIT's own line spacing
+                }
+
+                protected override void OnSizeChanged(EventArgs e)
+                {
+                    base.OnSizeChanged(e);
+                    if (Width != _measuredWidth)
+                    {
+                        _measuredWidth = Width;
+                        int h = HeightFor(Width);
+                        if (Height != h) Height = h;
+                    }
+                    int dpi = Dpi.Of(this), padX = Dpi.Px(PadX, dpi), padY = Dpi.Px(PadY, dpi);
+                    _box.SetBounds(padX, padY, Math.Max(1, Width - 2 * padX), Math.Max(1, Height - 2 * padY));
+                }
             }
         }
     }
