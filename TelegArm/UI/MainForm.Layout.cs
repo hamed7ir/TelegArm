@@ -52,26 +52,16 @@ namespace TelegArm.UI
             // CompositedScroll CreateParams all apply exactly as today (Part 0.2 invariants preserved).
             bool sidebar = AppSettings.Instance.FolderSidebar;
 
-            // Redesign 1.5: the engine is chosen once (AppSettings.ComposerEngine, restart to apply). Legacy is 1.x unchanged.
-            if (UI.Controls.InputBox.UsePlain)
-                _searchBox = UI.Controls.InputBox.CreatePlain(new UI.Controls.ThemedTextBox(false)
-                {
-                    Hint = "Search",
-                    Dock = DockStyle.Fill,
-                    Margin = new Padding(2, 12, 10, 6),
-                    FontPoints = 10.5f
-                });
-            else
-                _searchBox = UI.Controls.InputBox.CreateLegacy(new MaterialTextBox2
-                {
-                    Hint = "Search",
-                    Dock = DockStyle.Fill,
-                    Margin = new Padding(2, 12, 10, 6)
-                });
+            // The search box is always the plain native EDIT (plan E5; MaterialSkin's MaterialTextBox2 is gone).
+            _searchBox = UI.Controls.InputBox.CreatePlain(new UI.Controls.ThemedTextBox(false)
+            {
+                Hint = "Search",
+                Dock = DockStyle.Fill,
+                Margin = new Padding(2, 12, 10, 6),
+                FontPoints = 10.5f
+            });
             _searchBox.TextChanged += (s, e) => OnSearchTextChanged();
-            // First MaterialTextBox2 in the process — MaterialSkin resolves its own font stack here, so this
-            // rung isolates that from our control-tree construction.
-            PerfLog.Boot("    BuildLeftPanel: first MaterialTextBox2 constructed");
+            PerfLog.Boot("    BuildLeftPanel: search box constructed");
 
             _searchDebounce = new Timer { Interval = 500 };
             _searchDebounce.Tick += (s, e) => DoMessageSearch();
@@ -250,6 +240,33 @@ namespace TelegArm.UI
             PerfLog.Boot("    BuildLeftPanel EXIT");
         }
 
+        private int _bubbleLayoutWidth = -1;
+        private int _composerRowMin = -1, _composerMargins = -1;
+
+        /// <summary>Plan E3: the input row (row 9 of the right panel) follows the colour-emoji composer's content height, from
+        /// its built height up to 13 lines and never more than 45% of the pane. A reader at the bottom of the chat stays there.</summary>
+        private void GrowComposerRow()
+        {
+            try
+            {
+                var rich = _messageInput != null ? _messageInput.Rich : null;
+                if (rich == null || _rightLayout == null || _rightLayout.RowStyles.Count < 10) return;
+                var row = _rightLayout.RowStyles[9];
+                if (_composerRowMin < 0)
+                {
+                    _composerRowMin = (int)row.Height;
+                    _composerMargins = Math.Max(0, _composerRowMin - rich.Height);
+                }
+                int cap = Math.Min(rich.HeightForLines(13) + _composerMargins, (int)(_rightLayout.Height * 0.45));
+                int want = Math.Max(_composerRowMin, Math.Min(Math.Max(_composerRowMin, cap), rich.ContentHeight + _composerMargins));
+                if ((int)row.Height == want) return;
+                bool atBottom = _messagePanel != null && AtBottom(AtBottomThreshold);
+                row.Height = want;
+                if (atBottom) ScrollMessagesToBottom();
+            }
+            catch { }
+        }
+
         private void BuildRightPanel()
         {
             PerfLog.Boot("    BuildRightPanel ENTER");
@@ -392,6 +409,10 @@ namespace TelegArm.UI
             _messagePanel.SizeChanged += (s, e) =>
             {
                 int w = ContentWidth(_messagePanel);
+                // Plan E3: bubbles depend on the WIDTH only. The growing composer changes the panel's HEIGHT on every
+                // wrapped line; re-measuring every bubble for that was the cost the plan flagged (Tegra 3).
+                if (w == _bubbleLayoutWidth) return;
+                _bubbleLayoutWidth = w;
                 foreach (Control c in _messagePanel.Controls)
                 {
                     c.Width = w;
@@ -468,8 +489,9 @@ namespace TelegArm.UI
                     FontPoints = 11f
                 });
                 _messageInput.Enabled = false;
+                _messageInput.Rich.ContentHeightChanged += (s, e) => GrowComposerRow();   // plan E3: up to 13 lines
             }
-            else if (UI.Controls.InputBox.UsePlain)
+            else
             {
                 // Redesign 1.5 — the plain composer: multiline from birth (Shift+Enter needs no reflection), fixed 64 px
                 // row like Legacy (no auto-grow), "disabled" = read-only, never Enabled=false (ThemedTextBox notes).
@@ -481,17 +503,6 @@ namespace TelegArm.UI
                     FontPoints = 11f
                 });
                 _messageInput.Enabled = false;
-            }
-            else
-            {
-                _messageInput = UI.Controls.InputBox.CreateLegacy(new MaterialTextBox2
-                {
-                    Hint = "Write a message…",
-                    Dock = DockStyle.Fill,
-                    Margin = new Padding(12, 10, 6, 10),
-                    Enabled = false
-                });
-                EnableComposerMultiline(_messageInput.Legacy);   // TA-40 — or Shift+Enter has nothing to insert into
             }
             _messageInput.KeyDown += (s, e) =>
             {

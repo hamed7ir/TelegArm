@@ -5,43 +5,18 @@ using TelegArm.Core;
 
 namespace TelegArm.Helpers
 {
-    /// <summary>Device trip 2026-10 (alpha.2): the switches that let ONE sitting on the Surface RT tell what kills typing
-    /// there, and the counters that record it. Analysis: <c>mdfiles/analysis/2026-10-13-composer-*.md</c>.
-    ///
-    /// The record (NOTES §10, "Composer analysis results") clears MaterialSkin's TEXT BOX — it has no input code at all —
-    /// and points at TelegArm's own touch-keyboard handling and/or MaterialForm hosting: typing worked until the day the
-    /// window shrink and the activation guard shipped (2026-07-01), and CS-Ray types fine with the very same text box.
-    /// So nothing is deleted before the trip; each suspect gets an off switch instead, all LIVE (read per event):
-    ///   • <see cref="Shim"/> — the forced-insert workaround on the composer/search EDIT: On (1.x) / Observe (never force;
-    ///     count and log dead keystrokes) / Off (not attached — restart; also drops the dismiss bookkeeping it carries);
-    ///   • <see cref="DismissGuard"/>, <see cref="RefocusClear"/>, <see cref="ActivationGuard"/> —
-    ///     the touch-keyboard workarounds, one by one, and the window shrink (<see cref="ResizeForKeyboard"/>: its own
-    ///     setting, or the "resize" token in TELEGARM_KBOFF for a scripted run).
-    /// Defaults are 1.x behaviour exactly ("" everywhere). Env vars override for scripted runs (read once).</summary>
+    /// <summary>The touch-keyboard workarounds, each with an off switch (Settings > Advanced, or TELEGARM_KBOFF for a scripted
+    /// run): keep the keyboard closed after it is dismissed, clear the auto-refocus after a reactivation, ignore its
+    /// activation steal, and move the window above it. Defaults are all on. (The device-trip input shim and its counters were
+    /// removed in plan step E5; the TabTip launcher in d9123b5.)</summary>
     internal static class InputPolicy
     {
-        public enum ShimMode { On, Observe, Off }
-
-        private static readonly string EnvShim = Env("TELEGARM_INPUTSHIM");
         private static readonly string EnvKbOff = Env("TELEGARM_KBOFF");
 
         private static string Env(string name)
         {
             try { var v = Environment.GetEnvironmentVariable(name); return string.IsNullOrEmpty(v) ? null : v; }
             catch { return null; }
-        }
-
-        /// <summary>The input shim's mode. TELEGARM_INPUTSHIM=on|observe|off wins over the setting.</summary>
-        public static ShimMode Shim
-        {
-            get
-            {
-                string v = EnvShim;
-                if (v == null) { try { v = AppSettings.Instance.InputShim; } catch { v = null; } }
-                if (string.Equals(v, "Observe", StringComparison.OrdinalIgnoreCase)) return ShimMode.Observe;
-                if (string.Equals(v, "Off", StringComparison.OrdinalIgnoreCase)) return ShimMode.Off;
-                return ShimMode.On;
-            }
         }
 
         /// <summary>The touch-keyboard workaround tokens that can be switched off.</summary>
@@ -102,8 +77,7 @@ namespace TelegArm.Helpers
             {
                 bool resize = ResizeForKeyboard; string engine = "";
                 try { engine = AppSettings.Instance.ComposerEngine; } catch { }
-                return "shim=" + Shim + (EnvShim != null ? "(env)" : "")
-                    + " dismiss=" + Onf(DismissGuard) + " refocus=" + Onf(RefocusClear)
+                return "dismiss=" + Onf(DismissGuard) + " refocus=" + Onf(RefocusClear)
                     + " actguard=" + Onf(ActivationGuard) + (EnvKbOff != null ? "(env)" : "")
                     + " resize=" + Onf(resize) + " engineSetting=" + (string.IsNullOrEmpty(engine) ? "Legacy" : engine)
 #if DEBUG
@@ -116,37 +90,5 @@ namespace TelegArm.Helpers
 
         private static string Onf(bool b) => b ? "on" : "off";
 
-        // ── the counters (UI thread only) ───────────────────────────────────────────────────────────────────────
-
-        /// <summary>Per text field (composer / search, with the engine in the name), totals since launch.</summary>
-        public sealed class FieldStats
-        {
-            public int Sessions, SessionsWithDead, Native, Dead, Forced, Yank, NavNative, NavDead;
-        }
-
-        private static readonly Dictionary<string, FieldStats> _stats = new Dictionary<string, FieldStats>();
-
-        public static FieldStats For(string field)
-        {
-            FieldStats f;
-            if (!_stats.TryGetValue(field, out f)) { f = new FieldStats(); _stats[field] = f; }
-            return f;
-        }
-
-        /// <summary>The counters as text (Settings → Advanced → Input counters, DiagReport). No typed text, ever.</summary>
-        public static string Report()
-        {
-            var sb = new StringBuilder();
-            sb.AppendLine("Input switches: " + Summary);
-            if (_stats.Count == 0) { sb.Append("No typing recorded yet in this run."); return sb.ToString(); }
-            foreach (var kv in _stats)
-            {
-                var f = kv.Value;
-                sb.AppendLine(kv.Key + ": focus sessions " + f.Sessions + " (with dead keys " + f.SessionsWithDead + ")"
-                    + " · keys native " + f.Native + " dead " + f.Dead + " forced " + f.Forced
-                    + " · caret yanks " + f.Yank + " · nav native " + f.NavNative + " dead " + f.NavDead);
-            }
-            return sb.ToString().TrimEnd();
-        }
     }
 }

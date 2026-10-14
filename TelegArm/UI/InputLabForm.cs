@@ -320,6 +320,17 @@ namespace TelegArm.UI
             check(c.Text == "\u0633\u0644\u0627\u0645 \u2764\uFE0F" && c.SelectionStart == c.Text.Length, "composer: Persian and a BMP emoji, caret at the end", "len " + c.Text.Length + " caret " + c.SelectionStart);
             c.Text = "Hello \U0001F600 x";
             check(true, "composer layout (info)", c.DebugFirstLine());
+            int fired = 0;
+            EventHandler onGrow = (s, e) => fired++;
+            c.ContentHeightChanged += onGrow;
+            c.Text = "one";
+            int before = c.ContentHeight;
+            c.Text = "one\ntwo\nthree\nfour";
+            int lh = c.HeightForLines(2) - c.HeightForLines(1);
+            check(fired >= 1 && c.ContentHeight - before >= 3 * lh - 3, "composer: ContentHeightChanged fires and the content grows per line", "fired " + fired + ", " + before + " -> " + c.ContentHeight);
+            check(c.HeightForLines(13) > c.HeightForLines(4), "composer: the 13-line cap is taller than 4 lines", c.HeightForLines(4) + " / " + c.HeightForLines(13));
+            c.ContentHeightChanged -= onGrow;
+            c.Text = "Hello \U0001F600 x";
             int one = c.ContentHeight;
             c.Text = string.Join(" ", System.Linq.Enumerable.Repeat("wrapping words", 30));
             check(c.ContentHeight > one * 2, "composer: long text wraps onto several lines", one + " -> " + c.ContentHeight);

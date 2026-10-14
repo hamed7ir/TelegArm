@@ -262,7 +262,13 @@ namespace TelegArm.UI.Controls
 
         protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); _caretOn = true; _blink.Start(); Invalidate(); }
         protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); _blink.Stop(); _high = '\0'; Invalidate(); }
-        protected override void OnSizeChanged(EventArgs e) { base.OnSizeChanged(e); _lines = null; EnsureCaretVisible(); }
+        protected override void OnSizeChanged(EventArgs e)
+        {
+            base.OnSizeChanged(e);
+            int w = TextArea.Width;
+            if (w != _layoutWidth) { _lines = null; CheckContentHeight(); }   // a height-only change keeps the wrap
+            EnsureCaretVisible();
+        }
         protected override void OnFontChanged(EventArgs e) { base.OnFontChanged(e); Relayout(); }
 
         void IDpiAware.OnDpiChanged(int oldDpi, int newDpi) { Relayout(); }
@@ -359,6 +365,7 @@ namespace TelegArm.UI.Controls
             EnsureCaretVisible();
             Invalidate();
             OnTextChanged(EventArgs.Empty);
+            CheckContentHeight();
         }
 
         private void Moved()
@@ -699,6 +706,23 @@ namespace TelegArm.UI.Controls
         }
 
         private int VisibleLines() { return Math.Max(1, TextArea.Height / Math.Max(1, LineHeightPx())); }
+
+        /// <summary>Raised when <see cref="ContentHeight"/> changes (text or width) — the host grows the composer (plan E3).</summary>
+        public event EventHandler ContentHeightChanged;
+        private int _lastContentHeight = -1;
+
+        private void CheckContentHeight()
+        {
+            if (!IsHandleCreated) return;
+            int h = ContentHeight;
+            if (h == _lastContentHeight) return;
+            _lastContentHeight = h;
+            var ev = ContentHeightChanged;
+            if (ev != null) ev(this, EventArgs.Empty);
+        }
+
+        /// <summary>The height <paramref name="lines"/> lines of the UI font need, frame padding included (the grow cap).</summary>
+        public int HeightForLines(int lines) { return lines * LineHeightPx() + 2 * Dpi.Px(PadY, Dpi_); }
 
         /// <summary>The height the whole text needs (for auto-grow, plan E3), in pixels, frame padding included.</summary>
         public int ContentHeight

@@ -861,27 +861,9 @@ namespace TelegArm.UI
         private void BuildInputTestSection(PageStack page, AppSettings s)
         {
             // REDESIGN 1.5 — the composer / search engine for device gate G1 (was "Plain text boxes (test)").
-            int eng = string.Equals(s.ComposerEngine, "Legacy", StringComparison.OrdinalIgnoreCase) ? 0
-                    : string.Equals(s.ComposerEngine, "Emoji", StringComparison.OrdinalIgnoreCase) ? 2 : 1;
-            var engine = new SegmentedRow("Composer", new[] { "MaterialSkin", "Plain", "Colour emoji" }, eng) { Subtitle = "Colour emoji draws them as you type · after restart" };
-            engine.SelectedIndexChanged += (snd, ev) =>
-            {
-                int i = engine.SelectedIndex;
-                s.ComposerEngine = i == 0 ? "Legacy" : i == 2 ? "Emoji" : "";
-                s.Save();
-            };
-
-            var mode = InputPolicy.Shim;
-            var shim = new SegmentedRow("Typing workaround", new[] { "On", "Observe", "Off" },
-                                        mode == InputPolicy.ShimMode.Observe ? 1 : mode == InputPolicy.ShimMode.Off ? 2 : 0)
-            { Subtitle = "Observe counts dead keys without fixing them · Off after restart" };
-            shim.SelectedIndexChanged += (snd, ev) =>
-            {
-                int i = shim.SelectedIndex;
-                s.InputShim = i == 1 ? "Observe" : i == 2 ? "Off" : "";
-                s.Save();
-                Logger.Diag("[INPUT] " + InputPolicy.Summary);
-            };
+            bool plain = string.Equals(s.ComposerEngine, "Plain", StringComparison.OrdinalIgnoreCase);
+            var engine = new SegmentedRow("Composer", new[] { "Colour emoji", "Plain" }, plain ? 1 : 0) { Subtitle = "Plain is a standard Windows text box · after restart" };
+            engine.SelectedIndexChanged += (snd, ev) => { s.ComposerEngine = engine.SelectedIndex == 1 ? "Plain" : ""; s.Save(); };
 
             var resize = new ToggleRow("Move the window above the keyboard", s.ResizeForKeyboard) { Subtitle = "The main window shrinks; dialogs move up" };
             resize.Changed += (snd, ev) => { s.ResizeForKeyboard = resize.On; s.Save(); Logger.Diag("[INPUT] " + InputPolicy.Summary); };
@@ -891,14 +873,7 @@ namespace TelegArm.UI
 
             var trace = new ToggleRow("Per-keystroke input tracing", s.KbdDiag) { Subtitle = "Very detailed; needs diagnostic logging" };
             trace.Changed += (snd, ev) => { s.KbdDiag = trace.On; s.Save(); };
-            var counters = new ActionRow("Input counters", "View") { Subtitle = "Native, dead and forced keys since launch" };
-            counters.Click += (snd, ev) =>
-            {
-                string report = InputPolicy.Report();
-                int b = ThemedDialog.Show(this, "Input counters", report, "Copy", "Close");
-                if (b == 0) { try { Clipboard.SetText(report); } catch { } }
-            };
-            page.Section("Typing and touch keyboard (device test)", engine, shim, resize, dismiss, refocus, actGuard, trace, counters);
+            page.Section("Typing and touch keyboard", engine, resize, dismiss, refocus, actGuard, trace);
         }
 
         private static ToggleRow KeyboardSwitch(string token, string caption, string subtitle)

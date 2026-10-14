@@ -92,6 +92,12 @@ namespace TelegArm.Helpers
                     Capture(f, "main-chats-" + t);
                     OpenDemoChat(f);
                     Capture(f, "main-chat-" + t);
+                    // Plan E3: a five-line draft — the colour-emoji composer grows with it (Plain stays one row).
+                    var ib = Field(f, "_messageInput");
+                    ib.GetType().GetProperty("Enabled").SetValue(ib, true);
+                    ib.GetType().GetProperty("Text").SetValue(ib, "Draft line one \U0001F600\nline two\nline three \u2764\uFE0F\nline four\nline five");
+                    Settle(f);
+                    Capture(f, "main-draft-" + t);
                 });
 
                 WithForm("settings-" + t, () => new SettingsForm(), f =>

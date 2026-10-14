@@ -86,18 +86,15 @@ namespace TelegArm.UI
             {
                 try
                 {
-                    var shim = FindRow<SegmentedRow>(f, "Typing workaround");
                     var dismiss = FindRow<ToggleRow>(f, "Keep it closed after closing it");
-                    shim.SetSelected(1, true);
-                    bool observed = InputPolicy.Shim == InputPolicy.ShimMode.Observe && s.InputShim == "Observe";
                     dismiss.On = false;
                     bool dismissOff = !InputPolicy.DismissGuard && s.KeyboardOff.Contains("dismiss");
-                    shim.SetSelected(0, true); dismiss.On = true;
-                    bool restored = InputPolicy.Shim == InputPolicy.ShimMode.On && InputPolicy.DismissGuard && s.InputShim == "" && s.KeyboardOff == "";
-                    check(observed && dismissOff && restored, "settings: the device-test switches drive InputPolicy live",
-                          "observe=" + observed + " dismissOff=" + dismissOff + " restored=" + restored);
+                    dismiss.On = true;
+                    bool restored = InputPolicy.DismissGuard && s.KeyboardOff == "";
+                    check(dismissOff && restored, "settings: the touch-keyboard switches drive InputPolicy live",
+                          "dismissOff=" + dismissOff + " restored=" + restored);
                 }
-                catch (Exception ex) { check(false, "settings: the device-test switches drive InputPolicy live", ex.GetType().Name + ": " + ex.Message); }
+                catch (Exception ex) { check(false, "settings: the touch-keyboard switches drive InputPolicy live", ex.GetType().Name + ": " + ex.Message); }
                 Key(f, Keys.Escape);
             });
 

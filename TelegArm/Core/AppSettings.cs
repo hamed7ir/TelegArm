@@ -179,16 +179,11 @@ namespace TelegArm.Core
         /// --native-caption and TELEGARM_CHROME=native|custom override it. Restart to apply.</summary>
         public string ChromeMode { get; set; } = "";
 
-        /// <summary>Redesign step 1.5 — the text box behind the composer and the chat-list search: "" / "Plain" =
-        /// ThemedTextBox (a plain native TextBox in a painted frame; the default since 2026-10-14), "Legacy" = MaterialSkin's
-        /// MaterialTextBox2 (the fallback until the new composer lands). TELEGARM_COMPOSER=plain|legacy overrides it.
-        /// Restart to apply.</summary>
+        /// <summary>The composer: "" = the colour-emoji composer (EmojiComposer, the default since plan step E5), "Plain" = a
+        /// standard Windows text box (ThemedTextBox). The search box is always plain. TELEGARM_COMPOSER=emoji|plain overrides
+        /// it. Restart to apply. ("Legacy", MaterialSkin's box, is gone and now means the default.)</summary>
         public string ComposerEngine { get; set; } = "";
 
-        /// <summary>Device trip 2026-10 (alpha.2) — the composer/search input shim: "" = On (1.x: force dead keystrokes),
-        /// "Observe" = never force, count and log dead keystrokes only, "Off" = not attached (restart). TELEGARM_INPUTSHIM
-        /// overrides. See Helpers.InputPolicy.</summary>
-        public string InputShim { get; set; } = "";
 
         /// <summary>Device trip 2026-10 — the touch-keyboard workarounds switched OFF, comma-separated: launch, dismiss,
         /// refocus, actguard. "" = all on (1.x). TELEGARM_KBOFF overrides. The window shrink is ResizeForKeyboard.</summary>
@@ -256,7 +251,6 @@ namespace TelegArm.Core
             if (AccentColor == null) AccentColor = "";
             if (ChromeMode == null) ChromeMode = "";
             if (ComposerEngine == null) ComposerEngine = "";
-            if (InputShim == null) InputShim = "";
             if (KeyboardOff == null) KeyboardOff = "";
             // MediaCacheFolder: null is meaningful (unresolved) — NormalizeCachePath resolves it.
         }

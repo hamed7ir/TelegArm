@@ -113,21 +113,18 @@ namespace TelegArm.UI
                         if (gotFocus) check(focusedInk == 0, "textbox: nothing is drawn over a focused field", focusedInk + " cue pixels");
                         else info("textbox: the probe window could not take focus here — the focused-cue check was skipped");
                     }
-                    // InputBox's LEGACY half binds MaterialTextBox2's own (hiding) events, exactly as 1.x's typed fields did.
-                    var legacy = new MaterialSkin.Controls.MaterialTextBox2 { Bounds = new Rectangle(Dpi.Px(12, dpi), Dpi.Px(150, dpi), Dpi.Px(380, dpi), Dpi.Px(48, dpi)) };
-                    f.Controls.Add(legacy); Pump(150);
-                    var box = InputBox.CreateLegacy(legacy);
-                    int viaAdapter = 0, viaControl = 0, keysViaAdapter = 0;
+                    // Plan E5: InputBox's Rich half (the default composer) hears the EmojiComposer's TextChanged and KeyDown.
+                    var rich = new EmojiComposer { Bounds = new Rectangle(Dpi.Px(12, dpi), Dpi.Px(150, dpi), Dpi.Px(380, dpi), Dpi.Px(48, dpi)) };
+                    f.Controls.Add(rich); Pump(150);
+                    var box = InputBox.CreateRich(rich);
+                    int viaAdapter = 0, keysViaAdapter = 0;
                     box.TextChanged += (s, e) => viaAdapter++;
-                    ((Control)legacy).TextChanged += (s, e) => viaControl++;
                     box.KeyDown += (s, e) => keysViaAdapter++;
                     box.Text = "abc"; Pump(100);
-                    bool textOk = box.Text == "abc";   // read before the key below types an 'a'
-                    var edit = legacy.GetType().GetField("baseTextBox", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).GetValue(legacy) as Control;
-                    if (edit != null) { Key(edit, Keys.A); Pump(100); }
-                    check(viaAdapter >= 1 && keysViaAdapter >= 1 && textOk, "textbox: InputBox's Legacy half hears MaterialTextBox2's TextChanged and KeyDown",
+                    bool textOk = box.Text == "abc";
+                    Key(rich, Keys.A); Pump(100);
+                    check(viaAdapter >= 1 && keysViaAdapter >= 1 && textOk, "textbox: InputBox's Rich half hears the EmojiComposer's TextChanged and KeyDown",
                           "TextChanged " + viaAdapter + ", KeyDown " + keysViaAdapter + ", Text round-trip " + textOk);
-                    info("textbox: the same MaterialTextBox2 held as a plain Control heard TextChanged " + viaControl + " time(s) — the hiding trap InputBox exists for");
 
                     ProbeMaterialReskin(check, dpi);
 

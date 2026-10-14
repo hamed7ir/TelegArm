@@ -102,7 +102,7 @@ namespace TelegArm.UI
         private EmojiPicker _dockEmoji;      // THE composer's panel, embedded — not a second grid
         private ProfileForm _dockProfile;    // THE profile, embedded — the Info pane has no separate content
         private long _dockProfilePeerId;     // which peer that profile is built for (0 = none)
-        private UI.Controls.InputBox _searchBox;   // redesign 1.5: MaterialTextBox2 or ThemedTextBox (ComposerEngine)
+        private UI.Controls.InputBox _searchBox;   // always ThemedTextBox (plan E5)
         private FlowLayoutPanel _chatListPanel;
         private MaterialLabel _chatTitle;
         private MaterialLabel _chatStatus;            // online / last seen / typing… subtitle
@@ -116,12 +116,7 @@ namespace TelegArm.UI
         private System.Windows.Forms.Timer _typingTimer;
         private bool _typing;
         private FlowLayoutPanel _messagePanel;
-        private UI.Controls.InputBox _messageInput;   // redesign 1.5: MaterialTextBox2 or ThemedTextBox (ComposerEngine)
-        // COMPOSER-full-revert: the composer's inner native TextBox is left UNTOUCHED — no font-swap fields, no
-        // reflection font manipulation (that work was reverted in case it broke WM_CHAR capture on RT). _baseTextBoxField
-        // stays: it's used ONLY by the [KBD] diagnostics (HookKbdDiag), never to change the composer's font.
-        private static readonly System.Reflection.FieldInfo _baseTextBoxField =
-            typeof(MaterialTextBox2).GetField("baseTextBox", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        private UI.Controls.InputBox _messageInput;   // plan E5: EmojiComposer (default) or ThemedTextBox (ComposerEngine "Plain")
         private UI.Controls.SendButton _sendButton;   // TA-34/A: was a MaterialButton labelled "Send"
         private TableLayoutPanel _rightLayout;
         // FORUM-TOPICS: the topic chip bar (chat-panel row 4), shown only for forum groups; chips reuse FolderTabItem so

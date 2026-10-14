@@ -469,48 +469,16 @@ namespace TelegArm.UI
             }
             if (field.Plain != null)
             {
-                // Redesign 1.5 — the Plain engine: the EDIT is ThemedTextBox.Inner, reached without reflection. Same
-                // diagnostics on it, and the SAME input shim (EditInputProbe) the Legacy inner box gets.
+                // The plain native EDIT (ThemedTextBox.Inner): focus/keystroke diagnostics and the focus probe.
                 HookInnerKbdDiag(field.Plain, field.Plain.Inner, name + "[Plain]");
                 // A tap on the FRAME around the EDIT never reaches EditInputProbe (it subclasses the EDIT only), so record a
                 // genuine finger/mouse tap here — raised before the frame focuses the EDIT — or the post-dismiss suppression
                 // bounces that focus straight back to the sink (review 1.5).
                 field.Plain.MouseDown += (s, e) => { if (IsHardwareInputNow()) NoteRealEditTouch(); };
-                return;
             }
-            var box = field.Legacy;
-            if (box == null) return;
-            try
-            {
-                var inner = _baseTextBoxField != null ? _baseTextBoxField.GetValue(box) as Control : null;
-
-                // Per-keystroke / per-focus ECHO tracing — gated behind AppSettings.KbdDiag (checked at event time).
-                box.GotFocus += (s, e) => { if (KbdDiag) Logger.Diag("[KBD] focus " + name + " GOT"); };
-                box.LostFocus += (s, e) => { if (KbdDiag) Logger.Diag("[KBD] focus " + name + " LOST"); };
-                box.KeyDown += (s, e) => { if (KbdDiag) Logger.Diag("[KBD] " + name + " keydown " + e.KeyCode); };
-                box.KeyPress += (s, e) =>
-                {
-                    if (KbdDiag) Logger.Diag(
-                        "[KBD] " + name + " keypress " + KeyDesc(e.KeyChar)
-                        + " Handled=" + e.Handled
-                        + " focus=" + FocusWhere(box, inner)
-                        + " outer.Text=" + Quote(box.Text)
-                        + " inner.Text=" + Quote(inner != null ? inner.Text : "<null>"));
-                };
-                box.TextChanged += (s, e) =>
-                {
-                    if (KbdDiag) Logger.Diag(
-                        "[KBD] " + name + " TextChanged outer.Text=" + Quote(box.Text)
-                        + " inner.Text=" + Quote(inner != null ? inner.Text : "<null>"));
-                };
-
-                if (inner != null) HookInnerKbdDiag(box, inner, name + "[Legacy]");
-            }
-            catch { }
         }
 
-        /// <summary>The inner-EDIT half of <see cref="HookKbdDiag"/> (extracted unchanged in redesign 1.5 so the Plain engine's
-        /// EDIT gets exactly what the Legacy inner box gets): focus/keystroke tracing, the IMM heartbeat, the input shim.</summary>
+        /// <summary>The native-EDIT half of <see cref="HookKbdDiag"/>: focus/keystroke tracing, the IMM heartbeat, the focus probe.</summary>
         private void HookInnerKbdDiag(Control box, Control inner, string name)
         {
             try
@@ -544,8 +512,7 @@ namespace TelegArm.UI
                     {
                         if (KbdDiag) Logger.Diag("[KBD] " + name + "(inner) TextChanged inner.Text=" + Quote(inner.Text));
                     };
-                    // The productized input shim (EditInputProbe): tier0-first, synchronous force on dead input,
-                    // nav-key force, caret-yank guard. Also applies the IS_PASSWORD input scope per handle.
+                    // The focus probe: tap provenance + the post-dismiss focus bounce (the typing shim is gone, plan E5).
                     AttachInputProbe(inner, name + "(inner)");
                 }
             }
@@ -561,16 +528,11 @@ namespace TelegArm.UI
         /// <summary>Short alias for the app-wide hot-path logging gate (see Helpers.Logger).</summary>
         private static bool LogOn => Logger.Enabled;
 
-        /// <summary>Subclasses a composer/search INNER EDIT's handle so <see cref="EditInputProbe"/> can shim dead
-        /// input (see the class doc). Handle-create aware (re-attaches if the EDIT handle is recreated) and released
-        /// on destroy; kept referenced so it isn't GC'd. (The IS_PASSWORD InputScope that was applied here was
-        /// removed — see the note at the P/Invoke block.)</summary>
+        /// <summary>Subclasses a native EDIT's handle with <see cref="EditInputProbe"/> (see the class doc). Handle-create aware
+        /// (re-attaches if the EDIT handle is recreated) and released on destroy; kept referenced so it isn't GC'd.</summary>
         private void AttachInputProbe(Control inner, string name)
         {
             if (inner == null) return;
-            // Device trip: shim Off = not attached at all (decided per handle, so it takes a restart). That also drops the
-            // dismiss bookkeeping the probe carries (NoteRealEditTouch / OnTextBoxFocusGain) — prefer Observe.
-            if (InputPolicy.Shim == InputPolicy.ShimMode.Off) { Logger.Diag("[INPUT] shim Off → " + name + " not attached"); return; }
             EditInputProbe current = null;
             void Attach()
             {
@@ -584,92 +546,40 @@ namespace TelegArm.UI
             inner.HandleCreated += (s, e) => Attach();
             inner.HandleDestroyed += (s, e) =>
             {
-                if (current != null) { current.EndSession(); try { current.ReleaseHandle(); } catch { } _inputProbes.Remove(current); current = null; }
+                if (current != null) { try { current.ReleaseHandle(); } catch { } _inputProbes.Remove(current); current = null; }
             };
         }
 
-        /// <summary>Productized input shim (COMPOSER-SHIM-PRODUCT) for the RT dead-input + caret-yank CUAS bugs.
-        /// TIER0-FIRST everywhere: every keystroke goes to base.WndProc; a healthy native edit is SILENT and cheap.
-        /// If the EDIT declined (dead mode — text/caret unchanged), the shim forces the edit SYNCHRONOUSLY in place:
-        /// printable chars via surrogate-aware SelectedText insert, backspace via a faithful selection-delete,
-        /// LEFT/RIGHT/HOME/END/DELETE via direct SelectionStart/Length math (Shift+nav is observed, not forced —
-        /// long-press/mouse selection is the supported path). One KeyPress per char, strict FIFO by construction.
-        /// CARET-YANK GUARD: _expectedCaret tracks where the caret must be after our last edit/nav; every legit
-        /// mover (mouse buttons, EM_SETSEL/EM_REPLACESEL/WM_SETTEXT, focus) traverses this subclass and INVALIDATES
-        /// the expectation — so a mismatch at the next keystroke can only be CUAS's message-invisible yank, and is
-        /// corrected before the edit. Unconditional log lines mark ONLY anomalies (forced …, caret-yank corrected);
-        /// the per-keystroke RAW/echo/EMSG tracing is gated behind AppSettings.KbdDiag.</summary>
+        /// <summary>The focus probe on a native EDIT (the plain search box, and the composer when ComposerEngine is "Plain").
+        /// ⚠ THE TYPING SHIM IS GONE (plan E5, 2026-10-14). It forced the keystrokes a "dead" EDIT dropped on RT; the device
+        /// trip showed the dead mode came from TelegArm launching TabTip itself (removed, Program.cs), and a plain EDIT types
+        /// on its own. What stays is what the touch-keyboard workarounds need: the PROVENANCE of a tap on the EDIT (a real
+        /// finger/mouse re-allows focus during post-dismiss suppression; the OS/TabTip's injected re-focus does not), the
+        /// focus-gain bounce, and the raw focus/keystroke lines for the log (per-keystroke ones behind KbdDiag).</summary>
         private sealed class EditInputProbe : NativeWindow
         {
             private const int WM_SETFOCUS = 0x0007, WM_KILLFOCUS = 0x0008;
             private const int WM_KEYDOWN = 0x0100, WM_KEYUP = 0x0101, WM_CHAR = 0x0102, WM_DEADCHAR = 0x0103,
                               WM_UNICHAR = 0x0109, WM_IME_CHAR = 0x0286,
                               WM_IME_STARTCOMPOSITION = 0x010D, WM_IME_ENDCOMPOSITION = 0x010E, WM_IME_COMPOSITION = 0x010F;
-            private const int WM_LBUTTONDOWN = 0x0201, WM_LBUTTONDBLCLK = 0x0203, WM_RBUTTONDOWN = 0x0204;
-            private const int WM_POINTERDOWN = 0x0246, WM_TOUCH = 0x0240;   // KBD-v3 INSTRUMENT: real-finger arrivals at the EDIT
-            private const int VKL = 0x25, VKR = 0x27, VKHOME = 0x24, VKEND = 0x23, VKDEL = 0x2E;
-            private const int EM_SETSEL = 0x00B1, EM_REPLACESEL = 0x00C2, WM_SETTEXT = 0x000C;
+            private const int WM_LBUTTONDOWN = 0x0201, WM_LBUTTONDBLCLK = 0x0203;
+            private const int WM_POINTERDOWN = 0x0246, WM_TOUCH = 0x0240;
 
             private readonly Control _edit;
             private readonly string _name;
-            private readonly Form _owner;         // for the fg=self/other field of the (gated) RAW lines
-            private bool _needStyleLog;           // (KbdDiag) log window style at the first tracked message after focus
-            private char _pendingHigh;            // buffered high surrogate for force-insert (never insert a lone half)
-            private int _expectedCaret = -1;      // caret-yank guard: expected caret after our last edit/nav; -1 = none
-            private bool _inSelfEdit;             // reentrancy flag: our OWN programmatic Selection*/SelectedText ops
-                                                  // send EM messages through this subclass — they must NOT invalidate
-                                                  // the expectation (only genuinely external movers may).
-            // KBD-DISMISS-v3 INSTRUMENT: provenance of the last pointer/touch that reached THIS EDIT — read at the
-            // next WM_SETFOCUS to label the focus a real finger tap (originId=hardware) vs the OS/TabTip synthetic
-            // re-focus (injected/system, or NO pointer at all) that re-summons the keyboard 3-5s after a dismiss.
+            private readonly Form _owner;
+            private bool _needStyleLog;
             private int _lastPtrTick;
             private string _lastPtrLabel = "none";
-            // Device trip: this focus session's tally — reset at WM_SETFOCUS, written as one [INPUT-AB] line at WM_KILLFOCUS
-            // and added to InputPolicy's totals (Settings → Advanced → Input counters). Never any typed text.
-            private bool _sess;
-            private int _sessStart, _sNative, _sDead, _sForced, _sYank, _sNavNative, _sNavDead;
-
-            private void BeginSession()
-            {
-                EndSession();
-                _sess = true; _sessStart = Environment.TickCount;
-                _sNative = _sDead = _sForced = _sYank = _sNavNative = _sNavDead = 0;
-            }
-
-            /// <summary>Closes the focus session: one [INPUT-AB] line (when anything was typed) and the running totals.</summary>
-            public void EndSession()
-            {
-                if (!_sess) return;
-                _sess = false;
-                int keys = _sNative + _sDead + _sNavNative + _sNavDead;
-                if (keys == 0 && _sYank == 0) return;
-                var f = InputPolicy.For(_name);
-                f.Sessions++; if (_sDead + _sNavDead > 0) f.SessionsWithDead++;
-                f.Native += _sNative; f.Dead += _sDead; f.Forced += _sForced; f.Yank += _sYank; f.NavNative += _sNavNative; f.NavDead += _sNavDead;
-                if (LogOn)
-                {
-                    bool hw = false; try { hw = Helpers.TouchKeyboard.HasHardwareKeyboard(); } catch { }
-                    bool kbUp = _owner is MainForm mf && mf._kbLastShowing;
-                    Logger.Diag("[INPUT-AB] " + _name + " shim=" + InputPolicy.Shim + " ms=" + unchecked(Environment.TickCount - _sessStart)
-                        + " native=" + _sNative + " dead=" + _sDead + " forced=" + _sForced + " yank=" + _sYank
-                        + " nav=" + _sNavNative + " navDead=" + _sNavDead + " hwKb=" + hw + " kbUp=" + kbUp);
-                }
-            }
 
             public EditInputProbe(Control edit, string name, Form owner) { _edit = edit; _name = name; _owner = owner; }
 
             // The owning MainForm, or null. ⚠ Never a hard cast: an exception thrown in a NativeWindow's WndProc is swallowed
-            // silently (NativeWindow.OnThreadException is empty), so a throwing cast drops the keystroke with no trace —
-            // found by the device-trip shim probe, which attaches the probe with no owner.
+            // silently (NativeWindow.OnThreadException is empty), and the message with it.
             private MainForm Main => _owner as MainForm;
 
-            // Gated write (belt) — hot call sites ALSO wrap with `if (LogOn)` so the argument string is never
-            // even built when logging is off (braces — the true hot-path rule).
-            private void Log(string s) { if (LogOn) Logger.Diag("[KBD] " + _name + " " + s); }
-
-            /// <summary>KBD-DISMISS-v3 INSTRUMENT: decode the CURRENT input message's provenance — device (touch/mouse/
-            /// pen) + origin (hardware=real finger; injected/system=OS/TabTip synthetic) + sent/posted. The decisive
-            /// read for telling a genuine composer tap from the re-focus neither v2 nor v3 could discriminate.</summary>
+            /// <summary>The current input message's provenance: device (touch/mouse/pen) + origin (hardware = a real finger,
+            /// injected/system = the OS/TabTip's synthetic re-focus) + sent/posted.</summary>
             private static string InputSrc(out bool hardware)
             {
                 hardware = false;
@@ -678,7 +588,7 @@ namespace TelegArm.UI
                     INPUT_MESSAGE_SOURCE s;
                     if (GetCurrentInputMessageSource(out s))
                     {
-                        hardware = s.originId == 1;   // IMO_HARDWARE — a real finger/mouse, not an injected/synthetic re-focus
+                        hardware = s.originId == 1;
                         string dev = s.deviceType == 4 ? "touch" : s.deviceType == 2 ? "mouse" : s.deviceType == 8 ? "pen"
                                    : s.deviceType == 1 ? "kbd" : s.deviceType == 16 ? "touchpad" : "dev" + s.deviceType;
                         string org = s.originId == 1 ? "hardware" : s.originId == 2 ? "injected" : s.originId == 4 ? "system" : "org" + s.originId;
@@ -691,82 +601,36 @@ namespace TelegArm.UI
 
             protected override void WndProc(ref System.Windows.Forms.Message m)
             {
-                // Legit caret movers we can't predict → drop the yank-guard expectation (trust the actual state).
-                // All of them traverse this subclass, which is what makes the yank-mismatch signature sound.
-                // _inSelfEdit exempts our own force/correction messages — they end by setting the expectation.
-                if (!_inSelfEdit)
-                {
-                    switch (m.Msg)
-                    {
-                        case WM_LBUTTONDOWN: case WM_LBUTTONDBLCLK: case WM_RBUTTONDOWN:
-                        case EM_SETSEL: case EM_REPLACESEL: case WM_SETTEXT: case WM_SETFOCUS:
-                            _expectedCaret = -1;
-                            break;
-                    }
-                }
-
-                // KBD-DISMISS-v3.1: record pointer/touch arrivals at this EDIT + provenance. A HARDWARE-origin one is a
-                // real tap → NoteRealEditTouch re-allows focus during suppression; the dev0/org0 injected re-focus does
-                // not. (PTR line kept for the RT read.)
                 if (m.Msg == WM_LBUTTONDOWN || m.Msg == WM_LBUTTONDBLCLK || m.Msg == WM_POINTERDOWN || m.Msg == WM_TOUCH)
                 {
                     string kind = m.Msg == WM_LBUTTONDOWN ? "LBDOWN" : m.Msg == WM_LBUTTONDBLCLK ? "LBDBLCLK"
                                 : m.Msg == WM_POINTERDOWN ? "POINTERDOWN" : "TOUCH";
                     bool hardware; _lastPtrTick = Environment.TickCount; _lastPtrLabel = kind + " " + InputSrc(out hardware);
-                    if (hardware) Main?.NoteRealEditTouch();   // genuine finger/mouse → re-allow composer focus
+                    if (hardware) Main?.NoteRealEditTouch();   // genuine finger/mouse → re-allow focus during suppression
                     if (LogOn) Logger.Diag("[KBD] PTR " + _name + " " + _lastPtrLabel);
                 }
-                if (m.Msg == WM_CHAR && Main != null) Main._lastComposerKeyTick = Environment.TickCount;   // KBD-CLOSE-PROBE: idle-vs-typing
+                if (m.Msg == WM_CHAR && Main != null) Main._lastComposerKeyTick = Environment.TickCount;   // KBD-CLOSE-PROBE
 
-                // (KbdDiag) programmatic caret/text manipulation traces — these only ever come from code.
-                if (KbdDiag)
-                {
-                    switch (m.Msg)
-                    {
-                        case EM_SETSEL: Logger.Diag("[KBD] EMSG " + _name + " EM_SETSEL start=" + m.WParam.ToInt64() + " end=" + m.LParam.ToInt64()); break;
-                        case EM_REPLACESEL: Logger.Diag("[KBD] EMSG " + _name + " EM_REPLACESEL canUndo=" + (m.WParam != IntPtr.Zero) + " text=" + PtrText(m.LParam)); break;
-                        case WM_SETTEXT: Logger.Diag("[KBD] EMSG " + _name + " WM_SETTEXT text=" + PtrText(m.LParam)); break;
-                    }
-                }
-
-                // Raw OS-level focus flights: wParam = the OTHER window. UNCONDITIONAL — these mark the invisible
-                // keyboard reconnections (tap-away+retap) that decide dead-vs-native, so they anchor every RT read.
                 if (m.Msg == WM_SETFOCUS)
                 {
                     if (LogOn) Logger.Diag("[KBD] RAW " + _name + " WM_SETFOCUS otherHwnd=0x" + m.WParam.ToInt64().ToString("X")
                         + " lastPtr=" + (_lastPtrTick == 0 ? "never" : unchecked(Environment.TickCount - _lastPtrTick) + "ms[" + _lastPtrLabel + "]") + " srcNow=" + InputSrc(out _));
                     _needStyleLog = true;
-                    BeginSession();
                     base.WndProc(ref m);
-                    Main?.OnTextBoxFocusGain(_edit, _name);   // KBD-DISMISS-v3 PART 3: re-park a post-dismiss cooldown refocus
+                    Main?.OnTextBoxFocusGain(_edit, _name);   // KBD-DISMISS-v3: re-park a post-dismiss refocus
                     return;
                 }
                 if (m.Msg == WM_KILLFOCUS)
                 {
                     if (LogOn) Logger.Diag("[KBD] RAW " + _name + " WM_KILLFOCUS otherHwnd=0x" + m.WParam.ToInt64().ToString("X"));
                     base.WndProc(ref m);
-                    EndSession();
                     return;
                 }
-
                 if (KbdDiag && IsTracked(m.Msg))
                 {
                     if (_needStyleLog) { _needStyleLog = false; LogEditStyle(_edit, _name, "firstchar"); }
                     LogRaw(ref m);
                 }
-
-                if (m.Msg == WM_KEYDOWN)
-                {
-                    int vk = (int)(m.WParam.ToInt64() & 0xFFFF);
-                    if (vk == VKL || vk == VKR || vk == VKHOME || vk == VKEND || vk == VKDEL) { HandleNavKey(ref m, vk); return; }
-                }
-
-                if (IsEditingChar(m, out char ch, out bool isBackspace))
-                {
-                    HandleEditingChar(ref m, ch, isBackspace);
-                    return;
-                }
-
                 base.WndProc(ref m);
             }
 
@@ -781,27 +645,6 @@ namespace TelegArm.UI
                 }
             }
 
-            private static bool IsEditingChar(System.Windows.Forms.Message m, out char ch, out bool isBackspace)
-            {
-                ch = '\0'; isBackspace = false;
-                if (m.Msg != WM_CHAR && m.Msg != WM_UNICHAR && m.Msg != WM_IME_CHAR) return false;
-                ch = (char)(m.WParam.ToInt64() & 0xFFFF);
-                if (m.Msg == WM_CHAR && ch == (char)0x08) { isBackspace = true; return true; }   // backspace
-                // ★ BATCH-TA-41 — CARRIAGE RETURN IS AN EDITING CHAR. THIS LINE IS WHY SHIFT+ENTER
-                //   PRODUCED NOTHING ON RT WHILE WORKING PERFECTLY ON THE DEV BOX.
-                //   `\r` is 0x0D and `\n` is 0x0A — both BELOW ' ' (0x20) — so the old `ch >= ' '` test
-                //   classified Enter as "not editing" and it never entered HandleEditingChar. On the dev
-                //   box that was harmless: the message fell through to the native EDIT, which inserted the
-                //   break itself. On RT in CUAS dead mode the native EDIT inserts NOTHING for any WM_CHAR
-                //   — that is the entire reason this shim exists — so with Enter excluded from the shim,
-                //   nothing forced it and the newline was silently dropped. The next characters then
-                //   continued on the same line, which is exactly the "lines get combined" report.
-                //   ⚠ SAFE AGAINST DOUBLE-SENDING: an Enter that means SEND sets SuppressKeyPress, which
-                //     stops WM_CHAR being generated at all, so only Shift+Enter ever reaches this test.
-                if (ch == '\r' || ch == '\n') return true;
-                return ch >= ' ' && ch != (char)0x7F;                                             // printable
-            }
-
             private void LogRaw(ref System.Windows.Forms.Message m)
             {
                 uint lp = (uint)(m.LParam.ToInt64() & 0xFFFFFFFF);
@@ -814,243 +657,6 @@ namespace TelegArm.UI
                     + " mods=" + ModSnapshot()
                     + " act=" + (GetActiveWindow() != IntPtr.Zero) + " fg=" + (self ? "self" : "other")
                     + " origin=" + InputOrigin() + " sent=" + InSendMessage());
-            }
-
-            /// <summary>The caret-yank guard: if the caret differs from where our last edit/nav left it and NO legit
-            /// mover was observed since (they all invalidate the expectation), it can only be CUAS's message-invisible
-            /// yank — restore it. A live selection disables the guard (selections are legit state). Catches
-            /// yank-to-anywhere (both the →0 and →end variants were observed on RT).</summary>
-            private void CorrectYank(System.Windows.Forms.TextBoxBase tb, bool observeOnly)
-            {
-                try
-                {
-                    int exp = _expectedCaret;
-                    if (exp >= 0 && tb.SelectionLength == 0 && tb.SelectionStart != exp && exp <= (tb.Text ?? "").Length)
-                    {
-                        int actual = tb.SelectionStart;
-                        _sYank++;
-                        if (observeOnly)
-                        {
-                            _expectedCaret = -1;   // accept where it is — counted once, not again at every keystroke
-                            if (LogOn) Log("caret-yank observed " + actual + " (expected " + exp + ", not corrected)");
-                            return;
-                        }
-                        _inSelfEdit = true;
-                        try { tb.SelectionStart = exp; }
-                        finally { _inSelfEdit = false; }
-                        if (LogOn) Log("caret-yank corrected " + actual + "->" + exp);   // anomaly line
-                    }
-                }
-                catch { }
-            }
-
-            private void HandleEditingChar(ref System.Windows.Forms.Message m, char ch, bool isBackspace)
-            {
-                var tb = _edit as System.Windows.Forms.TextBoxBase;
-                // ⚠ Redesign 1.5: a READ-ONLY edit declines every keystroke by design — that is not dead input, and
-                //   forcing it would type into a disabled field (the Plain composer is ReadOnly instead of Enabled=false).
-                //   Inert on the Legacy path: its inner box is never read-only.
-                if (tb == null || tb.ReadOnly) { base.WndProc(ref m); return; }
-                bool observe = InputPolicy.Shim == InputPolicy.ShimMode.Observe;   // device trip: count, never force
-                CorrectYank(tb, observe);
-                string before = _edit.Text ?? "";
-                int caretBefore = tb.SelectionStart, selBefore = tb.SelectionLength;
-
-                base.WndProc(ref m);   // tier 0 — native
-                if (!string.Equals(before, _edit.Text ?? "", StringComparison.Ordinal))
-                {
-                    _expectedCaret = tb.SelectionStart;   // healthy native edit — SILENT
-                    _sNative++;
-                    if (KbdDiag) Log(EditDesc(ch, isBackspace) + " (tier0 native) caret " + caretBefore + "->" + tb.SelectionStart);
-                    return;
-                }
-                // A selection replaced by the SAME character leaves the text identical — but the EDIT did act: the selection
-                // collapsed just after it. Dead input leaves the selection untouched. (Without this the shim inserted a second
-                // copy, and Observe would count a false dead key — analysis R-1.)
-                if (selBefore > 0 && tb.SelectionLength == 0 && tb.SelectionStart == caretBefore + 1) { _expectedCaret = tb.SelectionStart; _sNative++; return; }
-                if (isBackspace && caretBefore == 0 && selBefore == 0) { _expectedCaret = 0; return; }   // legit no-op — silent
-
-                _sDead++;
-                if (observe)
-                {
-                    if (LogOn) Log("DEAD " + EditDesc(ch, isBackspace) + " caret " + caretBefore + " (observe: not forced)");   // anomaly line
-                    return;
-                }
-
-                // Dead mode → RE-CHECK the caret before forcing: the RT fingerprint ("forced Left 3->2" then
-                // "forced backspace 2->2" = delete at a yanked position) proved CUAS yanks the caret DURING the
-                // dead keystroke's own base.WndProc — i.e., between the entry check above and this point. The
-                // pre-force correction makes the forced edit land where the user's caret really was.
-                CorrectYank(tb, false);
-
-                // Force SYNCHRONOUSLY in place (strict FIFO, zero added latency).
-                _sForced++;
-                if (isBackspace) ForceBackspace(tb, caretBefore);
-                else ForceInsert(tb, ch, caretBefore);
-            }
-
-            private void ForceInsert(System.Windows.Forms.TextBoxBase tb, char ch, int caretBefore)
-            {
-                try
-                {
-                    if (char.IsHighSurrogate(ch)) { _pendingHigh = ch; return; }   // wait for the low half — never insert a lone surrogate
-                    string s;
-                    if (char.IsLowSurrogate(ch) && _pendingHigh != '\0') { s = new string(new[] { _pendingHigh, ch }); _pendingHigh = '\0'; }
-                    else if (char.IsLowSurrogate(ch)) return;                       // lone low half → drop
-                    // ⚠ TA-41 — A LINE BREAK IS "\r\n" IN A WinForms TextBox, NOT "\r". Assigning a bare
-                    //   CR to SelectedText does not produce a usable break; the control stores \r\n pairs
-                    //   and its Lines/SelectionStart maths assume them. Normalise both CR and LF to the pair.
-                    //   ⚠ AND ONLY IN A MULTILINE BOX: this same shim also carries the SEARCH field, which
-                    //     is single-line — forcing a break in there would corrupt the query rather than help.
-                    else if (ch == '\r' || ch == '\n')
-                    {
-                        if (!tb.Multiline) return;                                  // single-line target → ignore
-                        s = Environment.NewLine;
-                    }
-                    else s = ch.ToString();
-                    _inSelfEdit = true;
-                    try { tb.SelectedText = s; }               // replaces a live selection too (standard EDIT behavior)
-                    finally { _inSelfEdit = false; }
-                    _expectedCaret = tb.SelectionStart;
-                    if (LogOn) Log("forced " + KeyDesc(ch) + " caret " + caretBefore + "->" + tb.SelectionStart);   // anomaly line
-                }
-                catch { }
-            }
-
-            private void ForceBackspace(System.Windows.Forms.TextBoxBase tb, int caretBefore)
-            {
-                try
-                {
-                    _inSelfEdit = true;
-                    try
-                    {
-                        if (tb.SelectionLength > 0) tb.SelectedText = "";   // backspace with a selection deletes it
-                        else
-                        {
-                            int caret = tb.SelectionStart;
-                            if (caret <= 0) { _expectedCaret = 0; return; }
-                            string t = tb.Text ?? "";
-                            int rmStart = caret - 1, rmLen = 1;   // extend leftward over a surrogate pair — never split one
-                            if (rmStart - 1 >= 0 && rmStart < t.Length && char.IsLowSurrogate(t[rmStart]) && char.IsHighSurrogate(t[rmStart - 1])) { rmStart -= 1; rmLen = 2; }
-                            tb.SelectionStart = rmStart; tb.SelectionLength = rmLen; tb.SelectedText = "";
-                        }
-                    }
-                    finally { _inSelfEdit = false; }
-                    _expectedCaret = tb.SelectionStart;
-                    if (LogOn) Log("forced backspace caret " + caretBefore + "->" + tb.SelectionStart);   // anomaly line
-                }
-                catch { }
-            }
-
-            private void HandleNavKey(ref System.Windows.Forms.Message m, int vk)
-            {
-                var tb = _edit as System.Windows.Forms.TextBoxBase;
-                if (tb == null || tb.ReadOnly) { base.WndProc(ref m); return; }   // read-only: not dead input (see HandleEditingChar)
-
-                // Shift+nav = selection intent — do NOT force selection math; observe and drop the expectation
-                // (a selection may now exist). Long-press/mouse selection remains the supported path.
-                if ((GetKeyState(VK_SHIFT) & 0x8000) != 0)
-                {
-                    base.WndProc(ref m);
-                    _expectedCaret = -1;
-                    Log("shift-nav observed (not forced)");   // unconditional
-                    return;
-                }
-
-                bool observe = InputPolicy.Shim == InputPolicy.ShimMode.Observe;
-                CorrectYank(tb, observe);
-                string before = tb.Text ?? "";
-                int s0 = tb.SelectionStart, l0 = tb.SelectionLength;
-
-                base.WndProc(ref m);   // tier 0 — native
-                int s1 = tb.SelectionStart, l1 = tb.SelectionLength;
-                if (s0 != s1 || l0 != l1 || !string.Equals(before, tb.Text ?? "", StringComparison.Ordinal))
-                {
-                    _expectedCaret = tb.SelectionStart;   // healthy native nav/edit — SILENT
-                    _sNavNative++;
-                    if (KbdDiag) Log("nav " + NavName(vk) + " (tier0 native) caret " + s0 + "->" + s1);
-                    return;
-                }
-
-                int len = (tb.Text ?? "").Length;
-                bool noop =                                     // boundary no-ops — silent, nothing to force
-                    (vk == VKL && s0 == 0 && l0 == 0) ||
-                    (vk == VKR && s0 == len && l0 == 0) ||
-                    (vk == VKHOME && s0 == 0 && l0 == 0) ||
-                    (vk == VKEND && s0 == len && l0 == 0) ||
-                    (vk == VKDEL && ((s0 == len && l0 == 0) || len == 0));
-                if (noop) { _expectedCaret = s0; return; }
-
-                _sNavDead++;
-                if (observe)
-                {
-                    if (LogOn) Log("DEAD " + NavName(vk) + " caret " + s0 + " (observe: not forced)");   // anomaly line
-                    return;
-                }
-
-                // Dead mode → force the nav/edit directly (under the self-edit flag so our own EM messages
-                // don't invalidate the expectation; it's set to the final position right after).
-                try
-                {
-                    _inSelfEdit = true;
-                    try
-                    {
-                        switch (vk)
-                        {
-                            case VKL:
-                                if (l0 > 0) { tb.SelectionStart = s0; tb.SelectionLength = 0; }          // collapse left
-                                else tb.SelectionStart = s0 - 1;
-                                break;
-                            case VKR:
-                                if (l0 > 0) { tb.SelectionStart = s0 + l0; tb.SelectionLength = 0; }     // collapse right
-                                else tb.SelectionStart = s0 + 1;
-                                break;
-                            case VKHOME: tb.SelectionStart = 0; tb.SelectionLength = 0; break;
-                            case VKEND: tb.SelectionStart = len; tb.SelectionLength = 0; break;
-                            case VKDEL:
-                                if (l0 > 0) tb.SelectedText = "";                                        // delete the selection
-                                else
-                                {
-                                    string t = tb.Text ?? "";
-                                    int rmLen = 1;   // forward delete — never split a surrogate pair
-                                    if (s0 + 1 < t.Length && char.IsHighSurrogate(t[s0]) && char.IsLowSurrogate(t[s0 + 1])) rmLen = 2;
-                                    tb.SelectionStart = s0; tb.SelectionLength = rmLen; tb.SelectedText = "";
-                                }
-                                break;
-                        }
-                    }
-                    finally { _inSelfEdit = false; }
-                    _expectedCaret = tb.SelectionStart;
-                    if (LogOn) Log("forced " + NavName(vk) + " caret " + s0 + "->" + tb.SelectionStart);   // anomaly line
-                }
-                catch { }
-            }
-
-            private static string NavName(int vk)
-            {
-                switch (vk)
-                {
-                    case VKL: return "Left";
-                    case VKR: return "Right";
-                    case VKHOME: return "Home";
-                    case VKEND: return "End";
-                    default: return "Delete";
-                }
-            }
-
-            private static string EditDesc(char ch, bool isBackspace) => isBackspace ? "backspace" : KeyDesc(ch);
-
-            /// <summary>First 16 chars of a Unicode message-payload pointer (EM_REPLACESEL/WM_SETTEXT), guarded.</summary>
-            private static string PtrText(IntPtr p)
-            {
-                try
-                {
-                    if (p == IntPtr.Zero) return "''";
-                    string s = System.Runtime.InteropServices.Marshal.PtrToStringUni(p) ?? "";
-                    if (s.Length > 16) s = s.Substring(0, 16) + "…";
-                    return "'" + s + "'";
-                }
-                catch { return "'<?>'"; }
             }
         }
 
@@ -1196,54 +802,6 @@ namespace TelegArm.UI
             catch { }
         }
 
-        /// <summary>[KBD] SEND truth: logs the composer's outer/inner text length + preview from a send entry point,
-        /// so an empty send (text-capture bug) is distinguishable and a missing "button" line pinpoints a hit-test bug.</summary>
-        /// <summary>★ BATCH-TA-40 — WHY SHIFT+ENTER DID NOTHING, AND WHAT THIS FIXES.
-        ///
-        /// The composer is a <c>MaterialTextBox2</c>, and TA-36's Shift+Enter branch deliberately fell
-        /// through WITHOUT SuppressKeyPress so "the control inserts the break itself". **It cannot.**
-        /// MaterialTextBox2 derives from <c>Control</c>, not <c>TextBox</c>, and exposes no Multiline,
-        /// AcceptsReturn, WordWrap or ScrollBars at all — checked against the shipped MaterialSkin.dll.
-        /// It is a single-line control, so Enter had nothing to insert into and the keystroke evaporated.
-        /// The comment describing the intent was right; the assumption about the control was not.
-        ///
-        /// ⚠ WHY NOT SWAP TO MaterialMultiLineTextBox2, WHICH MATERIALSKIN ALSO SHIPS. Because
-        /// <c>_messageInput</c> is load-bearing: drafts, send-entities/markdown wrapping, clipboard paste,
-        /// the cue text, and above all the hard-won RT input shim (the CUAS dead-mode path) all bind to
-        /// this instance and this type. Swapping the control to gain one keystroke would put every one of
-        /// those back in play on a device that is not iterated on per batch.
-        ///
-        /// MaterialTextBox2 HOSTS a private <c>baseTextBox</c> of type <c>BaseTextBox : TextBox</c> — a
-        /// real multiline-capable TextBox. Turning multiline on THERE gives Enter something to insert into
-        /// while leaving the control's type, painting and every binding untouched.
-        /// ⚠ Reflection is the only route: the field is private and there is no property for it. It is
-        ///   guarded — if a future MaterialSkin renames it, Shift+Enter degrades to doing nothing again,
-        ///   which is exactly today's behaviour and not a crash.</summary>
-        private static void EnableComposerMultiline(Control materialTextBox2)
-        {
-            try
-            {
-                var f = materialTextBox2.GetType().GetField("baseTextBox",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                // ⚠ Cast to TextBox, not TextBoxBase: AcceptsReturn and ScrollBars are declared on TextBox.
-                //   BaseTextBox derives from TextBox, so this is the real type, not a widening guess.
-                var inner = f?.GetValue(materialTextBox2) as TextBox;
-                if (inner == null) { Logger.Diag("[COMPOSER] multiline OFF — baseTextBox not found"); return; }
-                inner.Multiline = true;
-                inner.AcceptsReturn = true;    // without this Enter goes to the form's AcceptButton, not the text
-                inner.WordWrap = true;
-                // ⚠ TA-41 — NO SCROLLBAR, AND THAT IS DELIBERATE. I set ScrollBars.Vertical here in TA-40
-                //   and it painted a WHITE native Win32 bar in the composer — the SAME trap already fixed
-                //   in the emoji category strip: a native scrollbar cannot be themed, and Win10/11 hides
-                //   the problem because its system bar is already dark.
-                //   ScrollBars.None does not cost scrolling: a multiline TextBox still scrolls to keep the
-                //   caret visible as you type or arrow through it. The bar was only ever decoration, and an
-                //   unthemeable white one is worse than none.
-                inner.ScrollBars = ScrollBars.None;
-            }
-            catch (Exception ex) { Logger.Diag("[COMPOSER] multiline OFF — " + ex.Message); }
-        }
-
         /// <summary>Does this Enter keypress mean SEND, under the user's chosen mode?
         /// ⚠ The modifier must be EXACT: in Enter mode, Ctrl+Enter must NOT send, or someone who switched
         /// back from Ctrl mode has their muscle memory firing messages silently. An unrecognised stored
@@ -1259,6 +817,8 @@ namespace TelegArm.UI
             }
         }
 
+        /// <summary>[KBD] SEND truth: logs the composer's text length + preview from a send entry point, so an empty send
+        /// (text-capture bug) is distinguishable and a missing "button" line pinpoints a hit-test bug.</summary>
         private void SendPathLog(string via)
         {
             try
@@ -1267,8 +827,7 @@ namespace TelegArm.UI
                 string outer = _messageInput != null ? (_messageInput.Text ?? "") : "";
                 Control inner = _messageInput == null ? null
                     : _messageInput.Plain != null ? _messageInput.Plain.Inner
-                    : _messageInput.Rich != null ? (Control)_messageInput.Rich
-                    : _baseTextBoxField != null ? _baseTextBoxField.GetValue(_messageInput.Legacy) as Control : null;
+                    : (Control)_messageInput.Rich;
                 string innerT = inner != null ? (inner.Text ?? "") : "";
                 Logger.Diag("[KBD] SEND via=" + via + " outer.len=" + outer.Length
                     + " inner.len=" + innerT.Length + " text=" + Quote(outer));
