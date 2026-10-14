@@ -173,7 +173,7 @@ namespace TelegArm.UI.Controls
         private static void Register(Control c)
         {
             if (c == null) return;
-            if (c is TextBoxBase) return;   // text inputs stay native: the touch-keyboard flow needs real OS touch promotion
+            if (c is TextBoxBase || c is ITextInputTarget) return;   // text inputs stay native: the touch-keyboard flow needs real OS touch promotion
             object seen;
             if (_registered.TryGetValue(c, out seen)) return;   // once per control instance
             _registered.Add(c, null);

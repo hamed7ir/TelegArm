@@ -226,6 +226,7 @@
     <Compile Include="UI\Controls\EmptyState.cs" />
     <Compile Include="UI\Controls\SettingRows.cs" />
     <Compile Include="UI\Controls\SettingRowsExtra.cs" />
+    <Compile Include="UI\Controls\EmojiComposer.cs" />
     <Compile Include="UI\DialogProbe.cs" />
     <Compile Include="UI\SettingsProbe.cs" />
     <Compile Include="UI\InputLabForm.cs" />

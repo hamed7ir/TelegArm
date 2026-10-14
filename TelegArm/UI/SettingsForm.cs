@@ -861,9 +861,15 @@ namespace TelegArm.UI
         private void BuildInputTestSection(PageStack page, AppSettings s)
         {
             // REDESIGN 1.5 — the composer / search engine for device gate G1 (was "Plain text boxes (test)").
-            bool plain = !string.Equals(s.ComposerEngine, "Legacy", StringComparison.OrdinalIgnoreCase);
-            var engine = new SegmentedRow("Composer text box", new[] { "MaterialSkin", "Plain" }, plain ? 1 : 0) { Subtitle = "Composer and chat search · after restart" };
-            engine.SelectedIndexChanged += (snd, ev) => { s.ComposerEngine = engine.SelectedIndex == 0 ? "Legacy" : ""; s.Save(); };
+            int eng = string.Equals(s.ComposerEngine, "Legacy", StringComparison.OrdinalIgnoreCase) ? 0
+                    : string.Equals(s.ComposerEngine, "Emoji", StringComparison.OrdinalIgnoreCase) ? 2 : 1;
+            var engine = new SegmentedRow("Composer", new[] { "MaterialSkin", "Plain", "Colour emoji" }, eng) { Subtitle = "Colour emoji draws them as you type · after restart" };
+            engine.SelectedIndexChanged += (snd, ev) =>
+            {
+                int i = engine.SelectedIndex;
+                s.ComposerEngine = i == 0 ? "Legacy" : i == 2 ? "Emoji" : "";
+                s.Save();
+            };
 
             var mode = InputPolicy.Shim;
             var shim = new SegmentedRow("Typing workaround", new[] { "On", "Observe", "Off" },

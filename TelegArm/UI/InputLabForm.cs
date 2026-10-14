@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -33,6 +33,7 @@ namespace TelegArm.UI
         private bool _launcherOn;
         private readonly StringBuilder _events = new StringBuilder();
         private KeyCatcher _catcher;
+        private EmojiComposer _composer;
         private int _y;
 
         public InputLabForm()
@@ -85,6 +86,9 @@ namespace TelegArm.UI
             AddRow("L6  Custom control: handles WM_CHAR itself, draws colour emoji", l6, null, Px(80));
             l6.Probe = _probes[_probes.Count - 1];
             _catcher = l6;
+            var l7 = new EmojiComposer { Hint = "Write a message…", FontPoints = 11f };
+            AddRow("L7  EmojiComposer — the new composer (colour emoji, takes WM_CHAR itself)", l7, l7, Px(96));
+            _composer = l7;
 
             UpdateHead();
             var t = new Timer { Interval = 1000 };
@@ -235,7 +239,7 @@ namespace TelegArm.UI
 
         // ── the gallery probe (TelegArm.exe --gallery-probe) ─────────────────────────────────────────────────────
 
-        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]   // SendMessageW: the ANSI one mangles every non-ASCII char
         private static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, IntPtr l);
 
         /// <summary>Opens the lab for real, types into every box with real WM_CHAR messages and checks the counters: on this
@@ -261,6 +265,8 @@ namespace TelegArm.UI
                 check(catcher.Typed == word && catcher.Probe.Chars == word.Length, "input lab L6: the custom control receives WM_CHAR itself",
                       "text='" + catcher.Typed + "' chars=" + catcher.Probe.Chars);
 
+                ComposerProbe(f._composer, check);
+
                 f.OpenMaterialFormTest();
                 Application.DoEvents();
                 int m = 0;
@@ -279,6 +285,45 @@ namespace TelegArm.UI
                 info("input lab at DPI " + f.WindowDpiValue + ": " + f._probes.Count + " probed boxes");
                 f.Close();
             }
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool GetKeyboardState(byte[] state);
+        [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool SetKeyboardState(byte[] state);
+
+        /// <summary>Plan E1: the new composer driven with real messages — what TabTip and a keyboard send it.</summary>
+        private static void ComposerProbe(EmojiComposer c, Action<bool, string, string> check)
+        {
+            IntPtr h = c.Handle;
+            Action<string> type = s => { foreach (char ch in s) SendMessage(h, 0x0102, (IntPtr)ch, (IntPtr)1); };
+            Action<Keys, bool> key = (k, ctrl) =>
+            {
+                var st = new byte[256]; GetKeyboardState(st); byte old = st[0x11];
+                if (ctrl) { st[0x11] = 0x80; SetKeyboardState(st); }
+                try { SendMessage(h, 0x0100, (IntPtr)(int)k, (IntPtr)1); }
+                finally { if (ctrl) { GetKeyboardState(st); st[0x11] = old; SetKeyboardState(st); } }
+            };
+            c.Focus();
+            c.Text = "";
+            type("hi \U0001F600x");
+            check(c.Text == "hi \U0001F600x", "composer: Latin and a surrogate-pair emoji arrive as typed", "'" + c.Text + "'");
+            type("\b\b");
+            check(c.Text == "hi ", "composer: Backspace removes a char, then the WHOLE emoji", "'" + c.Text + "' len " + c.Text.Length);
+            type("\ryo");
+            check(c.Text == "hi \nyo", "composer: Shift+Enter's CR becomes a line break", "'" + c.Text.Replace("\n", "\\n") + "'");
+            key(Keys.Left, false); type("Z");
+            check(c.Text == "hi \nyZo", "composer: Left moves the caret one character", "'" + c.Text.Replace("\n", "\\n") + "'");
+            key(Keys.Z, true);
+            check(c.Text == "hi \nyo", "composer: Ctrl+Z undoes the last edit", "'" + c.Text.Replace("\n", "\\n") + "'");
+            c.SelectAll(); type("q");
+            check(c.Text == "q", "composer: typing replaces a selection", "'" + c.Text + "'");
+            c.Text = ""; type("\u0633\u0644\u0627\u0645 \u2764\uFE0F");
+            check(c.Text == "\u0633\u0644\u0627\u0645 \u2764\uFE0F" && c.SelectionStart == c.Text.Length, "composer: Persian and a BMP emoji, caret at the end", "len " + c.Text.Length + " caret " + c.SelectionStart);
+            c.Text = "Hello \U0001F600 x";
+            check(true, "composer layout (info)", c.DebugFirstLine());
+            int one = c.ContentHeight;
+            c.Text = string.Join(" ", System.Linq.Enumerable.Repeat("wrapping words", 30));
+            check(c.ContentHeight > one * 2, "composer: long text wraps onto several lines", one + " -> " + c.ContentHeight);
+            c.Text = "";
         }
 
         // ── the per-box observer ──────────────────────────────────────────────────────────────────────────────────

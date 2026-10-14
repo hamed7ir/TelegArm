@@ -251,7 +251,7 @@ namespace TelegArm.UI
         {
             Control c = f.ActiveControl;
             while (c is ContainerControl cc && cc.ActiveControl != null) c = cc.ActiveControl;
-            return c is TextBoxBase && c.Focused;
+            return (c is TextBoxBase || c is UI.Controls.ITextInputTarget) && c.Focused;
         }
 
         private void RestoreFromKeyboard()
@@ -458,6 +458,15 @@ namespace TelegArm.UI
         private void HookKbdDiag(UI.Controls.InputBox field, string name)
         {
             if (field == null) return;
+            if (field.Rich != null)
+            {
+                // Plan E2: no input shim (it takes WM_CHAR itself). The two dismiss feeds the probe gives an EDIT: a genuine tap
+                // re-allows focus during post-dismiss suppression, and a focus gain goes through the same bounce.
+                var rich = field.Rich;
+                rich.MouseDown += (s, e) => { if (IsHardwareInputNow()) NoteRealEditTouch(); };
+                rich.GotFocus += (s, e) => OnTextBoxFocusGain(rich, name + "[Emoji]");
+                return;
+            }
             if (field.Plain != null)
             {
                 // Redesign 1.5 — the Plain engine: the EDIT is ThemedTextBox.Inner, reached without reflection. Same
@@ -1258,6 +1267,7 @@ namespace TelegArm.UI
                 string outer = _messageInput != null ? (_messageInput.Text ?? "") : "";
                 Control inner = _messageInput == null ? null
                     : _messageInput.Plain != null ? _messageInput.Plain.Inner
+                    : _messageInput.Rich != null ? (Control)_messageInput.Rich
                     : _baseTextBoxField != null ? _baseTextBoxField.GetValue(_messageInput.Legacy) as Control : null;
                 string innerT = inner != null ? (inner.Text ?? "") : "";
                 Logger.Diag("[KBD] SEND via=" + via + " outer.len=" + outer.Length

@@ -418,7 +418,7 @@ namespace TelegArm.UI
 
         private void ClearAutoRefocusedTextField()
         {
-            try { if (!IsDisposed && ActiveControl is TextBoxBase) ActiveControl = null; } catch { }
+            try { if (!IsDisposed && (ActiveControl is TextBoxBase || ActiveControl is ITextInputTarget)) ActiveControl = null; } catch { }
         }
 
         private int HitTest(IntPtr lParam)

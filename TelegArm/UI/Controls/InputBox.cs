@@ -20,8 +20,27 @@ namespace TelegArm.UI.Controls
     {
         public readonly MaterialTextBox2 Legacy;
         public readonly ThemedTextBox Plain;
+        /// <summary>Plan E2: the colour-emoji composer (composer only — the search box stays Plain).</summary>
+        public readonly EmojiComposer Rich;
 
-        private InputBox(MaterialTextBox2 legacy, ThemedTextBox plain) { Legacy = legacy; Plain = plain; }
+        private InputBox(MaterialTextBox2 legacy, ThemedTextBox plain, EmojiComposer rich = null) { Legacy = legacy; Plain = plain; Rich = rich; }
+
+        /// <summary>The colour-emoji composer when ComposerEngine (or TELEGARM_COMPOSER) says "Emoji". Read once per process.</summary>
+        public static bool UseEmojiComposer
+        {
+            get
+            {
+                if (_emoji.HasValue) return _emoji.Value;
+                string env = null, setting = "";
+                try { env = Environment.GetEnvironmentVariable("TELEGARM_COMPOSER"); } catch { }
+                try { setting = AppSettings.Instance.ComposerEngine ?? ""; } catch { }
+                _emoji = !string.IsNullOrEmpty(env) ? string.Equals(env, "emoji", StringComparison.OrdinalIgnoreCase)
+                                                    : string.Equals(setting, "Emoji", StringComparison.OrdinalIgnoreCase);
+                Logger.Diag("[COMPOSER] colour-emoji composer=" + _emoji.Value);
+                return _emoji.Value;
+            }
+        }
+        private static bool? _emoji;
 
         /// <summary>Plain unless ComposerEngine (or TELEGARM_COMPOSER) says "Legacy". Read once per process.
         /// ⚠ Plain became the DEFAULT on 2026-10-14: the device trip showed the RT "dead input" came from TelegArm launching
@@ -38,6 +57,7 @@ namespace TelegArm.UI.Controls
                 try { setting = AppSettings.Instance.ComposerEngine ?? ""; } catch { }
                 if (string.Equals(env, "plain", StringComparison.OrdinalIgnoreCase)) _plain = true;
                 else if (string.Equals(env, "legacy", StringComparison.OrdinalIgnoreCase)) _plain = false;
+                else if (string.Equals(env, "emoji", StringComparison.OrdinalIgnoreCase)) _plain = true;   // search stays Plain
                 else _plain = !string.Equals(setting, "Legacy", StringComparison.OrdinalIgnoreCase);
                 Logger.Diag("[COMPOSER] engine=" + (_plain.Value ? "Plain" : "Legacy") + " (" + (env != null && env.Length > 0 ? "TELEGARM_COMPOSER" : setting.Length > 0 ? "setting" : "default") + ")");
                 return _plain.Value;
@@ -47,44 +67,45 @@ namespace TelegArm.UI.Controls
 
         public static InputBox CreateLegacy(MaterialTextBox2 box) { return new InputBox(box, null); }
         public static InputBox CreatePlain(ThemedTextBox box) { return new InputBox(null, box); }
+        public static InputBox CreateRich(EmojiComposer box) { return new InputBox(null, null, box); }
 
         /// <summary>The control to put in a layout.</summary>
-        public Control Control { get { return Legacy != null ? (Control)Legacy : Plain; } }
+        public Control Control { get { return Legacy != null ? (Control)Legacy : Rich != null ? (Control)Rich : Plain; } }
 
         public string Text
         {
-            get { return Legacy != null ? Legacy.Text : Plain.Text; }
-            set { if (Legacy != null) Legacy.Text = value; else Plain.Text = value; }
+            get { return Legacy != null ? Legacy.Text : Rich != null ? Rich.Text : Plain.Text; }
+            set { if (Legacy != null) Legacy.Text = value; else if (Rich != null) Rich.Text = value; else Plain.Text = value; }
         }
 
         public string Hint
         {
-            get { return Legacy != null ? Legacy.Hint : Plain.Hint; }
-            set { if (Legacy != null) Legacy.Hint = value; else Plain.Hint = value; }
+            get { return Legacy != null ? Legacy.Hint : Rich != null ? Rich.Hint : Plain.Hint; }
+            set { if (Legacy != null) Legacy.Hint = value; else if (Rich != null) Rich.Hint = value; else Plain.Hint = value; }
         }
 
         public int SelectionStart
         {
-            get { return Legacy != null ? Legacy.SelectionStart : Plain.SelectionStart; }
-            set { if (Legacy != null) Legacy.SelectionStart = value; else Plain.SelectionStart = value; }
+            get { return Legacy != null ? Legacy.SelectionStart : Rich != null ? Rich.SelectionStart : Plain.SelectionStart; }
+            set { if (Legacy != null) Legacy.SelectionStart = value; else if (Rich != null) Rich.SelectionStart = value; else Plain.SelectionStart = value; }
         }
 
         public int SelectionLength
         {
-            get { return Legacy != null ? Legacy.SelectionLength : Plain.SelectionLength; }
-            set { if (Legacy != null) Legacy.SelectionLength = value; else Plain.SelectionLength = value; }
+            get { return Legacy != null ? Legacy.SelectionLength : Rich != null ? Rich.SelectionLength : Plain.SelectionLength; }
+            set { if (Legacy != null) Legacy.SelectionLength = value; else if (Rich != null) Rich.SelectionLength = value; else Plain.SelectionLength = value; }
         }
 
-        public void SelectAll() { if (Legacy != null) Legacy.SelectAll(); else Plain.SelectAll(); }
-        public bool Focus() { return Legacy != null ? Legacy.Focus() : Plain.Focus(); }
+        public void SelectAll() { if (Legacy != null) Legacy.SelectAll(); else if (Rich != null) Rich.SelectAll(); else Plain.SelectAll(); }
+        public bool Focus() { return Legacy != null ? Legacy.Focus() : Rich != null ? Rich.Focus() : Plain.Focus(); }
         public bool ContainsFocus { get { return Control.ContainsFocus; } }
 
         /// <summary>Legacy: Control.Enabled, as in 1.x. Plain: <see cref="ThemedTextBox.InputEnabled"/> — read-only, never
         /// Enabled = false on the EDIT (the RT contract).</summary>
         public bool Enabled
         {
-            get { return Legacy != null ? Legacy.Enabled : Plain.InputEnabled; }
-            set { if (Legacy != null) Legacy.Enabled = value; else Plain.InputEnabled = value; }
+            get { return Legacy != null ? Legacy.Enabled : Rich != null ? Rich.InputEnabled : Plain.InputEnabled; }
+            set { if (Legacy != null) Legacy.Enabled = value; else if (Rich != null) Rich.InputEnabled = value; else Plain.InputEnabled = value; }
         }
 
         public bool Visible
@@ -95,23 +116,23 @@ namespace TelegArm.UI.Controls
 
         public ContextMenuStrip ContextMenuStrip
         {
-            get { return Legacy != null ? Legacy.ContextMenuStrip : Plain.ContextMenuStrip; }
-            set { if (Legacy != null) Legacy.ContextMenuStrip = value; else Plain.ContextMenuStrip = value; }
+            get { return Legacy != null ? Legacy.ContextMenuStrip : Control.ContextMenuStrip; }
+            set { if (Legacy != null) Legacy.ContextMenuStrip = value; else Control.ContextMenuStrip = value; }
         }
 
         public event EventHandler TextChanged
         {
-            add { if (Legacy != null) Legacy.TextChanged += value; else Plain.TextChanged += value; }
-            remove { if (Legacy != null) Legacy.TextChanged -= value; else Plain.TextChanged -= value; }
+            add { if (Legacy != null) Legacy.TextChanged += value; else Control.TextChanged += value; }
+            remove { if (Legacy != null) Legacy.TextChanged -= value; else Control.TextChanged -= value; }
         }
 
         public event KeyEventHandler KeyDown
         {
-            add { if (Legacy != null) Legacy.KeyDown += value; else Plain.KeyDown += value; }
-            remove { if (Legacy != null) Legacy.KeyDown -= value; else Plain.KeyDown -= value; }
+            add { if (Legacy != null) Legacy.KeyDown += value; else Control.KeyDown += value; }
+            remove { if (Legacy != null) Legacy.KeyDown -= value; else Control.KeyDown -= value; }
         }
 
         /// <summary>Plain only: re-read the palette (the legacy box is themed by MaterialSkin).</summary>
-        public void Recolor() { if (Plain != null) Plain.Recolor(); }
+        public void Recolor() { if (Plain != null) Plain.Recolor(); else if (Rich != null) Rich.Invalidate(); }
     }
 }

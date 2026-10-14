@@ -457,7 +457,19 @@ namespace TelegArm.UI
             };
             _attachButton.Click += (s, e) => ShowAttachMenu();
 
-            if (UI.Controls.InputBox.UsePlain)
+            if (UI.Controls.InputBox.UseEmojiComposer)
+            {
+                // Plan E2 — the colour-emoji composer: takes WM_CHAR itself (immune to RT's dead EDIT), opens TabTip itself.
+                _messageInput = UI.Controls.InputBox.CreateRich(new UI.Controls.EmojiComposer
+                {
+                    Hint = "Write a message…",
+                    Dock = DockStyle.Fill,
+                    Margin = new Padding(12, 10, 6, 10),
+                    FontPoints = 11f
+                });
+                _messageInput.Enabled = false;
+            }
+            else if (UI.Controls.InputBox.UsePlain)
             {
                 // Redesign 1.5 — the plain composer: multiline from birth (Shift+Enter needs no reflection), fixed 64 px
                 // row like Legacy (no auto-grow), "disabled" = read-only, never Enabled=false (ThemedTextBox notes).

@@ -161,6 +161,18 @@ namespace TelegArm.Helpers
                 }, null));
                 Shot("p2-profile-edit-" + t, () => new ProfileForm(new TelegramService()));
                 Shot("trip-inputlab-" + t, () => new InputLabForm());   // device trip 2026-10: --input-lab
+                // Plan E1: the colour-emoji composer — Latin with emoji, a Persian paragraph, mixed text, and a wrapped line.
+                Shot("e1-composer-" + t, () =>
+                {
+                    var f = new Form { Size = new Size(640, 260), BackColor = ThemeHelper.Palette.Window };
+                    var c = new TelegArm.UI.Controls.EmojiComposer { Dock = DockStyle.Fill, FontPoints = 11f };
+                    c.Text = "Hello \U0001F600\U0001F44D\U0001F3FD colour emoji while typing \u2764\uFE0F\n"
+                           + "\u0633\u0644\u0627\u0645 \u062F\u0646\u06CC\u0627 \U0001F339\n"
+                           + "mixed: abc \u0633\u0644\u0627\u0645 123 and a long line that has to wrap onto the next one inside the box";
+                    c.SelectionStart = 6; c.SelectionLength = 2;
+                    f.Controls.Add(c);
+                    return f;
+                });
                 // Step 2.3: a photo (bytes in memory, so no download) and a document — never a video (that would start VLC).
                 WithForm("p2-viewer-" + t, () => new MediaViewerForm(new List<MediaItem>
                     {
