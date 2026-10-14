@@ -25,11 +25,8 @@ COMPONENTS
     Source:  https://github.com/wiz0u/WTelegramClient
     Support the author: https://github.com/sponsors/wiz0u
 
- 2. MaterialSkin.2  2.3.1
-    WinForms Material Design theming/controls.
-    Copyright (c) Ignace Maes; MaterialSkin.2 fork (c) leocb and contributors
-    License: MIT
-    Source:  https://github.com/leocb/MaterialSkin
+ 2. (No longer bundled.) TelegArm 1.x shipped MaterialSkin.2; TelegArm 2.0 removed
+    it. The number is kept so that the component numbers cited elsewhere stay valid.
 
  3. LibVLCSharp  3.9.7  and  LibVLCSharp.WinForms  3.9.7
     .NET bindings for libVLC.
@@ -184,7 +181,7 @@ COMPONENTS
     Copyright (c) .NET Foundation and Contributors
     License: MIT
     Source:  https://github.com/dotnet/runtime
-    (121 managed assemblies ship in total. Earlier revisions of this file
+    (120 managed assemblies ship in total. Earlier revisions of this file
     documented only the 10 hand-picked direct dependencies; this entry and
     entry 11 close that gap.)
 
@@ -286,7 +283,7 @@ substitute link.
 
 --------------------------------------------------------------------------------
 The MIT License (MIT)
-  Applies to: WTelegramClient, MaterialSkin.2, Newtonsoft.Json, QRCoder,
+  Applies to: WTelegramClient, Newtonsoft.Json, QRCoder,
   rlottie, IndexRange, and the Microsoft / .NET Foundation compatibility
   assemblies (each under the copyright(s) named for that component above).
 --------------------------------------------------------------------------------

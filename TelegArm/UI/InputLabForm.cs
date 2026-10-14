@@ -5,8 +5,6 @@ using System.Drawing;
 using System.IO;
 using System.Text;
 using System.Windows.Forms;
-using MaterialSkin;
-using MaterialSkin.Controls;
 using TelegArm.Helpers;
 using TelegArm.UI.Controls;
 
@@ -20,9 +18,10 @@ namespace TelegArm.UI
     ///   keys (WM_KEYDOWN) · chars (WM_CHAR) · native (the box changed) · dead (a typing char the box ignored) · and
     ///   where the chars came from (GetCurrentInputMessageSource: hardware = a real keyboard, injected = the touch keyboard).
     /// The rows: a plain TextBox as Finestra/DroidFinestra use it (single and multi-line), ThemedTextBox (the Plain engine),
-    /// MaterialSkin's MaterialTextBox2 (the Legacy engine), a custom control that handles WM_CHAR itself and draws colour
-    /// emoji (does a non-EDIT even receive the touch keyboard's text on RT?), and a button that hosts a plain TextBox and
-    /// a MaterialTextBox2 inside a real MaterialForm (MainForm's base). "Save report" writes everything to out\ next to the exe.
+    /// a custom control that handles WM_CHAR itself and draws colour emoji (does a non-EDIT even receive the touch
+    /// keyboard's text on RT? It does: L6 typed on the device), and the EmojiComposer. "Save report" writes everything to
+    /// out\ next to the exe. (Step 2.8 removed the MaterialSkin rows — L5 MaterialTextBox2 and the MaterialForm host
+    /// test — with the package; the device result they were built for is in NOTES-carried §10.)
     /// Nothing here ever logs or saves what is typed — only counts.</summary>
     internal sealed class InputLabForm : AppForm
     {
@@ -62,7 +61,6 @@ namespace TelegArm.UI
                 Note("launcher " + (_launcherOn ? "ON (TelegArm starts TabTip on a touch tap, as the app does)" : "OFF (Windows decides)"));
             });
             AddButton(ref bx, "Show keyboard", b => { TouchKeyboard.Show(); Note("keyboard shown by button"); });
-            AddButton(ref bx, "MaterialForm test…", b => OpenMaterialFormTest());
             _y += Px(46);
             bx = x;
             AddButton(ref bx, "Scale lab", b => ScaleLab());
@@ -80,8 +78,6 @@ namespace TelegArm.UI
             AddRow("L3  ThemedTextBox, single line (Plain search)", l3, l3.Inner, Px(40));
             var l4 = new ThemedTextBox(true) { Hint = "ThemedTextBox, multi-line", FontPoints = 11f };
             AddRow("L4  ThemedTextBox, multi-line (Plain composer)", l4, l4.Inner, Px(80));
-            var l5 = NewMaterialBox();
-            AddRow("L5  MaterialTextBox2 (Legacy engine), in this AppForm", l5, MaterialInner(l5), Px(50));
             var l6 = new KeyCatcher(this) { Font = FontHelper.UiAt(11f, WindowDpiValue) };
             AddRow("L6  Custom control: handles WM_CHAR itself, draws colour emoji", l6, null, Px(80));
             l6.Probe = _probes[_probes.Count - 1];
@@ -135,48 +131,6 @@ namespace TelegArm.UI
         {
             _events.AppendLine(DateTime.Now.ToString("HH:mm:ss") + "  " + what);
             UpdateHead();
-        }
-
-        private static MaterialTextBox2 NewMaterialBox()
-        {
-            // MaterialSkin's controls read MaterialSkinManager for colours; the manager exists in the live app (MainForm).
-            var skin = MaterialSkinManager.Instance;
-            skin.Theme = ThemeHelper.Palette.Dark ? MaterialSkinManager.Themes.DARK : MaterialSkinManager.Themes.LIGHT;
-            return new MaterialTextBox2 { Hint = "MaterialTextBox2" };
-        }
-
-        /// <summary>MaterialTextBox2's real EDIT: the private baseTextBox (the field MainForm reaches the same way).</summary>
-        private static Control MaterialInner(MaterialTextBox2 box)
-        {
-            try
-            {
-                var f = box.GetType().GetField("baseTextBox", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                return f != null ? f.GetValue(box) as Control : null;
-            }
-            catch { return null; }
-        }
-
-        /// <summary>A plain TextBox and a MaterialTextBox2 inside a real, managed MaterialForm — MainForm's own base — so the
-        /// MaterialForm host can be told apart from the text box (MaterialForm.WndProc swallows WM_NCCALCSIZE and returns -1
-        /// for WM_NCACTIVATE; the analysis never got to examine what that does to input).</summary>
-        private void OpenMaterialFormTest()
-        {
-            var f = new MaterialForm { Text = "MaterialForm host test", Size = new Size(Px(620), Px(360)), StartPosition = FormStartPosition.CenterScreen };
-            var skin = MaterialSkinManager.Instance;
-            skin.AddFormToManage(f);
-            skin.Theme = ThemeHelper.Palette.Dark ? MaterialSkinManager.Themes.DARK : MaterialSkinManager.Themes.LIGHT;
-            int x = Px(20), y = Px(80);
-            var tb = new TextBox { Bounds = new Rectangle(x, y, Px(560), Px(30)), Font = FontHelper.UiAt(10.5f, WindowDpiValue) };
-            var st1 = new Label { Bounds = new Rectangle(x, y + Px(34), Px(560), Px(20)), AutoSize = false };
-            var mb = new MaterialTextBox2 { Hint = "MaterialTextBox2 in a MaterialForm", Bounds = new Rectangle(x, y + Px(70), Px(560), Px(50)) };
-            var st2 = new Label { Bounds = new Rectangle(x, y + Px(124), Px(560), Px(20)), AutoSize = false };
-            f.Controls.Add(tb); f.Controls.Add(st1); f.Controls.Add(mb); f.Controls.Add(st2);
-            var p1 = new Probe("M1", tb, st1); var p2 = new Probe("M2", MaterialInner(mb), st2);
-            _probes.Add(p1); _probes.Add(p2);
-            p1.Attach(); p2.Attach();
-            Note("MaterialForm test opened (M1 plain TextBox, M2 MaterialTextBox2)");
-            f.FormClosed += (s, e) => skin.RemoveFormToManage(f);
-            f.Show(this);
         }
 
         /// <summary>Times one DPI rescale pass (96→144→96 relative to the current DPI) on a realised, hidden design gallery —
@@ -244,7 +198,7 @@ namespace TelegArm.UI
 
         /// <summary>Opens the lab for real, types into every box with real WM_CHAR messages and checks the counters: on this
         /// healthy dev box every typed char must be "native" and none "dead"; the custom control must receive them; the
-        /// MaterialForm host must work too; the report must list every box. Proves the lab measures, before it travels.</summary>
+        /// report must list every box. Proves the lab measures, before it travels.</summary>
         internal static void RunProbe(IWin32Window owner, Action<bool, string, string> check, Action<string> info)
         {
             using (var f = new InputLabForm())
@@ -267,21 +221,9 @@ namespace TelegArm.UI
 
                 ComposerProbe(f._composer, check);
 
-                f.OpenMaterialFormTest();
-                Application.DoEvents();
-                int m = 0;
-                foreach (var p in f._probes)
-                {
-                    if (!p.Name.StartsWith("M") || p.EditHandle == IntPtr.Zero) continue;
-                    m++;
-                    foreach (char c in word) SendMessage(p.EditHandle, 0x0102, (IntPtr)c, (IntPtr)1);
-                    check(p.Native == word.Length && p.Dead == 0, "input lab " + p.Name + " (inside a MaterialForm): native, none dead", p.Line());
-                }
-                check(m == 2, "input lab: the MaterialForm test hosts two probed boxes", m + " found");
                 string report = f.Report();
-                check(report.Contains("L1:") && report.Contains("L6:") && report.Contains("M2:") && !report.Contains(word),
+                check(report.Contains("L1:") && report.Contains("L6:") && report.Contains("L7:") && !report.Contains(word),
                       "input lab: the report lists every box and never what was typed", report.Length + " chars");
-                foreach (Form o in Application.OpenForms) if (o is MaterialForm) { o.Close(); break; }
                 info("input lab at DPI " + f.WindowDpiValue + ": " + f._probes.Count + " probed boxes");
                 f.Close();
             }

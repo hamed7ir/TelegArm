@@ -332,8 +332,8 @@ namespace TelegArm.UI
             if (!IsTelegramDomain(url))
             {
                 int c = ThemedDialog.Show(this, "Open link", "Open this link?\n\n" + url, "Open", "Cancel");
-                // After the modal closes, don't let focus fall through to the search box (MaterialSkin would
-                // otherwise re-focus the first text box) — clear the active control.
+                // After the modal closes, don't let focus fall through to the search box (WinForms
+                // re-focuses the last text field on reactivation) — clear the active control.
                 try { ActiveControl = null; } catch { }
                 if (c != 0) return;
             }

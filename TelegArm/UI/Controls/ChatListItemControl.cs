@@ -15,8 +15,8 @@ namespace TelegArm.UI.Controls
     /// </summary>
     public class ChatListItemControl : Control
     {
-        // MaterialSkin overwrites Control.Font after construction, so every font
-        // used in OnPaint is held in its own field and referenced directly.
+        // Every font used in OnPaint is held in its own field and referenced directly —
+        // never Control.Font (ambient, set by others; MaterialSkin used to overwrite it).
         // Name/preview/avatar fonts are chosen per-paint by script (Vazirmatn for Persian,
         // Roboto otherwise). Time/badge are always Latin.
         private readonly Font _timeFont = FontHelper.Ui(8f);

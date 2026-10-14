@@ -188,6 +188,10 @@ namespace TelegArm.Core
         /// "Ask" = the CloseChoiceDialog each time, "Exit" = quit. Only once the tray exists; before sign-in X always quits.</summary>
         public string CloseBehavior { get; set; } = "";
 
+        /// <summary>Step 2.7d — the composer editor window's last normal size, in logical px (0 = the default 640 x 480).</summary>
+        public int ComposerEditorWidth { get; set; }
+        public int ComposerEditorHeight { get; set; }
+
 
         /// <summary>Device trip 2026-10 — the touch-keyboard workarounds switched OFF, comma-separated: launch, dismiss,
         /// refocus, actguard. "" = all on (1.x). TELEGARM_KBOFF overrides. The window shrink is ResizeForKeyboard.</summary>

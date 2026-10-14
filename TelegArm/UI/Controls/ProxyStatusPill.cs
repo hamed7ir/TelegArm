@@ -40,9 +40,8 @@ namespace TelegArm.UI.Controls
         private Size _sizeForText = Size.Empty;
         private readonly ToolTip _tip = new ToolTip();
 
-        /// <summary>Accent for the "connected" dot and the focus ring. Set from ApplyTheme — never read
-        /// MaterialSkinManager's Accent slot directly: it is ONE app-wide singleton and writing it
-        /// re-poisons every other form (LESSONS_LEARNED.md:163).</summary>
+        /// <summary>Accent for the "connected" dot and the focus ring. Set from ApplyTheme (the ThemeHelper
+        /// accent).</summary>
         public Color AccentColor { get; set; } = Color.DodgerBlue;
         public bool IsDark { get; set; }
 

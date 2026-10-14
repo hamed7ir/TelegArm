@@ -81,8 +81,6 @@ namespace TelegArm.UI
                 // BATCH-TA-2 — WTelegramClient was missing entirely: the MTProto library the whole app
                 // is built on. Concentus.OggFile is a separate package from Concentus and was also absent.
                 new[] { "WTelegramClient", "MIT" },
-                // The old UI skin library still ships until plan step 2.8 removes the package — its credit goes then, not before.
-                new[] { "MaterialSkin.2", "MIT" },
                 // One row used to cover both as "LGPL-2.1". True for the C# bindings and for
                 // libvlc/libvlccore, but NOT for what we actually ship: both bundled zips carry plugins
                 // built against GPL upstreams, so the native bundle is GPL-2.0-or-later. (Or-later, so it

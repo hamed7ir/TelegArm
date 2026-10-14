@@ -230,6 +230,7 @@
     <Compile Include="UI\DialogProbe.cs" />
     <Compile Include="UI\SettingsProbe.cs" />
     <Compile Include="UI\InputLabForm.cs" />
+    <Compile Include="UI\ComposerEditorForm.cs" />
     <Compile Include="UI\TextBoxProbe.cs" />
     <Compile Include="UI\DialogForm.cs">
       <SubType>Form</SubType>
@@ -420,9 +421,6 @@
     <EmbeddedResource Include="Fonts\Vazirmatn-Bold.ttf" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="MaterialSkin.2">
-      <Version>2.3.1</Version>
-    </PackageReference>
     <PackageReference Include="WTelegramClient">
       <Version>4.4.6</Version>
     </PackageReference>

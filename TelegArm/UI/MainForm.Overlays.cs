@@ -217,6 +217,8 @@ namespace TelegArm.UI
                 Math.Max(0, (Content.ClientSize.Height - _connectingPanel.Height) / 2));
         }
 
+        private bool _connectingShown;   // whether the overlay is up — Visible would read false while the window is in the tray
+
         private void ShowConnecting(string detail)
         {
             EnsureConnectingUi();
@@ -225,6 +227,7 @@ namespace TelegArm.UI
             LayoutConnectingButtons();
             if (!_connectingPanel.Visible) _connectingPanel.Visible = true;
             _connectingPanel.BringToFront();
+            _connectingShown = true;
             RefreshProxyPill();   // D3: the overlay owns connection state while it is up → pill hides
             CenterConnectingPanel();
             if (_connectingDots != null && !_connectingDots.Enabled) _connectingDots.Start();
@@ -234,6 +237,7 @@ namespace TelegArm.UI
         {
             if (_connectingDots != null) _connectingDots.Stop();
             if (_connectingPanel != null) _connectingPanel.Visible = false;
+            _connectingShown = false;
             RefreshProxyPill();   // D3: overlay gone → the pill may report the proxy dimension again
             if (_retryNowCts != null) { try { _retryNowCts.Cancel(); } catch { } }
         }

@@ -354,6 +354,7 @@ namespace TelegArm.UI
                     TextBoxProbe.Run(check, s => log.AppendLine("INFO  " + s));      // step 1.5: ThemedTextBox's contract
                     SettingsProbe.Run(f, check, s => log.AppendLine("INFO  " + s));  // step 2.6: Settings' apply models
                     InputLabForm.RunProbe(f, check, s => log.AppendLine("INFO  " + s)); // device trip: the input lab measures
+                    ComposerEditorForm.RunProbe(f, check, s => log.AppendLine("INFO  " + s)); // step 2.7d: the editor window
                 }
                 catch (Exception ex) { check(false, "probe threw", ex.ToString()); }
                 f.Close();

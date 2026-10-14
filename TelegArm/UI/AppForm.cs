@@ -531,7 +531,12 @@ namespace TelegArm.UI
             Bar.Visible = false;
             Padding = Padding.Empty;
             FormBorderStyle = _resizable ? FormBorderStyle.Sizable : FormBorderStyle.FixedSingle;   // recreates the handle
+            OnChromeFallback();
         }
+
+        /// <summary>The self-check just switched this window to native chrome: the title bar is hidden. A subclass that put
+        /// something in the bar (MainForm's proxy pill, step 2.7b) moves it here.</summary>
+        protected virtual void OnChromeFallback() { }
 
         // ── theme ────────────────────────────────────────────────────────────────────────────────────────────
 

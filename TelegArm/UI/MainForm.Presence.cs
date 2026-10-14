@@ -380,8 +380,22 @@ namespace TelegArm.UI
             try
             {
                 var chat = _selectedChat;
-                if (chat == null || _thread != null || _editTarget != null || _messageInput == null) return;
-                string text = (_messageInput.Text ?? "").Trim();
+                if (chat != null && _thread == null && _editTarget == null && _messageInput != null)
+                    SaveDraftFor(chat, CurrentComposerText());   // 2.7d: the editor window's text while it owns the composer
+            }
+            catch { }
+            // 2.7d: both callers (OpenChat, SwitchAccountAsync) are about to change the chat: the editor window closes now.
+            CloseComposerEditorForSwitch();
+        }
+
+        /// <summary>Saves <paramref name="raw"/> as <paramref name="chat"/>'s draft (local model, list indicator, server).
+        /// Also used by the editor window when the chat changed under it.</summary>
+        private void SaveDraftFor(ChatEntry chat, string raw)
+        {
+            try
+            {
+                if (chat == null) return;
+                string text = (raw ?? "").Trim();
                 if (text == (chat.DraftText ?? "")) return;   // unchanged → don't spam SaveDraft
                 chat.DraftText = string.IsNullOrEmpty(text) ? null : text;
                 chat.DraftDate = string.IsNullOrEmpty(text) ? DateTime.MinValue : DateTime.UtcNow;

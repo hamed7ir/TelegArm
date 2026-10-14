@@ -67,8 +67,8 @@ namespace TelegArm.Helpers
             foreach (var mode in new[] { ThemeMode.Light, ThemeMode.Dark })
             {
                 ThemeHelper.InitMode(mode);   // InitMode raises no ThemeChanged, so no live form re-themes mid-run
-                // (Redesign 2.7a: the live app no longer creates MaterialSkin's manager — MainForm is an AppForm — so the rig
-                //  stops creating it too. Its Roboto registration changed later text metrics; B1 was refreshed then.)
+                // (Redesign 2.7a: once MainForm became an AppForm the rig stopped creating MaterialSkin's manager; its Roboto
+                //  registration had changed later text metrics, so B1 was refreshed then. 2.8 removed the package.)
                 string t = mode == ThemeMode.Light ? "light" : "dark";
 
                 // The real first view is QR, but ShowView(Qr) starts a QR login (network). Phone is UI-only.
@@ -80,7 +80,14 @@ namespace TelegArm.Helpers
                     Capture(f, "login-phone-" + t);
                 });
 
-                WithForm("main-" + t, () => new MainForm(new TelegramService()), f =>
+                long mainCtorMs = -1;
+                WithForm("main-" + t, () =>
+                {
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    var m = new MainForm(new TelegramService());
+                    mainCtorMs = sw.ElapsedMilliseconds;   // step 2.9 (B2): the constructor, BuildUi included
+                    return m;
+                }, f =>
                 {
                     Capture(f, "main-empty-" + t);
                     // Redesign 2.7b: the proxy pill in the title bar ("Connecting...", the on-accent variant).
@@ -88,6 +95,14 @@ namespace TelegArm.Helpers
                     Invoke(f, "RefreshProxyPill");
                     Settle(f);
                     Capture(f, "main-proxy-" + t);
+                    // Where the pill really is: DrawToBitmap renders a container's children in reverse order ("Controls inside
+                    // containers are rendered in reverse order", MSDN), so the native-chrome FLOATING pill is painted under the
+                    // list in a shot even when it is placed right. This line is the check for that case.
+                    var pill = Field(f, "_proxyPill") as Control;
+                    if (pill != null)
+                        _log.AppendLine("  pill: in " + (pill.Parent != null ? pill.Parent.GetType().Name : "nothing") + ", shown="
+                            + Field(f, "_proxyPillShown") + ", bounds " + pill.Bounds
+                            + (pill.Parent != null ? " of " + pill.Parent.ClientSize : "") + ", front=" + (pill.Parent != null && pill.Parent.Controls.GetChildIndex(pill) == 0));
                     ProxyStatus.NoteAuthorized();   // direct: Off, the pill hides
                     Invoke(f, "RefreshProxyPill");
                     SeedChatList(f);
@@ -100,6 +115,7 @@ namespace TelegArm.Helpers
                     ib.GetType().GetProperty("Text").SetValue(ib, "Draft line one \U0001F600\nline two\nline three \u2764\uFE0F\nline four\nline five");
                     Settle(f);
                     Capture(f, "main-draft-" + t);
+                    RecordNumbers("main-" + t, mainCtorMs);
                 });
 
                 WithForm("settings-" + t, () => new SettingsForm(), f =>
@@ -169,6 +185,10 @@ namespace TelegArm.Helpers
                 }, null));
                 Shot("p2-profile-edit-" + t, () => new ProfileForm(new TelegramService()));
                 Shot("trip-inputlab-" + t, () => new InputLabForm());   // device trip 2026-10: --input-lab
+                // Step 2.7d: the composer editor window (no service: its emoji picker is not opened here).
+                Shot("editor-" + t, () => new ComposerEditorForm("Ada Lovelace",
+                    "Draft line one \U0001F600\nline two with **bold** and __italic__\n\n"
+                    + "A longer paragraph, to see how the editor wraps a line that is wider than its window. It should break between words.", null));
                 // Plan E1: the colour-emoji composer — Latin with emoji, a Persian paragraph, mixed text, and a wrapped line.
                 Shot("e1-composer-" + t, () =>
                 {
@@ -241,6 +261,19 @@ namespace TelegArm.Helpers
         }
 
         private const string DemoProxyUrl = "tg://proxy?server=proxy.example.com&port=443&secret=ee0123456789abcdef0123456789abcdef7777772e6578616d706c652e636f6d";
+
+        /// <summary>Step 2.9 (baseline B2): what the dev box can measure with no account — MainForm's constructor (BuildUi
+        /// included; the first one of a run is cold, the second warm), and the process's working set and GDI / USER handles
+        /// with the main window up. They catch regressions between baselines; never rank a cold-start item from them (the
+        /// RT device is 10-15x slower and differently bound — NOTES).</summary>
+        private static void RecordNumbers(string name, long ctorMs)
+        {
+            uint gdi, usr;
+            PerfLog.GuiHandles(out gdi, out usr);
+            long ws = 0;
+            try { using (var pr = System.Diagnostics.Process.GetCurrentProcess()) ws = pr.WorkingSet64; } catch { }
+            _log.AppendLine("  NUMBERS " + name + ": ctor " + ctorMs + " ms, working set " + (ws / (1024 * 1024)) + " MB, gdi " + gdi + ", user " + usr);
+        }
 
         /// <summary>A form shot in one line: build it, capture it under <paramref name="name"/>.</summary>
         private static void Shot(string name, Func<Form> make) { WithForm(name, make, f => Capture(f, name)); }

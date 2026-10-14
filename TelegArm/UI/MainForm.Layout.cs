@@ -195,9 +195,10 @@ namespace TelegArm.UI
             // It used to float over the chat list (BATCH-TA-16d D1/D2: parented to _chatListHost, mapped through
             // TouchScroller). Now it is the TitleBar's slot, drawn on the accent. D3 is unchanged: it hides while the
             // Connecting overlay is up (RefreshProxyPill).
-            _proxyPill = new ProxyStatusPill { IsDark = _dark, AccentColor = _accent, OnAccent = true, Visible = false };
+            _proxyPill = new ProxyStatusPill { IsDark = _dark, AccentColor = _accent, Visible = false };
             _proxyPill.Click += (s, e) => OpenProxySettings();
-            Bar.Slot = _proxyPill;
+            PlaceProxyPill();   // the title bar, or floating over the chat list in native chrome
+            if (_chatListHost != null) _chatListHost.Resize += (s, e) => PositionProxyPill();
             // VISIBILITY (not just caption) depends on the shared state now that Connecting/Failed
             // show even without a proxy, so MainForm must re-evaluate on every transition — the pill's
             // own subscription only updates what it PAINTS, never whether it is shown.
@@ -341,9 +342,7 @@ namespace TelegArm.UI
             //   width, same Flat/transparent/borderless treatment, same 40-alpha accent hover, same
             //   drawn-not-font glyph (":799 — for crisp/consistent rendering on RT"), same "hidden until a
             //   chat is open". Two adjacent header buttons that disagree by two pixels look like a bug.
-            // ⚠ ACCENT COMES FROM ThemeHelper VIA _accent. MaterialSkinManager's Accent slot is NEVER
-            //   written — it is one app-wide singleton and writing it re-poisons every other form
-            //   (§2d / LESSONS_LEARNED.md:163).
+            // ⚠ ACCENT COMES FROM ThemeHelper VIA _accent (the palette) — never a hard-coded colour.
             _chatMenuBtn = new Button
             {
                 Dock = DockStyle.Right, Width = 44, FlatStyle = FlatStyle.Flat, Text = "",
@@ -374,7 +373,7 @@ namespace TelegArm.UI
             // No existing Controls.Add moves.
             // ⚠ Metrics copied from _chatMenuBtn exactly as that copied _chatSearchBtn: 44 px, Flat,
             //   transparent, borderless, 40-alpha accent hover, drawn glyph, accent from ThemeHelper,
-            //   hidden until a chat is open. MaterialSkinManager's Accent slot is NEVER written (§2d).
+            //   hidden until a chat is open.
             _dockBtn = new Button
             {
                 Dock = DockStyle.Right, Width = 44, FlatStyle = FlatStyle.Flat, Text = "",
@@ -458,8 +457,8 @@ namespace TelegArm.UI
             bottomBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));   // 2 input / recording
             bottomBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 40));   // 3 emoji
             bottomBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 48));   // 4 mic
-            // ⚠ 96 -> 40, MATCHING THE EMOJI COLUMN. 96 was sized for the old MaterialButton that had the
-            //   word "Send" in it. The round send disc replaced that button but the COLUMN kept its width,
+            // ⚠ 96 -> 40, MATCHING THE EMOJI COLUMN. 96 was historical — sized for the old text button that
+            //   had the word "Send" in it. The round send disc replaced that button but the COLUMN kept its width,
             //   so a 40px control sat in a 96px cell with ~28px of dead space either side — which is why
             //   the button read as oversized and unbalanced even after the disc itself was shrunk. The
             //   control was never the problem; its cell was.
@@ -498,10 +497,12 @@ namespace TelegArm.UI
                     Hint = "Write a message…",
                     Dock = DockStyle.Fill,
                     Margin = new Padding(12, 10, 6, 10),
-                    FontPoints = 11f
+                    FontPoints = 11f,
+                    ShowExpandGlyph = true   // step 2.7d: top-right, opens the editor window
                 });
                 _messageInput.Enabled = false;
                 _messageInput.Rich.ContentHeightChanged += (s, e) => GrowComposerRow();   // plan E3: up to 13 lines
+                _messageInput.Rich.ExpandClick += (s, e) => OpenComposerEditor();
             }
             else
             {
@@ -550,17 +551,14 @@ namespace TelegArm.UI
                 else if (e.Control && e.KeyCode == Keys.K) { e.SuppressKeyPress = true; InsertComposerLink(); }
             };
             _messageInput.TextChanged += OnComposerTextChanged;   // QUICKWINS-1 PART 1: send our typing (throttled; inert when not typing)
-            // COMPOSER-full-revert: the composer is now the PLAIN, known-good MaterialTextBox2 — its inner native
-            // TextBox is UNTOUCHED (no reflection font-swap, no EmojiInputPainter overpaint), reverted in case any of
-            // that manipulation broke WM_CHAR capture on RT. It shows MaterialSkin's default font (not Vazirmatn) and
-            // system/monochrome emoji; the rest of the app keeps Vazirmatn. Only the Enter-to-send KeyDown (above) and
-            // the [KBD] diagnostics (below) remain wired to it.
+            // The composer is the colour-emoji EmojiComposer (plan E2-E5) or, by setting, the plain ThemedTextBox; the
+            // Enter-to-send KeyDown (above) and the [KBD] diagnostics (below) are wired through the InputBox adapter.
             HookKbdDiag(_messageInput, "composer");   // [KBD] focus/keystroke diagnostics (KEEP)
             HookKbdDiag(_searchBox, "search");
 
             // SEND-ENTITIES (formatting toolbar): a themed context menu on the composer — select text → tap a format
             // to wrap it in the markdown marker that's parsed to a MessageEntity on send. Setting ContextMenuStrip is a
-            // safe property assignment (no inner-TextBox reflection/overpaint, per the COMPOSER-full-revert note above).
+            // safe property assignment (no inner-TextBox reflection or overpaint).
             var fmtMenu = new ThemedContextMenuStrip();
             fmtMenu.Items.Add("Bold").Click += (s, e) => WrapComposerSelection("**", "**");
             fmtMenu.Items.Add("Italic").Click += (s, e) => WrapComposerSelection("__", "__");
@@ -569,6 +567,8 @@ namespace TelegArm.UI
             fmtMenu.Items.Add("Link…").Click += (s, e) => InsertComposerLink();
             fmtMenu.Items.Add(new ToolStripSeparator());
             fmtMenu.Items.Add("Paste").Click += (s, e) => PasteIntoComposer();
+            fmtMenu.Items.Add(new ToolStripSeparator());
+            fmtMenu.Items.Add("Edit in a window…").Click += (s, e) => OpenComposerEditor();   // step 2.7d (both engines)
             _messageInput.ContextMenuStrip = fmtMenu;
 
             // TA-34/A — a round accent disc with a drawn paper-plane, sized and centred exactly like the
@@ -625,9 +625,9 @@ namespace TelegArm.UI
             };
             _replyCancelBtn.FlatAppearance.BorderSize = 0;
             _replyCancelBtn.Click += (s, e) => CancelReply();
-            // OWNER-DRAW the strip (MaterialLabel owner-paints its own text — it ignores .Image and forces the
-            // MaterialSkin font, so the ↩/✎ glyph vanished + Persian fell back). We draw the Noto glyph + the
-            // preview via EmojiRenderer.DrawLine (Vazirmatn Persian + inline Noto emoji) ourselves.
+            // OWNER-DRAW the strip: we draw the ↩/✎ Noto glyph + the preview via EmojiRenderer.DrawLine
+            // (Vazirmatn Persian + inline Noto emoji) ourselves. (History: it was a MaterialLabel, which
+            // ignored .Image and forced its own font — the glyph vanished and Persian fell back.)
             _replyStrip.Paint += (s, e) => DrawReplyStrip(e.Graphics);
             _replyStrip.Controls.Add(_replyCancelBtn);
 

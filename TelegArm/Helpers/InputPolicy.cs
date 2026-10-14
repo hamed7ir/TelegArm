@@ -79,7 +79,7 @@ namespace TelegArm.Helpers
                 try { engine = AppSettings.Instance.ComposerEngine; } catch { }
                 return "dismiss=" + Onf(DismissGuard) + " refocus=" + Onf(RefocusClear)
                     + " actguard=" + Onf(ActivationGuard) + (EnvKbOff != null ? "(env)" : "")
-                    + " resize=" + Onf(resize) + " engineSetting=" + (string.IsNullOrEmpty(engine) ? "Legacy" : engine)
+                    + " resize=" + Onf(resize) + " engineSetting=" + (string.IsNullOrEmpty(engine) ? "default(Emoji)" : engine)
 #if DEBUG
                     + " build=Debug";
 #else

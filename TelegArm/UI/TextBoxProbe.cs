@@ -29,7 +29,7 @@ namespace TelegArm.UI
                 try
                 {
                     // Events are Control's own, so a subscriber holding the field as a plain Control hears them
-                    // (MaterialTextBox2 hides them — the reason InputBox exists).
+                    // (1.x's MaterialTextBox2 hid them — the reason InputBox exists).
                     Control asControl = multi;
                     int textChanged = 0; KeyEventArgs seen = null;
                     asControl.TextChanged += (s, e) => textChanged++;
@@ -126,8 +126,6 @@ namespace TelegArm.UI
                     check(viaAdapter >= 1 && keysViaAdapter >= 1 && textOk, "textbox: InputBox's Rich half hears the EmojiComposer's TextChanged and KeyDown",
                           "TextChanged " + viaAdapter + ", KeyDown " + keysViaAdapter + ", Text round-trip " + textOk);
 
-                    ProbeMaterialReskin(check, dpi);
-
                     info("textbox: multi " + multi.Size + " inner " + multi.Inner.Bounds + ", single " + single.Size + " inner " + single.Inner.Bounds + " (preferred " + single.PreferredFieldHeight + ")");
                 }
                 catch (Exception ex) { check(false, "textbox probe threw", ex.ToString()); }
@@ -136,35 +134,6 @@ namespace TelegArm.UI
         }
 
         private static bool _suppressEnter;
-
-        /// <summary>Review 1.5: MaterialSkin re-skins every control of a managed form (BackColor, ForeColor, Font = Roboto)
-        /// whenever a dialog or Settings sets its theme. The Plain field's EDIT must come through with OUR colours and font.</summary>
-        private static void ProbeMaterialReskin(Action<bool, string, string> check, int dpi)
-        {
-            var skin = MaterialSkin.MaterialSkinManager.Instance;
-            using (var m = new MaterialSkin.Controls.MaterialForm { Text = "reskin probe", ShowInTaskbar = false, StartPosition = FormStartPosition.Manual, Location = new Point(80, 80), Size = new Size(Dpi.Px(420, dpi), Dpi.Px(200, dpi)) })
-            {
-                var panel = new Panel { Dock = DockStyle.Fill };
-                var box = new ThemedTextBox(false) { FontPoints = 10.5f, Bounds = new Rectangle(Dpi.Px(12, dpi), Dpi.Px(80, dpi), Dpi.Px(300, dpi), Dpi.Px(40, dpi)) };
-                panel.Controls.Add(box);
-                m.Controls.Add(panel);
-                skin.AddFormToManage(m);
-                try
-                {
-                    m.Show(); Pump(150);
-                    var theme = skin.Theme;
-                    skin.Theme = theme == MaterialSkin.MaterialSkinManager.Themes.DARK ? MaterialSkin.MaterialSkinManager.Themes.LIGHT : MaterialSkin.MaterialSkinManager.Themes.DARK;
-                    skin.Theme = theme;   // what every ThemedDialog / Settings constructor does: re-apply the theme
-                    Pump(150);
-                    var p = ThemeHelper.Palette;
-                    var wantFont = FontHelper.UiAt(10.5f, Dpi.Of(box));
-                    bool ok = box.Inner.BackColor.ToArgb() == p.Card.ToArgb() && box.Inner.ForeColor.ToArgb() == p.Text.ToArgb() && ReferenceEquals(box.Inner.Font, wantFont);
-                    check(ok, "textbox: MaterialSkin's re-skin does not touch the EDIT's colours or font",
-                          "back " + box.Inner.BackColor + " fore " + box.Inner.ForeColor + " font " + box.Inner.Font.Name + " " + box.Inner.Font.Size);
-                }
-                finally { try { skin.RemoveFormToManage(m); } catch { } m.Close(); }
-            }
-        }
 
         /// <summary>Pixels of the cue colour inside the EDIT, from a full-content PrintWindow of the field; -1 if unavailable.</summary>
         private static int CueInk(ThemedTextBox box)

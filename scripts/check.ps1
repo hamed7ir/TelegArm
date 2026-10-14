@@ -7,7 +7,7 @@
 # Raise -Step's default as the plan advances. Exit code 0 = every enforced gate passed and SelfTest passed.
 #
 # ASCII only: Windows PowerShell 5.1 reads a BOM-less script as ANSI.
-param([string]$Step = '2.6', [switch]$NoSelfTest)
+param([string]$Step = '2.9', [switch]$NoSelfTest)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $app = Join-Path $root 'TelegArm'
@@ -88,7 +88,7 @@ $gates = @(
     @{ From = 'always'; Name = 'input evidence survives Release: no Debug.WriteLine for [KBD]/[INPUT] lines (R7, device trip)'; Test = {
         Hits $all 'Debug\.WriteLine\(\s*"\[(KBD|INPUT)' $null } }
     @{ From = 'always'; Name = 'no MaterialSkin composer leftovers: baseTextBox reflection, EnableComposerMultiline, CreateLegacy (plan E5)'; Test = {
-        Hits $all '\bbaseTextBox\b|EnableComposerMultiline|CreateLegacy' '^InputLabForm\.cs$' } }
+        Hits $all '\bbaseTextBox\b|EnableComposerMultiline|CreateLegacy' $null } }
     @{ From = '2.1'; Name = 'no Material in the files Phase 2 has converted (plan 5 (f))'; Test = {
         $done = @($all | Where-Object { $converted -contains $_.FullName.Substring($app.Length + 1) })
         # String literals are cut too: About's credits name the library (it ships until 2.8), which is not a use of it.

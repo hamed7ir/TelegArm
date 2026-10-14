@@ -165,7 +165,7 @@ namespace TelegArm.UI
         }
 
         /// <summary>Owner-draws the reply/edit strip: the Noto ↩/✏️ glyph + the preview (Vazirmatn for Persian,
-        /// inline Noto emoji). MaterialLabel couldn't — it ignores .Image and forces the MaterialSkin font.</summary>
+        /// inline Noto emoji). (History: the old MaterialLabel couldn't — it ignored .Image and forced its own font.)</summary>
         private void DrawReplyStrip(Graphics g)
         {
             if (_replyStrip == null) return;

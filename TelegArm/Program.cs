@@ -274,8 +274,8 @@ namespace TelegArm
 
             // DPI: declared HERE at runtime (no manifest) by Dpi.Init — see Helpers/Dpi.cs for the modes, the probe
             // chain and why. The build default is still SYSTEM-aware (1.x's exact call on 8.1+; see Dpi.Declare for Win7/8.0) until redesign
-            // step 3.7: MaterialSkin.2 has no per-monitor support, and per-monitor needs the AppForm/WindowDpi work
-            // of steps 1.3–3.x first. Settings → Advanced "Proportional scaling" = DpiMode "Unaware".
+            // step 3.7: per-monitor is gated on the AppForm/WindowDpi work of steps 1.3–3.x being finished.
+            // Settings → Advanced "Proportional scaling" = DpiMode "Unaware".
             // INVARIANT: nothing before this call may create UI or read Screen metrics. The settings read
             // below is file-only on every path (AppSettings.Load + StoragePaths probe files, never UI/Screen
             // — verified DPI-MODE-TOGGLE 0.1; AppSettings.Instance already resolves above for FileLog.Init).

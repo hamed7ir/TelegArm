@@ -80,39 +80,96 @@ namespace TelegArm.UI
 
         // ── SEND-ENTITIES: composer formatting helpers — wrap the selection in markdown; MarkdownEntities.Parse
         //    turns it into MessageEntity[] on send. Uses only public SelectionStart/SelectionLength/Text (no internals).
-        private void WrapComposerSelection(string open, string close)
+        // Step 2.7d: the bodies moved to ComposerFormat (UI/ComposerEditorForm.cs), shared with the editor window.
+        private void WrapComposerSelection(string open, string close) { ComposerFormat.Wrap(_messageInput, open, close); }
+
+        private void InsertComposerLink() { ComposerFormat.InsertLink(_messageInput); }
+
+        // ── Step 2.7d (plan R8): the composer's editor window ──────────────────────────────────────────────────────
+        private ComposerEditorForm _composerEditor;
+        private ChatEntry _composerEditorChat;                  // what the window was opened for: its text belongs there only
+        private object _composerEditorEdit, _composerEditorThread;
+        private long _composerEditorAccount;
+
+        /// <summary>True while the editor window is open AND MainForm still shows the chat (and edit, thread and account) it
+        /// was opened for. Only then does the window hold this composer's live text.</summary>
+        private bool EditorOwnsComposer()
         {
-            var tb = _messageInput; if (tb == null || !tb.Enabled) return;   // review 1.5: never write into a disabled composer
-            try
-            {
-                string t = tb.Text ?? "";
-                int start = tb.SelectionStart, len = tb.SelectionLength;
-                if (start < 0) start = 0; if (start > t.Length) start = t.Length;
-                if (len < 0 || start + len > t.Length) len = 0;
-                string sel = t.Substring(start, len);
-                tb.Text = t.Substring(0, start) + open + sel + close + t.Substring(start + len);
-                tb.SelectionStart = len > 0 ? start + open.Length + len + close.Length : start + open.Length;
-                tb.Focus();
-            }
-            catch { }
+            var ed = _composerEditor;
+            return ed != null && !ed.IsDisposed && ReferenceEquals(_selectedChat, _composerEditorChat)
+                && ReferenceEquals(_editTarget, _composerEditorEdit) && ReferenceEquals(_thread, _composerEditorThread)
+                && AccountContext.ActiveId == _composerEditorAccount;
         }
 
-        private void InsertComposerLink()
+        /// <summary>The composer's text, or the editor window's while it owns the composer (see EditorOwnsComposer). The
+        /// draft paths read it through here, so a tray Exit or a chat switch under the window saves what was typed — and
+        /// never into another chat's draft (review 2.7d F1).</summary>
+        private string CurrentComposerText()
         {
-            var tb = _messageInput; if (tb == null || !tb.Enabled) return;   // review 1.5: never write into a disabled composer
-            try
+            if (EditorOwnsComposer()) return _composerEditor.EditorText;
+            return _messageInput != null ? _messageInput.Text : "";
+        }
+
+        /// <summary>The chat or account is about to change under the editor window (a notification click; the modal blocks
+        /// every other door). PersistDraftForCurrentChat has just saved the window's text as the chat's draft through the
+        /// OUTGOING account, so close the window now — it must not outlive its chat (review 2.7d F1/F2/F3).</summary>
+        private void CloseComposerEditorForSwitch()
+        {
+            var ed = _composerEditor;
+            if (ed == null || ed.IsDisposed) return;
+            Logger.Diag("[EDITOR] the chat or account is changing under the window: its text was saved as the draft; closing it");
+            ed.CloseKeepingText();
+        }
+
+        /// <summary>Opens the editor window on the composer's text — modal (see ComposerEditorForm). On close the text comes
+        /// back into the composer, unless the chat changed under the window (a notification click): then it is kept as
+        /// that chat's draft and never written into another chat's composer. Send goes through SendCurrentMessage.</summary>
+        private void OpenComposerEditor()
+        {
+            if (_composerEditor != null || _messageInput == null || !_messageInput.Enabled || _selectedChat == null) return;
+            if (_recordingBar != null && _recordingBar.Visible) return;   // a voice note owns the composer cell
+            var chat = _selectedChat;
+            var edit = _editTarget;
+            var thread = _thread;
+            long account = AccountContext.ActiveId;
+            string title = edit != null ? "Edit message" : thread != null ? "Comment" : (chat.Title ?? "Compose");
+            string text;
+            bool send;
+            using (var f = new ComposerEditorForm(title, _messageInput.Text, _service))
             {
-                string t = tb.Text ?? "";
-                int start = tb.SelectionStart, len = tb.SelectionLength;
-                if (start < 0) start = 0; if (start > t.Length) start = t.Length;
-                if (len < 0 || start + len > t.Length) len = 0;
-                string label = len > 0 ? t.Substring(start, len) : "text";
-                tb.Text = t.Substring(0, start) + "[" + label + "](url)" + t.Substring(start + len);
-                tb.SelectionStart = start + 1 + label.Length + 2;   // caret at the "url" placeholder
-                tb.SelectionLength = 3;                              // select "url" so the user overtypes it
-                tb.Focus();
+                // A sticker goes to the window's chat only (review 2.7d F3): never to whatever MainForm moved to meanwhile.
+                f.StickerPicked += doc =>
+                {
+                    if (EditorOwnsComposer()) SendDocument(doc);
+                    else Logger.Diag("[EDITOR] sticker dropped: the chat changed under the window");
+                };
+                _composerEditor = f;
+                _composerEditorChat = chat; _composerEditorEdit = edit; _composerEditorThread = thread; _composerEditorAccount = account;
+                try { f.ShowDialog(this); }
+                finally { _composerEditor = null; _composerEditorChat = null; _composerEditorEdit = null; _composerEditorThread = null; }
+                text = f.EditorText ?? "";
+                send = f.SendRequested;
             }
-            catch { }
+            if (IsDisposed || _messageInput == null) return;
+            if (AccountContext.ActiveId != account)
+            {
+                // The switch saved the window's text through the outgoing account and closed it; _service is the other
+                // account's now, so nothing may be sent or saved from here (review 2.7d F2).
+                Logger.Diag("[EDITOR] the account changed under the window: its text was saved as the draft by the switch");
+                return;
+            }
+            if (!ReferenceEquals(_selectedChat, chat) || !ReferenceEquals(_editTarget, edit) || !ReferenceEquals(_thread, thread))
+            {
+                if (edit == null && thread == null) SaveDraftFor(chat, text);   // same account: _service is still the right one
+                Logger.Diag("[EDITOR] the chat changed under the window: the text was kept as its draft, not sent");
+                return;
+            }
+            // The window keeps "\n"; a native multi-line EDIT (the Plain engine) breaks lines on CRLF only (review 2.7d F4).
+            if (_messageInput.Plain != null) text = text.Replace("\r\n", "\n").Replace("\n", "\r\n");
+            if (text != _messageInput.Text) _messageInput.Text = text;
+            _messageInput.SelectionStart = text.Length;
+            if (send) { SendPathLog("editor"); SendCurrentMessage(); }
+            else _messageInput.Focus();
         }
 
         private void PasteIntoComposer()

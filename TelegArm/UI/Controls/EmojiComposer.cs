@@ -224,6 +224,13 @@ namespace TelegArm.UI.Controls
         protected override void OnMouseDown(MouseEventArgs e)
         {
             base.OnMouseDown(e);
+            if (e.Button == MouseButtons.Left && ExpandActive && ExpandRect.Contains(e.Location))
+            {
+                // Step 2.7d: the expand glyph. Not a caret move, and no touch keyboard here — the window takes the input.
+                var h = ExpandClick;
+                if (h != null) h(this, EventArgs.Empty);
+                return;
+            }
             if (!Focused) Focus();
             if (e.Button != MouseButtons.Left) return;
             int i = HitTest(e.Location);
@@ -244,7 +251,71 @@ namespace TelegArm.UI.Controls
         protected override void OnMouseMove(MouseEventArgs e)
         {
             base.OnMouseMove(e);
-            if (_dragging) { _caret = HitTest(e.Location); _wantX = -1; EnsureCaretVisible(); Invalidate(); }
+            if (_dragging) { _caret = HitTest(e.Location); _wantX = -1; EnsureCaretVisible(); Invalidate(); return; }
+            if (_showExpand) SetExpandHot(ExpandActive && ExpandRect.Contains(e.Location));
+        }
+
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            base.OnMouseLeave(e);
+            SetExpandHot(false);
+        }
+
+        // ── step 2.7d (plan R8): the expand glyph, top-right — opens the composer's editor window ──────────────────
+
+        private const int ExpandBox = 24;
+        private bool _showExpand, _expandHot;
+
+        /// <summary>Step 2.7d: an expand glyph in the top-right corner (the text wraps short of it); a click or tap raises
+        /// <see cref="ExpandClick"/>. Drawn and hit only while input is enabled.</summary>
+        public bool ShowExpandGlyph
+        {
+            get { return _showExpand; }
+            set { if (_showExpand == value) return; _showExpand = value; Relayout(); }
+        }
+
+        public event EventHandler ExpandClick;
+
+        private bool ExpandActive { get { return _showExpand && _inputEnabled; } }
+
+        /// <summary>The glyph's box, centred on the first line, so it stays put while the composer grows.</summary>
+        private Rectangle ExpandRect
+        {
+            get
+            {
+                int d = Dpi_, box = Dpi.Px(ExpandBox, d);
+                int top = Dpi.Px(PadY, d) + (LineHeightPx() - box) / 2;
+                return new Rectangle(Width - Dpi.Px(6, d) - box, Math.Max(Dpi.Px(2, d), top), box, box);
+            }
+        }
+
+        private void SetExpandHot(bool hot)
+        {
+            if (hot == _expandHot) return;
+            _expandHot = hot;
+            Cursor = hot ? Cursors.Hand : (_inputEnabled ? Cursors.IBeam : Cursors.Default);
+            Invalidate();
+        }
+
+        /// <summary>Two arrows out to opposite corners — the "open bigger" mark, drawn (no font glyph: RT 8.1).</summary>
+        private void PaintExpand(Graphics g, Palette p, int d)
+        {
+            var r = ExpandRect;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            if (_expandHot)
+                using (var hb = new SolidBrush(p.Hover))
+                using (var hp = DrawHelper.RoundedRect(r, r.Width / 2))
+                    g.FillPath(hb, hp);
+            float inset = r.Width * 0.27f, h = r.Width * 0.17f;
+            float l = r.X + inset, t = r.Y + inset, rr = r.Right - inset, bt = r.Bottom - inset;
+            using (var pen = new Pen(_expandHot ? p.AccentFg : p.TextDim, Dpi.F(1.5f, d)) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+            {
+                g.DrawLines(pen, new[] { new PointF(rr - h, t), new PointF(rr, t), new PointF(rr, t + h) });
+                g.DrawLine(pen, rr, t, rr - (rr - l) * 0.36f, t + (bt - t) * 0.36f);
+                g.DrawLines(pen, new[] { new PointF(l, bt - h), new PointF(l, bt), new PointF(l + h, bt) });
+                g.DrawLine(pen, l, bt, l + (rr - l) * 0.36f, bt - (bt - t) * 0.36f);
+            }
+            g.SmoothingMode = SmoothingMode.None;
         }
 
         protected override void OnMouseUp(MouseEventArgs e)
@@ -337,18 +408,28 @@ namespace TelegArm.UI.Controls
             if (_undo.Count > MaxUndo) _undo.RemoveAt(0);
         }
 
-        private void Undo()
+        public bool CanUndo { get { return _undo.Count > 0; } }
+        public bool CanRedo { get { return _redo.Count > 0; } }
+
+        /// <summary>Forgets the history (the editor window loads its text without making that an undo step).</summary>
+        public void ClearUndo() { _undo.Clear(); _redo.Clear(); }
+
+        public void Undo()
         {
             if (_undo.Count == 0) return;
             _redo.Add(new Snap { Text = _text, Caret = _caret, Anchor = _anchor });
-            Restore(_undo[_undo.Count - 1]); _undo.RemoveAt(_undo.Count - 1);
+            var snap = _undo[_undo.Count - 1];
+            _undo.RemoveAt(_undo.Count - 1);   // before Restore: its TextChanged must see the history after the step
+            Restore(snap);
         }
 
-        private void Redo()
+        public void Redo()
         {
             if (_redo.Count == 0) return;
             _undo.Add(new Snap { Text = _text, Caret = _caret, Anchor = _anchor });
-            Restore(_redo[_redo.Count - 1]); _redo.RemoveAt(_redo.Count - 1);
+            var snap = _redo[_redo.Count - 1];
+            _redo.RemoveAt(_redo.Count - 1);
+            Restore(snap);
         }
 
         private void Restore(Snap s)
@@ -444,7 +525,8 @@ namespace TelegArm.UI.Controls
             get
             {
                 int d = Dpi_, px = Dpi.Px(PadX, d), py = Dpi.Px(PadY, d);
-                return new Rectangle(px, py, Math.Max(1, Width - 2 * px), Math.Max(1, Height - 2 * py));
+                int right = _showExpand ? Dpi.Px(ExpandBox + 6, d) : px;   // step 2.7d: the text wraps short of the glyph
+                return new Rectangle(px, py, Math.Max(1, Width - px - right), Math.Max(1, Height - 2 * py));
             }
         }
 
@@ -821,6 +903,7 @@ namespace TelegArm.UI.Controls
                 }
             }
             g.Clip = oldClip;
+            if (ExpandActive) PaintExpand(g, p, d);
         }
 
         private void PaintSelection(Graphics g, Line line, int selA, int selB, int ox, int top, Color c)

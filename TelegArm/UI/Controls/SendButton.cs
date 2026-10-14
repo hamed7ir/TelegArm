@@ -14,8 +14,7 @@ namespace TelegArm.UI.Controls
     ///   Invalidate hook. It sits in the same composer row as the mic, the emoji and the attach buttons,
     ///   and two adjacent buttons that disagree by two pixels look like a bug. This is the same discipline
     ///   the header ⋮ used when it copied the magnifier.
-    /// ⚠ ACCENT COMES FROM ThemeHelper. MaterialSkinManager's Accent slot is an app-wide singleton and
-    ///   writing it re-poisons every other form (§2d / LESSONS_LEARNED.md:163).
+    /// ⚠ ACCENT COMES FROM ThemeHelper (GetWindowsAccentColor: the user's accent, else Windows') — never a hard-coded colour.
     /// ⚠ NO Region, DELIBERATELY — and that is the X1 rule APPLIED, not skipped. Region is for when the
     ///   parent's colour cannot be relied on; this control sits on the composer bar, whose flat background
     ///   we know, so painting its own rounded fill over that known colour is correct and avoids a Region's

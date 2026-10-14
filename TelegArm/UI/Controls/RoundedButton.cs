@@ -11,8 +11,8 @@ namespace TelegArm.UI.Controls
     public enum RoundedButtonKind { Primary, Secondary, Neutral, Danger }
 
     /// <summary>
-    /// BUTTON-CONSISTENCY: a rounded, accent-aware button that matches the app's MaterialButton look (rounded +
-    /// Windows accent), but keeps STANDARD Button metrics and text casing (no uppercase, no ripple, no auto-height)
+    /// BUTTON-CONSISTENCY: a rounded, accent-aware button (rounded corners + the app accent) that
+    /// keeps STANDARD Button metrics and text casing (no uppercase, no ripple, no auto-height)
     /// so it drops into existing form layouts without shifting them. Reads the accent + dark/light from
     /// <see cref="ThemeHelper"/> and recolours live on <see cref="ThemeHelper.ThemeChanged"/>.
     ///   Primary   = accent-filled  (the main action: Save / Create / Apply / OK)

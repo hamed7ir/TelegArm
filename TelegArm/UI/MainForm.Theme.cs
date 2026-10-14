@@ -68,7 +68,7 @@ namespace TelegArm.UI
             if (_proxyPill != null)
             {
                 _proxyPill.IsDark = _dark;
-                _proxyPill.AccentColor = _accent;   // ThemeHelper/ApplyTheme accent — never MaterialSkinManager's Accent slot
+                _proxyPill.AccentColor = _accent;   // the ThemeHelper/ApplyTheme accent
                 _proxyPill.Invalidate();
             }
             // Chat header uses the theme background (accent reverted); repaint the avatar on theme/accent change.

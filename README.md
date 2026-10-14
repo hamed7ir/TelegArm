@@ -80,7 +80,7 @@ The repo is self-documenting so a new contributor — or a fresh AI session — 
 TelegArm is released under the **GNU General Public License v3.0 only (GPL-3.0-only)** — see
 [LICENSE](LICENSE).
 
-Bundled third-party components (WTelegramClient, MaterialSkin.2, LibVLCSharp / libVLC,
+Bundled third-party components (WTelegramClient, LibVLCSharp / libVLC,
 Newtonsoft.Json, NAudio, Concentus, SixLabors.ImageSharp, QRCoder, rlottie, and the Roboto /
 Vazirmatn / Noto Emoji assets) remain under their own licenses — see
 [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt).

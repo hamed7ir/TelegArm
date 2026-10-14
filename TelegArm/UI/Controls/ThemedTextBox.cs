@@ -8,8 +8,8 @@ using TelegArm.Helpers;
 namespace TelegArm.UI.Controls
 {
     /// <summary>Redesign step 1.5 — a text field: a host that paints a rounded frame around a PLAIN native TextBox
-    /// (<see cref="Inner"/>, BorderStyle.None). It replaces MaterialTextBox2 for the composer and the chat-list search
-    /// behind AppSettings.ComposerEngine = "Plain" (Legacy until device gate G1 passes).
+    /// (<see cref="Inner"/>, BorderStyle.None). It is always the chat-list search box, and the composer when
+    /// AppSettings.ComposerEngine = "Plain" (the default composer is the colour-emoji EmojiComposer).
     ///
     /// THE RT CONTRACT (plan §4.2 step 1.5 — every point is about the dead-input / touch-keyboard state on RT 8.1):
     ///  • Multiline, AcceptsReturn, WordWrap, ScrollBars, BorderStyle and RightToLeft are fixed in the constructor and
@@ -21,7 +21,7 @@ namespace TelegArm.UI.Controls
     ///    and programmatic writes, and looked enabled).
     ///  • Key and text events are the EDIT's own, re-raised on the host with the SAME event-args object, so a host
     ///    KeyDown handler's SuppressKeyPress still stops the character (Enter-to-send relies on it). The host raises
-    ///    Control's own events — it hides none (MaterialTextBox2 HIDES TextChanged/KeyDown/GotFocus/…, so a subscriber
+    ///    Control's own events — it hides none (MaterialTextBox2 HID TextChanged/KeyDown/GotFocus/…, so a subscriber
     ///    holding it as a plain Control silently heard nothing; this control must not repeat that).
     ///  • The cue (placeholder) is drawn inside the EDIT only while it is EMPTY AND UNFOCUSED — EM_SETCUEBANNER does not
     ///    work on a multiline EDIT, and the composer's cue changes for bot keyboards. While the field is focused nothing
@@ -29,11 +29,10 @@ namespace TelegArm.UI.Controls
     ///  • A tap on the frame (outside the EDIT) raises MouseDown FIRST — MainForm records it as a genuine touch there, or
     ///    the post-dismiss suppression bounces the focus (review 1.5) — then focuses the EDIT. It never launches the
     ///    touch keyboard (that kills native typing on RT, device result 2026-10-14); Windows opens it for the EDIT.
-    ///  • The EDIT's colours and font are OURS. MaterialSkin re-skins every control of a managed form (BackColor, ForeColor,
-    ///    Font = Roboto) whenever ANY dialog or Settings sets its theme — the EDIT turned into a grey Roboto box inside the
-    ///    frame (review 1.5, measured). The EDIT accepts those writes only from this control (<see cref="Recolor"/>, the
-    ///    font from <see cref="FontPoints"/> at the window's DPI) and ignores everyone else's — DpiScaler's too: the font is
-    ///    re-resolved from points on a DPI change, so it is never scaled twice.
+    ///  • The EDIT's colours and font are OURS. The EDIT accepts BackColor/ForeColor/Font writes only from this control
+    ///    (<see cref="Recolor"/>, the font from <see cref="FontPoints"/> at the window's DPI) and ignores everyone else's —
+    ///    DpiScaler's too: the font is re-resolved from points on a DPI change, so it is never scaled twice. (History:
+    ///    MaterialSkin's form-wide re-skin once turned it into a grey Roboto box, review 1.5; MaterialSkin is gone since 2.8.)
     ///  • Text inset inside the EDIT is EM_SETMARGINS, re-applied when the handle or font changes.</summary>
     public sealed class ThemedTextBox : Control, IDpiAware
     {
@@ -251,7 +250,7 @@ namespace TelegArm.UI.Controls
                 finally { _own = false; }
             }
 
-            // Writes from anyone else (MaterialSkin's re-skin, DpiScaler) are ignored — see the class notes.
+            // Writes from anyone else (a form-wide theme walk, DpiScaler) are ignored — see the class notes.
             public override Color BackColor { get { return base.BackColor; } set { if (_own) base.BackColor = value; } }
             public override Color ForeColor { get { return base.ForeColor; } set { if (_own) base.ForeColor = value; } }
             public override Font Font { get { return base.Font; } set { if (_own) base.Font = value; } }

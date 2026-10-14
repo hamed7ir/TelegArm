@@ -225,7 +225,7 @@ namespace TelegArm.UI
                 var dchat = _selectedChat;
                 if (dchat != null && _thread == null && _editTarget == null && _messageInput != null && !TelegramService.TearingDown)
                 {
-                    string dtext = (_messageInput.Text ?? "").Trim();
+                    string dtext = (CurrentComposerText() ?? "").Trim();   // 2.7d: the editor window's text if it is open
                     if (dtext != (dchat.DraftText ?? "")) _service?.SaveDraftAsync(dchat.Peer, dtext)?.Wait(600);
                 }
             }

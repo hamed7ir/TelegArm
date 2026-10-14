@@ -17,7 +17,7 @@ namespace TelegArm.UI.Controls
     /// </summary>
     public class MessageBubbleControl : Control, IFlashable
     {
-        // Private font fields — never rely on Control.Font (MaterialSkin overrides it).
+        // Private font fields — never rely on Control.Font (ambient, not ours; MaterialSkin used to override it).
         // Persian/Arabic text uses Vazirmatn (nicer + larger); Latin uses Roboto. Chosen
         // in the ctor from the message's script (RTL detection).
         private Font _textFont;   // not readonly: an album caption can re-derive it for the caption's script

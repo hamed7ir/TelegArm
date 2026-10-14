@@ -148,7 +148,7 @@ namespace TelegArm.UI
                      | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
 
             // ⚠ SIZE SCALES, PLACEMENT DOES NOT NEED TO. The process is deliberately SYSTEM-DPI aware
-            //   (Program.cs:56 — MaterialSkin.2 has no per-monitor support), so Screen.WorkingArea is
+            //   (Helpers/Dpi.cs — per-monitor waits on redesign step 3.7), so Screen.WorkingArea is
             //   already in the same pixels we position in and the anchor maths is DPI-agnostic. The BOX
             //   is not: FontHelper returns POINT-sized fonts, which grow with DPI, so a fixed 360x84 at
             //   200% would clip the text. Reading DpiX from our own Graphics gives the factor the process

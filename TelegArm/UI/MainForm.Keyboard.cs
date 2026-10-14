@@ -40,8 +40,8 @@ namespace TelegArm.UI
         [System.Runtime.InteropServices.DllImport("kernel32.dll")]
         private static extern uint GetCurrentProcessId();
         // COMPOSER-input-diagnose: the thread's real Win32 keyboard focus — reveals whether WM_CHAR is being
-        // delivered to the inner EDIT (baseTextBox → inserts) or the outer MaterialTextBox2 container (no EDIT
-        // → char dropped even though the outer's KeyPress still fires).
+        // delivered to the inner EDIT (ThemedTextBox.Inner → inserts) or the outer ThemedTextBox host (no EDIT
+        // → char dropped).
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         private static extern IntPtr GetFocus();
         // COMPOSER-native-input-diagnose v2.1 — message-level facts (mods/sent) + the H1 normalized-resend test,
@@ -302,7 +302,7 @@ namespace TelegArm.UI
                 {
                     via = "InputPane";
                     _lastOcc = ox.ToString("0") + "," + oy.ToString("0") + "," + ow.ToString("0") + "," + oh.ToString("0");
-                    // OccludedRect is window-relative (borderless MaterialForm → client ≈ window): its top (oy)
+                    // OccludedRect is window-relative (custom-chrome AppForm → client = window): its top (oy)
                     // is where the keyboard starts within the window → screen kbTop = winTop + oy. RAW logged so
                     // the coordinate space can be confirmed from the RT run.
                     kbTop = Top + (int)Math.Round(oy);
@@ -805,7 +805,7 @@ namespace TelegArm.UI
         /// back from Ctrl mode has their muscle memory firing messages silently. An unrecognised stored
         /// value falls back to plain Enter — the default — rather than leaving the composer unable to
         /// send at all, which is what a strict enum parse would have done to a hand-edited settings file.</summary>
-        private static bool SendKeyPressed(KeyEventArgs e)
+        internal static bool SendKeyPressed(KeyEventArgs e)   // internal: the editor window (2.7d) uses the same rule
         {
             switch (AppSettings.Instance.SendKey)
             {
@@ -846,7 +846,7 @@ namespace TelegArm.UI
         }
 
         /// <summary>Names which HWND currently holds the thread's Win32 keyboard focus, relative to a composer:
-        /// "inner" (the real EDIT — WM_CHAR inserts), "outer" (the MaterialTextBox2 container — WM_CHAR is dropped),
+        /// "inner" (the real EDIT — WM_CHAR inserts), "outer" (the ThemedTextBox host — WM_CHAR is dropped),
         /// or "other/0x…" (something else). This is the crux of the char-not-captured diagnosis.</summary>
         private static string FocusWhere(Control outer, Control inner)
         {

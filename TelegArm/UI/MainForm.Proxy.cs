@@ -21,6 +21,46 @@ namespace TelegArm.UI
             try { BeginInvoke((Action)RefreshProxyPill); } catch { /* handle gone */ }
         }
 
+        private bool _proxyPillShown;   // what RefreshProxyPill last asked for (see the ⚠ there)
+
+        /// <summary>Redesign 2.7b — the pill's home. Custom chrome: the title bar's slot, drawn on the accent. Native chrome
+        /// (ChromeMode=Native, or AppForm's self-check fell back) has no title bar of ours, so the pill floats bottom-left
+        /// over the chat list as in 1.x (BATCH-TA-16d D1/D2: a child of the host, not of the scrolling panel, mapped through
+        /// TouchScroller so the list keeps scrolling under it). Idempotent; OnChromeFallback calls it again.</summary>
+        private void PlaceProxyPill()
+        {
+            if (_proxyPill == null) return;
+            if (CustomChrome)
+            {
+                if (!ReferenceEquals(Bar.Slot, _proxyPill)) { _proxyPill.OnAccent = true; Bar.Slot = _proxyPill; }
+                return;
+            }
+            if (_chatListHost == null || ReferenceEquals(_proxyPill.Parent, _chatListHost)) return;
+            if (ReferenceEquals(Bar.Slot, _proxyPill)) Bar.Slot = null;
+            _proxyPill.OnAccent = false;
+            _chatListHost.Controls.Add(_proxyPill);
+            _proxyPill.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            TouchScroller.MapOverlayTo(_proxyPill, _chatListPanel);
+            PositionProxyPill();
+            _proxyPill.BringToFront();
+        }
+
+        /// <summary>Native chrome only: bottom-left of the chat-list host, clear of the scrollbar and the paging zone.</summary>
+        private void PositionProxyPill()
+        {
+            if (_proxyPill == null || _chatListHost == null || !ReferenceEquals(_proxyPill.Parent, _chatListHost)) return;
+            _proxyPill.Left = 12;
+            _proxyPill.Top = Math.Max(0, _chatListHost.ClientSize.Height - _proxyPill.Height - 12);
+        }
+
+        /// <summary>AppForm's self-check fell back to native chrome after the UI was built: the title bar is gone.</summary>
+        protected override void OnChromeFallback()
+        {
+            base.OnChromeFallback();
+            PlaceProxyPill();     // a re-parented control keeps its own Visible flag, so _proxyPillShown stays true
+            RefreshProxyPill();   // and positions it in the new home
+        }
+
         /// <summary>BATCH-TA-16d/D3+D4 — decides whether the pill is on screen at all.
         ///
         /// D4 VISIBILITY: on MainForm it appears ONLY when a proxy is configured. Permanent chrome over the
@@ -33,15 +73,13 @@ namespace TelegArm.UI
         /// So while the overlay is up it owns connection state entirely and the pill hides; once the overlay
         /// goes away, the pill reports the PROXY dimension only — which the overlay never covered.
         /// The two can therefore never contradict each other, because they are never both on screen.</summary>
-        private bool _proxyPillShown;
-
         private void RefreshProxyPill()
         {
             if (_proxyPill == null) return;
             bool proxied = false;
             try { proxied = AppSettings.Instance.ActiveProxyUrl != null; } catch { }
             var st = ProxyStatus.State;
-            bool overlayUp = _connectingPanel != null && !_connectingPanel.IsDisposed && _connectingPanel.Visible;
+            bool overlayUp = _connectingShown;   // a field, not _connectingPanel.Visible: that reads false in the tray (review 2.7b F2)
 
             // The pill is a CONNECTION indicator, not merely a proxy badge (revised after field feedback):
             //   · Connecting / Failed → ALWAYS show, proxy or not. A mid-session drop on a DIRECT
@@ -61,6 +99,7 @@ namespace TelegArm.UI
                 _proxyPill.Visible = show;
                 Bar.PerformLayout(); Bar.Invalidate();   // 2.7b: the title bar places its slot and shortens the title for it
             }
+            if (show && !CustomChrome) { PositionProxyPill(); _proxyPill.BringToFront(); }   // native chrome: floating
         }
 
         /// <summary>Opens the shared ProxyForm — the SAME form the login screen's pill opens (TA-15/X7:
