@@ -31,7 +31,7 @@ namespace TelegArm.UI.Controls
     /// belt-and-braces THERE — but the same control over the chat list would be the original bug
     /// verbatim, so it is built correct once.
     /// </summary>
-    public sealed class ProxyStatusPill : Control
+    public sealed class ProxyStatusPill : Control, IDpiAware
     {
         private ProxyConnectState _state = ProxyConnectState.Off;
         private string _detail;             // e.g. "velvory.co.uk.:443" — NEVER the secret (ProxyUrl.SafeForLog)
@@ -45,6 +45,25 @@ namespace TelegArm.UI.Controls
         /// re-poisons every other form (LESSONS_LEARNED.md:163).</summary>
         public Color AccentColor { get; set; } = Color.DodgerBlue;
         public bool IsDark { get; set; }
+
+        private bool _onAccent;
+
+        /// <summary>Redesign 2.7b: the pill sits in MainForm's accent title bar (TitleBar.Slot). It is drawn on the bar's
+        /// colour (a fill lifted toward the bar's ink, no border, ink text) and sized in logical pixels at the window's
+        /// DPI, shorter than the bar. The login screen keeps the floating variant.</summary>
+        public bool OnAccent
+        {
+            get { return _onAccent; }
+            set { if (_onAccent == value) return; _onAccent = value; _sizeForText = Size.Empty; AutoSizeToText(); Invalidate(); }
+        }
+
+        void IDpiAware.OnDpiChanged(int oldDpi, int newDpi) { if (_onAccent) { _sizeForText = Size.Empty; AutoSizeToText(); Invalidate(); } }
+
+        protected override void OnParentChanged(EventArgs e)
+        {
+            base.OnParentChanged(e);
+            if (_onAccent) { _sizeForText = Size.Empty; AutoSizeToText(); }   // the window's DPI is known once parented
+        }
 
         public ProxyStatusPill()
         {
@@ -128,6 +147,7 @@ namespace TelegArm.UI.Controls
         /// clip the caption. Height keeps the ~40px touch-target bar the scroll-button work established.</summary>
         private void AutoSizeToText()
         {
+            if (_onAccent) { AutoSizeOnAccent(); return; }
             using (var f = FontHelper.Ui(9f, FontStyle.Bold))
             {
                 var t = TextRenderer.MeasureText(Caption(), f);
@@ -144,10 +164,33 @@ namespace TelegArm.UI.Controls
             RebuildRegion();
         }
 
+        /// <summary>2.7b: the title-bar size. 28 logical px high fits both bars (46, and 36 compact).</summary>
+        private void AutoSizeOnAccent()
+        {
+            int dpi = Dpi.Of(this);
+            var t = TextRenderer.MeasureText(Caption(), FontHelper.UiAt(9f, dpi, FontStyle.Bold));   // shared font: never dispose
+            int h = Math.Max(Dpi.Px(28, dpi), t.Height + Dpi.Px(8, dpi));
+            int w = _state == ProxyConnectState.Connected ? h : t.Width + h + Dpi.Px(14, dpi);
+            var want = new Size(w, h);
+            if (want != _sizeForText)
+            {
+                _sizeForText = want; Size = want;
+                if (Parent != null) Parent.PerformLayout();   // TitleBar places its slot from the slot's size
+            }
+            RebuildRegion();
+        }
+
         protected override void OnSizeChanged(EventArgs e) { base.OnSizeChanged(e); RebuildRegion(); }
 
         private void RebuildRegion()
         {
+            if (_onAccent)
+            {
+                // 2.7b: on the title bar the background is one flat colour, so the corners are painted (anti-aliased)
+                // instead of cut by an aliased Region.
+                var had = Region; if (had != null) { Region = null; had.Dispose(); }
+                return;
+            }
             if (Width <= 0 || Height <= 0) return;
             // ONE figure: no FillMode concern (see the class remarks). The region rect is 1px OUTSIDE the
             // painted pill on every side, so the region's aliased edge hides inside a fill-coloured halo
@@ -176,6 +219,7 @@ namespace TelegArm.UI.Controls
         {
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
+            if (_onAccent) { PaintOnAccent(g); return; }
 
             // BATCH-TA-16d/D5 — CONTRAST IS LOAD-BEARING HERE, and the first version failed it.
             // These colours were chosen against LoginForm's flat background (248,248,250 light /
@@ -238,6 +282,54 @@ namespace TelegArm.UI.Controls
 
             if (Focused)
                 using (var fp = new Pen(AccentColor, 1.4f) { DashStyle = DashStyle.Dot })
+                using (var fr = DrawHelper.RoundedRect(Rectangle.Inflate(body, -3, -3), Math.Max(1, (body.Height - 6) / 2)))
+                    g.DrawPath(fp, fr);
+        }
+
+        /// <summary>2.7b: the title-bar look. The fill is the bar's colour lifted toward its ink (Palette.OnAccent), so it
+        /// reads on any accent without a border; the text and the connected shield are ink. The status dot keeps its
+        /// amber / red with an ink rim, so it stays distinct on a warm accent.</summary>
+        private void PaintOnAccent(Graphics g)
+        {
+            var pal = ThemeHelper.Palette;
+            Color ink = pal.OnAccent;
+            Color fill = ColorMath.Mix(pal.TitleBar, ink, _pressed ? 0.30f : _hover ? 0.24f : 0.16f);
+            g.Clear(pal.TitleBar);   // the bar is one flat colour: paint the corners as the bar, then the rounded fill
+            int dpi = Dpi.Of(this);
+            var body = new Rectangle(0, 0, Width - 1, Height - 1);
+            using (var path = DrawHelper.RoundedRect(body, body.Height / 2))
+            using (var fb = new SolidBrush(fill))
+                g.FillPath(fb, path);
+
+            if (_state == ProxyConnectState.Connected)
+            {
+                float s = body.Height * 0.56f;
+                var sr = new RectangleF((body.Width - s) / 2f, (body.Height - s) / 2f, s, s);
+                using (var sp = ShieldPath(sr))
+                using (var sb = new SolidBrush(ink))
+                    g.FillPath(sb, sp);
+                using (var pen = new Pen(fill, Math.Max(1.6f, s * 0.13f)) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+                    g.DrawLines(pen, new[]
+                    {
+                        new PointF(sr.X + s * 0.30f, sr.Y + s * 0.50f),
+                        new PointF(sr.X + s * 0.44f, sr.Y + s * 0.64f),
+                        new PointF(sr.X + s * 0.72f, sr.Y + s * 0.34f),
+                    });
+            }
+            else
+            {
+                int dot = Math.Max(Dpi.Px(8, dpi), Height / 3);
+                var dotRect = new Rectangle((Height - dot) / 2, (Height - dot) / 2, dot, dot);
+                Color dc = _state == ProxyConnectState.Off ? ColorMath.Mix(fill, ink, 0.55f) : DotColor();
+                using (var db = new SolidBrush(dc)) g.FillEllipse(db, dotRect);
+                using (var rp = new Pen(ink, Math.Max(1f, dpi / 96f))) g.DrawEllipse(rp, dotRect);
+                var textRect = new Rectangle(dotRect.Right + Dpi.Px(6, dpi), 0, Math.Max(0, Width - dotRect.Right - Dpi.Px(12, dpi)), Height);
+                TextRenderer.DrawText(g, Caption(), FontHelper.UiAt(9f, dpi, FontStyle.Bold), textRect, ink,
+                    TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+            }
+
+            if (Focused)
+                using (var fp = new Pen(ink, 1.4f) { DashStyle = DashStyle.Dot })
                 using (var fr = DrawHelper.RoundedRect(Rectangle.Inflate(body, -3, -3), Math.Max(1, (body.Height - 6) / 2)))
                     g.DrawPath(fp, fr);
         }

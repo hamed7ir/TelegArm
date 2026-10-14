@@ -62,6 +62,7 @@ namespace TelegArm.UI
             rows.Add(Row("🔖", "Saved Messages", () => OpenSavedMessages()));
             rows.Add(Sep());
             rows.Add(Row("⚙", "Settings", OpenSettings));
+            rows.Add(Row("🎨", "Appearance…", OpenAppearanceSettings));   // 2.7b: Settings, on the Appearance page
             rows.Add(Toggle("🌙", "Night Mode", () => ThemeHelper.IsDark, ToggleNightMode));
             rows.Add(Sep());
             rows.Add(Row("ℹ", "About TelegArm", ShowAbout));   // "Sticker engine…" moved into Settings → General

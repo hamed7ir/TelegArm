@@ -273,6 +273,7 @@ namespace TelegArm.UI
         /// Pass null for the empty "Select a chat" state.</summary>
         private void SetHeaderAvatar(ChatEntry entry)
         {
+            if (_messagePanel != null) _messagePanel.Invalidate();   // 2.7b: the empty-state pill comes and goes with the chat
             if (_headerAvatar == null) return;
             if (entry == null)
             {

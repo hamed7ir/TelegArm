@@ -152,6 +152,9 @@ namespace TelegArm.UI
             if (_rail != null) _rail.Invalidate();
         }
 
+        /// <summary>Redesign 2.7b: MainForm's drawer opens Settings on the Appearance page.</summary>
+        public void ShowAppearancePage() { ShowPage(PageAppearance); }
+
         private void ShowPage(int idx)
         {
             for (int i = 0; i < _pages.Length; i++)
@@ -187,6 +190,19 @@ namespace TelegArm.UI
                 }
             };
             page.Section("Startup", start);
+
+            // Step 2.7c (plan D8): the window's close button. Live; the "Ask" dialog's "Remember my choice" writes it too.
+            var closeNow = CloseBehaviorSetting.Parse(AppSettings.Instance.CloseBehavior);
+            var close = new SegmentedRow("When I close the window", new[] { "Minimise to tray", "Ask", "Exit" },
+                                         closeNow == CloseAction.Ask ? 1 : closeNow == CloseAction.Exit ? 2 : 0)
+            { Subtitle = "The X button and Alt+F4" };
+            close.SelectedIndexChanged += (snd, ev) =>
+            {
+                int i = close.SelectedIndex;
+                AppSettings.Instance.CloseBehavior = CloseBehaviorSetting.Format(i == 1 ? CloseAction.Ask : i == 2 ? CloseAction.Exit : CloseAction.MinimizeToTray);
+                AppSettings.Instance.Save();
+            };
+            page.Section("Window", close);
         }
 
         // ── STARTUP-SETTING: HKCU Run-key launch-at-login (pure managed, HKCU = no admin). The REGISTRY is the

@@ -535,12 +535,18 @@ namespace TelegArm.UI
             return "User " + user.id;
         }
 
-        private void OpenSettings()
+        private void OpenSettings() { OpenSettings(false); }
+
+        /// <summary>Redesign 2.7b: the drawer's "Appearance…" row.</summary>
+        private void OpenAppearanceSettings() { OpenSettings(true); }
+
+        private void OpenSettings(bool appearance)
         {
             // SettingsForm edits and persists AppSettings.Instance directly on OK; the service powers Devices.
             bool proxyChanged = false;
             using (var dlg = new SettingsForm(_service))
             {
+                if (appearance) dlg.ShowAppearancePage();
                 dlg.ProxyChangeApplied += () => proxyChanged = true;
                 dlg.ShowDialog(this);
             }

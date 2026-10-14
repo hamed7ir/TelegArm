@@ -83,6 +83,13 @@ namespace TelegArm.Helpers
                 WithForm("main-" + t, () => new MainForm(new TelegramService()), f =>
                 {
                     Capture(f, "main-empty-" + t);
+                    // Redesign 2.7b: the proxy pill in the title bar ("Connecting...", the on-accent variant).
+                    ProxyStatus.NoteAttempt();
+                    Invoke(f, "RefreshProxyPill");
+                    Settle(f);
+                    Capture(f, "main-proxy-" + t);
+                    ProxyStatus.NoteAuthorized();   // direct: Off, the pill hides
+                    Invoke(f, "RefreshProxyPill");
                     SeedChatList(f);
                     Capture(f, "main-chats-" + t);
                     OpenDemoChat(f);

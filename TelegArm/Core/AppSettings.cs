@@ -184,6 +184,10 @@ namespace TelegArm.Core
         /// it. Restart to apply. ("Legacy", MaterialSkin's box, is gone and now means the default.)</summary>
         public string ComposerEngine { get; set; } = "";
 
+        /// <summary>Step 2.7c (plan D8) — the window's close button: "" = minimise to the tray (the default, 1.x behaviour),
+        /// "Ask" = the CloseChoiceDialog each time, "Exit" = quit. Only once the tray exists; before sign-in X always quits.</summary>
+        public string CloseBehavior { get; set; } = "";
+
 
         /// <summary>Device trip 2026-10 — the touch-keyboard workarounds switched OFF, comma-separated: launch, dismiss,
         /// refocus, actguard. "" = all on (1.x). TELEGARM_KBOFF overrides. The window shrink is ResizeForKeyboard.</summary>
@@ -251,6 +255,7 @@ namespace TelegArm.Core
             if (AccentColor == null) AccentColor = "";
             if (ChromeMode == null) ChromeMode = "";
             if (ComposerEngine == null) ComposerEngine = "";
+            if (CloseBehavior == null) CloseBehavior = "";
             if (KeyboardOff == null) KeyboardOff = "";
             // MediaCacheFolder: null is meaningful (unresolved) — NormalizeCachePath resolves it.
         }

@@ -86,6 +86,15 @@ namespace TelegArm.UI
             {
                 try
                 {
+                    var closeRow = FindRow<SegmentedRow>(f, "When I close the window");
+                    closeRow.SetSelected(1, true);
+                    bool asks = s.CloseBehavior == "Ask" && CloseBehaviorSetting.Parse(s.CloseBehavior) == CloseAction.Ask;
+                    closeRow.SetSelected(2, true);
+                    bool exits = CloseBehaviorSetting.Parse(s.CloseBehavior) == CloseAction.Exit;
+                    closeRow.SetSelected(0, true);
+                    bool tray = s.CloseBehavior == "" && CloseBehaviorSetting.Parse("bogus") == CloseAction.MinimizeToTray;
+                    check(asks && exits && tray, "settings: \"When I close the window\" writes CloseBehavior (default: tray)",
+                          "ask=" + asks + " exit=" + exits + " tray=" + tray);
                     var dismiss = FindRow<ToggleRow>(f, "Keep it closed after closing it");
                     dismiss.On = false;
                     bool dismissOff = !InputPolicy.DismissGuard && s.KeyboardOff.Contains("dismiss");

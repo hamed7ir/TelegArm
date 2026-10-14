@@ -191,13 +191,32 @@ namespace TelegArm.UI
 
         private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
         {
-            // A user-initiated close (X / Alt+F4) hides to the tray instead of exiting —
-            // but only once the tray exists and we're not genuinely closing (Exit/logout).
+            // A user-initiated close (X / Alt+F4), once the tray exists and we're not genuinely closing (Exit/logout), does
+            // what Settings > General > "When I close the window" says (step 2.7c, plan D8): minimise to the tray (the
+            // default, 1.x behaviour), ask, or exit.
             if (!_reallyClosing && _notifyIcon != null && e.CloseReason == CloseReason.UserClosing)
             {
-                e.Cancel = true;
-                HideToTray();
-                return;   // tray-hide = backgrounded; the presence timer sends offline after 30s
+                var action = CloseBehaviorSetting.Parse(AppSettings.Instance.CloseBehavior);
+                if (action == CloseAction.Ask)
+                {
+                    using (var d = new CloseChoiceDialog())
+                    {
+                        if (d.ShowDialog(this) != DialogResult.OK) { e.Cancel = true; return; }   // Esc / X: neither
+                        action = d.Choice;
+                        if (d.Remember)
+                        {
+                            AppSettings.Instance.CloseBehavior = CloseBehaviorSetting.Format(action);
+                            AppSettings.Instance.Save();
+                        }
+                    }
+                }
+                if (action != CloseAction.Exit)
+                {
+                    e.Cancel = true;
+                    HideToTray();
+                    return;   // tray-hide = backgrounded; the presence timer sends offline after 30s
+                }
+                _reallyClosing = true;   // Exit: fall through to the real close below
             }
             // DRAFTS: best-effort save of the open chat's draft on a REAL close (bounded like presence; never blocks
             // shutdown). The primary save is on chat/account switch — this covers "typed then closed without switching".

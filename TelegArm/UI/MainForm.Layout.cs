@@ -191,34 +191,19 @@ namespace TelegArm.UI
             TouchScroller.Enable(_chatListPanel, horizontal: false);
             if (_storyTrayBar != null) TouchScroller.Enable(_storyTrayBar, horizontal: true);   // STORIES: horizontal drag-scroll
 
-            // ── BATCH-TA-16d — the floating proxy pill over the chat list ────────────────────────────
-            // D1 PARENT: _chatListHost, the Panel that WrapWithScrollbar returns — NOT _chatListPanel.
-            // This is the same choice the jump-to-bottom button already makes (":983 _msgHost … a child of
-            // the host, not the scrolling panel"): a child of the FlowLayoutPanel would scroll away with the
-            // rows and be clipped by its client area. The host also excludes the ThemedScrollBar strip
-            // (docked Right), so anchoring Left keeps the pill clear of the bar in both layout modes —
-            // sidebar-rail and folder-bar — because both wrap the SAME host.
-            // Anchored Bottom|Left so the splitter and form resizes leave it where it belongs.
-            if (_chatListHost != null)
-            {
-                _proxyPill = new ProxyStatusPill { IsDark = _dark, AccentColor = _accent, Visible = false };
-                _proxyPill.Click += (s, e) => OpenProxySettings();
-                _chatListHost.Controls.Add(_proxyPill);
-                _proxyPill.BringToFront();
-                _proxyPill.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
-                // D2: the pill is a SIBLING of the scroll surface, so TouchScroller's parent-walk would find
-                // nothing above it and the list would stop scrolling under the chip — for the wheel AND for
-                // a touch pan. Declare what it covers so both pass through.
-                TouchScroller.MapOverlayTo(_proxyPill, _chatListPanel);
-                // VISIBILITY (not just caption) depends on the shared state now that Connecting/Failed
-                // show even without a proxy, so MainForm must re-evaluate on every transition — the pill's
-                // own subscription only updates what it PAINTS, never whether it is shown.
-                ProxyStatus.Changed += OnProxyStatusChangedForVisibility;
-                HandleDestroyed += (s, e) => { try { ProxyStatus.Changed -= OnProxyStatusChangedForVisibility; } catch { } };
-                _chatListHost.Resize += (s, e) => PositionProxyPill();
-                PositionProxyPill();
-                RefreshProxyPill();
-            }
+            // ── The proxy pill: in the title bar (redesign 2.7b) ─────────────────────────────────────────────────
+            // It used to float over the chat list (BATCH-TA-16d D1/D2: parented to _chatListHost, mapped through
+            // TouchScroller). Now it is the TitleBar's slot, drawn on the accent. D3 is unchanged: it hides while the
+            // Connecting overlay is up (RefreshProxyPill).
+            _proxyPill = new ProxyStatusPill { IsDark = _dark, AccentColor = _accent, OnAccent = true, Visible = false };
+            _proxyPill.Click += (s, e) => OpenProxySettings();
+            Bar.Slot = _proxyPill;
+            // VISIBILITY (not just caption) depends on the shared state now that Connecting/Failed
+            // show even without a proxy, so MainForm must re-evaluate on every transition — the pill's
+            // own subscription only updates what it PAINTS, never whether it is shown.
+            ProxyStatus.Changed += OnProxyStatusChangedForVisibility;
+            HandleDestroyed += (s, e) => { try { ProxyStatus.Changed -= OnProxyStatusChangedForVisibility; } catch { } };
+            RefreshProxyPill();
 
             // Chat-list paging (DPI-REVERT addendum): the initial fetch is ONE server page (limit 0 →
             // server default ~100 dialogs) — chats beyond it exist but never render. Page them in near
@@ -239,6 +224,29 @@ namespace TelegArm.UI
         }
 
         private int _bubbleLayoutWidth = -1;
+        private Panel _headerBar, _headerDivider;   // 2.7b: themed from the chrome tokens in ApplyPanelColors
+
+        private const string EmptyStateText = "Select a chat to start messaging";
+
+        /// <summary>Redesign 2.7b: the empty chat pane. A service pill (the same tokens as the date and "pinned" lines),
+        /// centred; only while no chat is open and the panel is empty.</summary>
+        private void PaintEmptyState(object sender, PaintEventArgs e)
+        {
+            if (_selectedChat != null || _messagePanel == null || _messagePanel.Controls.Count > 0) return;
+            var pal = ThemeHelper.PaletteFor(_dark);
+            var font = FontHelper.UiAt(10f, WindowDpiValue);   // shared: never dispose
+            var cs = _messagePanel.ClientSize;
+            var t = TextRenderer.MeasureText(e.Graphics, EmptyStateText, font, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding);
+            int padX = Px(14), padY = Px(6);
+            var r = new Rectangle((cs.Width - t.Width) / 2 - padX, (cs.Height - t.Height) / 2 - padY, t.Width + 2 * padX, t.Height + 2 * padY);
+            var g = e.Graphics;
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            using (var path = DrawHelper.RoundedRect(r, r.Height / 2))
+            using (var br = new SolidBrush(pal.ServicePillBg))
+                g.FillPath(br, path);
+            TextRenderer.DrawText(g, EmptyStateText, font, r, pal.ServicePillText,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
+        }
         private int _composerRowMin = -1, _composerMargins = -1;
 
         /// <summary>Plan E3: the input row (row 9 of the right panel) follows the colour-emoji composer's content height, from
@@ -287,6 +295,7 @@ namespace TelegArm.UI
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 64));  // 9 input
 
             var topBar = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0), Cursor = Cursors.Hand };
+            _headerBar = topBar;   // 2.7b: its surface comes from the Header token (ApplyPanelColors)
             var titleStack = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Margin = new Padding(0) };
             titleStack.RowStyles.Add(new RowStyle(SizeType.Percent, 58));
             titleStack.RowStyles.Add(new RowStyle(SizeType.Percent, 42));
@@ -384,6 +393,9 @@ namespace TelegArm.UI
             _headerAvatar.Paint += HeaderAvatar_Paint;
             _headerAvatar.Click += (s, e) => OnHeaderClick();
             topBar.Controls.Add(_headerAvatar);
+            // 2.7b: a 1 px divider under the header. Added last, so it docks first: the full width, at the bottom.
+            _headerDivider = new Panel { Dock = DockStyle.Bottom, Height = 1, Margin = new Padding(0) };
+            topBar.Controls.Add(_headerDivider);
             topBar.Click += (s, e) => OnHeaderClick();      // header → profile, or ‹ back when in a comment thread
             _chatTitle.Click += (s, e) => OnHeaderClick();
             _chatStatus.Click += (s, e) => OnHeaderClick();
@@ -416,6 +428,9 @@ namespace TelegArm.UI
                     (c as MessageBubbleControl)?.Measure();
                 }
             };
+            // Redesign 2.7b: the empty state. With no chat open, a centred service pill says what to do, as in Telegram.
+            _messagePanel.Paint += PaintEmptyState;
+            _messagePanel.Resize += (s, e) => { if (_selectedChat == null) _messagePanel.Invalidate(); };
             _messagePanel.Scroll += MessagePanel_Scroll;
             // Mouse-wheel scrolling doesn't reliably raise Scroll with NewValue==0, so
             // check the position right after the wheel is applied (hence BeginInvoke)

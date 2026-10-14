@@ -29,6 +29,17 @@ namespace TelegArm.UI
 
         private void ApplyPanelColors()
         {
+            // Redesign 2.7b: pane surfaces and dividers from the chrome tokens (they inherited the form's Window colour).
+            var pal = ThemeHelper.PaletteFor(_dark);
+            if (_split != null)
+            {
+                _split.BackColor = pal.Divider;          // the 1 px splitter between the panes
+                _split.Panel1.BackColor = pal.Sidebar;   // search row, folders and list: one surface
+                _split.Panel2.BackColor = pal.Window;    // bars and the composer row; the message list paints ChatBg
+            }
+            if (_headerBar != null) _headerBar.BackColor = pal.Header;
+            if (_headerDivider != null) _headerDivider.BackColor = pal.Divider;
+            if (_messagePanel != null && _selectedChat == null) _messagePanel.Invalidate();   // the empty-state pill
             _searchBox?.Recolor();
             _messageInput?.Recolor();
             if (_chatListPanel != null)

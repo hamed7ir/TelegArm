@@ -21,15 +21,6 @@ namespace TelegArm.UI
             try { BeginInvoke((Action)RefreshProxyPill); } catch { /* handle gone */ }
         }
 
-        /// <summary>BATCH-TA-16d/D1 — bottom-LEFT of the chat-list host, clear of the themed scrollbar
-        /// (docked Right) and of the paging trigger zone at the very bottom.</summary>
-        private void PositionProxyPill()
-        {
-            if (_proxyPill == null || _chatListHost == null) return;
-            _proxyPill.Left = 12;
-            _proxyPill.Top = Math.Max(0, _chatListHost.ClientSize.Height - _proxyPill.Height - 12);
-        }
-
         /// <summary>BATCH-TA-16d/D3+D4 — decides whether the pill is on screen at all.
         ///
         /// D4 VISIBILITY: on MainForm it appears ONLY when a proxy is configured. Permanent chrome over the
@@ -42,6 +33,8 @@ namespace TelegArm.UI
         /// So while the overlay is up it owns connection state entirely and the pill hides; once the overlay
         /// goes away, the pill reports the PROXY dimension only — which the overlay never covered.
         /// The two can therefore never contradict each other, because they are never both on screen.</summary>
+        private bool _proxyPillShown;
+
         private void RefreshProxyPill()
         {
             if (_proxyPill == null) return;
@@ -59,8 +52,15 @@ namespace TelegArm.UI
             //     over the chat list would be clutter for the majority who never use a proxy.
             bool show = (st == ProxyConnectState.Connecting || st == ProxyConnectState.Failed || proxied)
                         && !overlayUp;
-            if (_proxyPill.Visible != show) _proxyPill.Visible = show;
-            if (show) { PositionProxyPill(); _proxyPill.BringToFront(); }
+            // ⚠ Compare with what we last asked for, NEVER with Control.Visible: that reads false whenever the window is
+            // hidden (in the tray), so a Connecting -> Off change while hidden was skipped and the pill came back with
+            // the window, saying "Connect via proxy" (found by the 2.7b rig shot, whose form is never shown).
+            if (_proxyPillShown != show)
+            {
+                _proxyPillShown = show;
+                _proxyPill.Visible = show;
+                Bar.PerformLayout(); Bar.Invalidate();   // 2.7b: the title bar places its slot and shortens the title for it
+            }
         }
 
         /// <summary>Opens the shared ProxyForm — the SAME form the login screen's pill opens (TA-15/X7:
