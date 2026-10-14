@@ -4,8 +4,6 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Windows.Forms;
-using MaterialSkin;
-using MaterialSkin.Controls;
 using TelegArm.Core;
 using TelegArm.Helpers;
 using TelegArm.UI.Controls;
@@ -25,20 +23,13 @@ namespace TelegArm.UI
 
         private void ApplyThemeColors()
         {
-            _skin.Theme = _dark ? MaterialSkinManager.Themes.DARK : MaterialSkinManager.Themes.LIGHT;
-            var primary = (Primary)(uint)_accent.ToArgb();
-            // Accent = the SAME Windows accent as Primary (cast an arbitrary ARGB into the uint-backed Accent
-            // enum, exactly as Primary does) so MaterialSkin's accent surfaces — the text-box focus underline
-            // and the floating "Write a message…" / "Search" hint — match the app's purple instead of the
-            // default light blue.
-            var accent = (Accent)(uint)_accent.ToArgb();
-            _skin.ColorScheme = new ColorScheme(
-                primary, primary, primary, accent, TextShade.WHITE);
+            // Redesign 2.7a: nothing to push into MaterialSkin any more — AppForm recolours its own chrome on ThemeChanged
+            // and ApplyPanelColors does the panes.
         }
 
         private void ApplyPanelColors()
         {
-            _searchBox?.Recolor();     // redesign 1.5: the Plain engine paints from the palette (Legacy: MaterialSkin)
+            _searchBox?.Recolor();
             _messageInput?.Recolor();
             if (_chatListPanel != null)
                 _chatListPanel.BackColor = ThemeHelper.PaletteFor(_dark).ListBg;

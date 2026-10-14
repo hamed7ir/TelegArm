@@ -4,8 +4,6 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Windows.Forms;
-using MaterialSkin;
-using MaterialSkin.Controls;
 using TelegArm.Core;
 using TelegArm.Helpers;
 using TelegArm.UI.Controls;
@@ -220,12 +218,12 @@ namespace TelegArm.UI
                 if (!bcast && txt.Length > 0 && entry.OnlineCount >= 1)
                     txt += ", " + entry.OnlineCount.ToString("N0") + " online";
                 _chatStatus.Text = txt;
-                _chatStatus.ForeColor = _dark ? Color.FromArgb(150, 150, 150) : Color.FromArgb(120, 120, 120);
+                _chatStatus.Role = LabelRole.Dim;
                 return;
             }
             _chatStatus.Text = u != null ? StatusText(u) : "";
             bool online = u?.status is UserStatusOnline;
-            _chatStatus.ForeColor = online ? _accent : (_dark ? Color.FromArgb(150, 150, 150) : Color.FromArgb(120, 120, 120));
+            _chatStatus.Role = online ? LabelRole.Accent : LabelRole.Dim;
         }
 
         /// <summary>Owner-draws the header peer avatar (circular) on the accent strip, or a deterministic initials
@@ -342,7 +340,7 @@ namespace TelegArm.UI
             }
             _typing = true;
             _chatStatus.Text = string.IsNullOrEmpty(name) ? "typing…" : name + " is typing…";
-            _chatStatus.ForeColor = _accent;
+            _chatStatus.Role = LabelRole.Accent;
             _typingTimer.Stop();
             _typingTimer.Start();
         }

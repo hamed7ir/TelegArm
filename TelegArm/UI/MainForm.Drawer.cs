@@ -4,8 +4,6 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Windows.Forms;
-using MaterialSkin;
-using MaterialSkin.Controls;
 using TelegArm.Core;
 using TelegArm.Helpers;
 using TelegArm.UI.Controls;
@@ -78,10 +76,10 @@ namespace TelegArm.UI
             // full-window control would occlude the content; WinForms transparency renders the form bg black here.)
             _drawer = new DrawerMenu(null, _dark, _accent, name, letter, av, me?.id ?? 0, rows, Wrap(ShowProfile))
             {
-                Bounds = new Rectangle(0, 0, DrawerMenu.CardW, ClientSize.Height)
+                Bounds = new Rectangle(0, 0, DrawerMenu.CardW, Content.ClientSize.Height)   // 2.7a: under the title bar
             };
             _drawer.CloseRequested += () => BeginInvoke((Action)CloseDrawer);
-            Controls.Add(_drawer);
+            Content.Controls.Add(_drawer);
             _drawer.BringToFront();
             _drawer.Focus();
 

@@ -61,7 +61,8 @@ $converted = @(
     'UI\MediaViewerForm.cs',                                                                 # 2.3
     'UI\LoginForm.cs',                                                                       # 2.4
     'UI\ProfileForm.cs',                                                                     # 2.5
-    'UI\SettingsForm.cs', 'UI\Controls\SettingRowsExtra.cs', 'UI\Controls\SessionRowControl.cs'   # 2.6
+    'UI\SettingsForm.cs', 'UI\Controls\SettingRowsExtra.cs', 'UI\Controls\SessionRowControl.cs'   # 2.6,
+    'UI\MainForm.Bubbles.cs', 'UI\MainForm.ChatList.cs', 'UI\MainForm.ChatOpen.cs', 'UI\MainForm.Composer.cs', 'UI\MainForm.Dock.cs', 'UI\MainForm.Drawer.cs', 'UI\MainForm.Folders.cs', 'UI\MainForm.History.cs', 'UI\MainForm.Keyboard.cs', 'UI\MainForm.Layout.cs', 'UI\MainForm.Media.cs', 'UI\MainForm.MessageActions.cs', 'UI\MainForm.MessageExtras.cs', 'UI\MainForm.Overlays.cs', 'UI\MainForm.Presence.cs', 'UI\MainForm.Proxy.cs', 'UI\MainForm.Scroll.cs', 'UI\MainForm.Search.cs', 'UI\MainForm.Session.cs', 'UI\MainForm.Theme.cs', 'UI\MainForm.Tray.cs', 'UI\MainForm.Updates.cs', 'UI\MainForm.cs'   # 2.7a
 )
 
 $rowClasses = @($all | Where-Object { $_.Name -in 'MessageBubbleControl.cs', 'VoiceBubbleControl.cs', 'ServiceLineControl.cs', 'SponsoredCardControl.cs', 'ChatListItemControl.cs' })

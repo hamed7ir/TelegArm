@@ -4,8 +4,6 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Windows.Forms;
-using MaterialSkin;
-using MaterialSkin.Controls;
 using TelegArm.Core;
 using TelegArm.Helpers;
 using TelegArm.UI.Controls;

@@ -4,8 +4,6 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Windows.Forms;
-using MaterialSkin;
-using MaterialSkin.Controls;
 using TelegArm.Core;
 using TelegArm.Helpers;
 using TelegArm.UI.Controls;
@@ -32,7 +30,7 @@ namespace TelegArm.UI
                 BackColor = _dark ? Color.FromArgb(26, 26, 29) : Color.FromArgb(244, 244, 247)
             };
             _switchOverlay.Paint += PaintSwitchOverlay;
-            Controls.Add(_switchOverlay);
+            Content.Controls.Add(_switchOverlay);   // 2.7a: under the title bar
             _switchDots = new System.Windows.Forms.Timer { Interval = 350 };
             _switchDots.Tick += (s, e) => { _switchDotCount = (_switchDotCount + 1) % 4; if (_switchOverlay.Visible) _switchOverlay.Invalidate(); };
         }
@@ -70,7 +68,7 @@ namespace TelegArm.UI
             }
             catch { _switchAvatar = null; }
             _switchDotCount = 0;
-            _switchOverlay.Bounds = ClientRectangle;   // cover the full client area (not docked — avoids layout fights)
+            _switchOverlay.Bounds = Content.ClientRectangle;   // cover the full client area (not docked — avoids layout fights)
             _switchOverlay.Visible = true;
             _switchOverlay.BringToFront();
             if (_switchDots != null && !_switchDots.Enabled) _switchDots.Start();
@@ -139,12 +137,10 @@ namespace TelegArm.UI
                 Font = new Font("Segoe UI", 9.75f),
                 ForeColor = _dark ? Color.FromArgb(170, 170, 176) : Color.FromArgb(108, 108, 114)
             };
-            _retryButton = new MaterialButton
+            _retryButton = new RoundedButton   // 2.7a: was a MaterialButton (Contained)
             {
-                Text = "Retry now",
-                Type = MaterialButton.MaterialButtonType.Contained,
-                UseAccentColor = false,
-                AutoSize = false, Size = new Size(170, 40)
+                Text = "Retry now", Kind = RoundedButtonKind.Primary, Modern = true,
+                Size = new Size(170, 40), Font = FontHelper.UiAt(10f, WindowDpiValue, FontStyle.Bold)
             };
             // BATCH-TA-16f/F1 — the two buttons share the row, so Retry no longer centres alone.
             _retryButton.Location = new Point(_connectingPanel.Width / 2 - _retryButton.Width - 6, 118);
@@ -161,18 +157,18 @@ namespace TelegArm.UI
             // until now, is that this screen offered ONLY "Retry now" and "Cancel" — retrying forever on a
             // network that will never work, with the one setting that could fix it unreachable. A proxy is
             // needed EXACTLY here. Opens the same ProxyForm as the login pill and the Settings row.
-            _proxyOverlayButton = new MaterialButton
+            _proxyOverlayButton = new RoundedButton   // 2.7a: was a MaterialButton (Outlined)
             {
-                Text = "Proxy", Type = MaterialButton.MaterialButtonType.Outlined,
-                UseAccentColor = false, AutoSize = false, Size = new Size(120, 40)
+                Text = "Proxy", Kind = RoundedButtonKind.Secondary, Modern = true,
+                Size = new Size(120, 40), Font = FontHelper.UiAt(10f, WindowDpiValue, FontStyle.Bold)
             };
             _proxyOverlayButton.Location = new Point(_connectingPanel.Width / 2 + 6, 118);
             _proxyOverlayButton.Click += (s, e) => OpenProxySettings();
 
-            _switchCancelButton = new MaterialButton
+            _switchCancelButton = new RoundedButton   // 2.7a: was a MaterialButton (Outlined)
             {
-                Text = "Cancel", Type = MaterialButton.MaterialButtonType.Outlined,
-                AutoSize = false, Size = new Size(150, 40), Visible = false
+                Text = "Cancel", Kind = RoundedButtonKind.Neutral, Modern = true,
+                Size = new Size(150, 40), Visible = false, Font = FontHelper.UiAt(10f, WindowDpiValue, FontStyle.Bold)
             };
             _switchCancelButton.Click += (s, e) =>
             {
@@ -187,7 +183,7 @@ namespace TelegArm.UI
             _connectingPanel.Controls.Add(_retryButton);
             _connectingPanel.Controls.Add(_proxyOverlayButton);
             _connectingPanel.Controls.Add(_switchCancelButton);
-            Controls.Add(_connectingPanel);
+            Content.Controls.Add(_connectingPanel);
             _connectingPanel.BringToFront();
             LayoutConnectingButtons();   // F1: one owner of the action-row layout
 
@@ -217,8 +213,8 @@ namespace TelegArm.UI
         {
             if (_connectingPanel == null) return;
             _connectingPanel.Location = new Point(
-                Math.Max(0, (ClientSize.Width - _connectingPanel.Width) / 2),
-                Math.Max(0, (ClientSize.Height - _connectingPanel.Height) / 2));
+                Math.Max(0, (Content.ClientSize.Width - _connectingPanel.Width) / 2),
+                Math.Max(0, (Content.ClientSize.Height - _connectingPanel.Height) / 2));
         }
 
         private void ShowConnecting(string detail)

@@ -67,13 +67,8 @@ namespace TelegArm.Helpers
             foreach (var mode in new[] { ThemeMode.Light, ThemeMode.Dark })
             {
                 ThemeHelper.InitMode(mode);   // InitMode raises no ThemeChanged, so no live form re-themes mid-run
-                // ⚠ Until step 2.8 removes MaterialSkin: create its manager first, as the live app's MainForm (a MaterialForm)
-                // always has by the time any other window opens. Its creation changes how later text lays out (measured in
-                // step 2.6: without it the 1.x dialogs, the gallery and MainForm shifted by a few px — INFERENCE: its own
-                // Roboto registered with GDI). 1.x's LoginForm and SettingsForm created it as a side effect, early in each
-                // pass; Phase 2 converted both, so the rig now does it on purpose. Delete with the package (2.8) and
-                // refresh B1 then — text everywhere will move.
-                { var skin = MaterialSkin.MaterialSkinManager.Instance; skin.Theme = mode == ThemeMode.Dark ? MaterialSkin.MaterialSkinManager.Themes.DARK : MaterialSkin.MaterialSkinManager.Themes.LIGHT; }
+                // (Redesign 2.7a: the live app no longer creates MaterialSkin's manager — MainForm is an AppForm — so the rig
+                //  stops creating it too. Its Roboto registration changed later text metrics; B1 was refreshed then.)
                 string t = mode == ThemeMode.Light ? "light" : "dark";
 
                 // The real first view is QR, but ShowView(Qr) starts a QR login (network). Phone is UI-only.

@@ -4,8 +4,6 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Windows.Forms;
-using MaterialSkin;
-using MaterialSkin.Controls;
 using TelegArm.Core;
 using TelegArm.Helpers;
 using TelegArm.UI.Controls;
@@ -31,7 +29,7 @@ namespace TelegArm.UI
             // Add first so docking gives it the form's width, THEN set min sizes and
             // splitter distance — setting SplitterDistance while the control is still
             // at its default 150px width throws (distance outside the valid range).
-            Controls.Add(_split);
+            Content.Controls.Add(_split);   // 2.7a: under AppForm's title bar
             _split.Panel1MinSize = 240;
             _split.Panel2MinSize = 360;
             try { _split.SplitterDistance = 300; } catch { /* width too small yet */ }
@@ -292,27 +290,26 @@ namespace TelegArm.UI
             var titleStack = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Margin = new Padding(0) };
             titleStack.RowStyles.Add(new RowStyle(SizeType.Percent, 58));
             titleStack.RowStyles.Add(new RowStyle(SizeType.Percent, 42));
-            _chatTitle = new MaterialLabel
+            // Redesign 2.7a: ThemedLabels (were MaterialLabel H6 / Caption). HEADER-FIT: one line, ellipsis — never wrap or
+            // clip into the pinned bar below. Colour by Role (the status line flips Dim/Accent for online and typing).
+            _chatTitle = new ThemedLabel
             {
                 Text = "Select a chat",
                 Dock = DockStyle.Fill,
-                FontType = MaterialSkinManager.fontType.H6,
-                TextAlign = ContentAlignment.MiddleLeft,
+                PointSize = 12.5f,
+                Style = FontStyle.Bold,
+                Role = LabelRole.Body,
+                Ellipsis = true,
                 Padding = new Padding(10, 0, 0, 0),
-                Cursor = Cursors.Hand,
-                // HEADER-FIT: long/bold channel names must stay on ONE line, ellipsis-truncated inside the title
-                // cell (which already stops short of the right-side transfers indicator) — never wrap or clip down
-                // into the pinned bar below. AutoSize off + single-line auto-ellipsis; MaterialLabel derives from
-                // Label, so the base TextRenderer EndEllipsis|SingleLine painting applies (NoPrefix keeps Persian).
-                AutoSize = false,
-                AutoEllipsis = true
+                Cursor = Cursors.Hand
             };
-            _chatStatus = new MaterialLabel
+            _chatStatus = new ThemedLabel
             {
                 Text = "",
                 Dock = DockStyle.Fill,
-                FontType = MaterialSkinManager.fontType.Caption,
-                TextAlign = ContentAlignment.MiddleLeft,
+                PointSize = 9f,
+                Role = LabelRole.Dim,
+                Ellipsis = true,
                 Padding = new Padding(10, 0, 0, 0),
                 Cursor = Cursors.Hand
             };

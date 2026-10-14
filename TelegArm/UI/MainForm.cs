@@ -4,8 +4,6 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Windows.Forms;
-using MaterialSkin;
-using MaterialSkin.Controls;
 using TelegArm.Core;
 using TelegArm.Helpers;
 using TelegArm.UI.Controls;
@@ -18,14 +16,13 @@ namespace TelegArm.UI
     /// Telegram-style two-pane shell: a chat list on the left and the selected
     /// conversation on the right.
     /// </summary>
-    public partial class MainForm : MaterialForm
+    public partial class MainForm : AppForm   // redesign 2.7a (was MaterialForm)
     {
         // MULTI-ACCOUNT (increment 2): _service is an INDIRECTION to the currently-active service, so a future switch
         // can REBIND the UI to a different (already-warm) service without rebuilding. Behavior-neutral today (one
         // service); all `_service.` sites read through this property.
         private TelegramService _activeService;
         private TelegramService _service => _activeService;
-        private readonly MaterialSkinManager _skin;
         // AVATAR-PIPELINE: ONE download-once store behind every avatar surface (memory LRU → photo_id-keyed
         // disk files → single-flight bounded downloads with a visible-first backfill queue). Replaces the old
         // _avatarCache/_noAvatar pair — transient failures are retryable now, never marked "no avatar".
@@ -104,15 +101,14 @@ namespace TelegArm.UI
         private long _dockProfilePeerId;     // which peer that profile is built for (0 = none)
         private UI.Controls.InputBox _searchBox;   // always ThemedTextBox (plan E5)
         private FlowLayoutPanel _chatListPanel;
-        private MaterialLabel _chatTitle;
-        private MaterialLabel _chatStatus;            // online / last seen / typing… subtitle
+        private ThemedLabel _chatTitle;
+        private ThemedLabel _chatStatus;            // online / last seen / typing… subtitle
         // Chat header: the peer's circular avatar before the name + the metadata (subscribers/members/last-seen)
         // subtitle. Header uses the THEME background (accent reverted per user).
         private Panel _headerAvatar;                  // owner-drawn circular peer avatar at the header's left
         private Image _headerAvatarImg;               // current peer avatar (cache hit → paints now; null → initials)
         private string _headerAvatarTitle;            // for the initials fallback
         private long _headerAvatarPeerId;             // deterministic fallback color + async-load match guard
-        private Font _captionFont;                    // "TelegArm" drawn into the slim status bar (BORDERLESS-CAPTION)
         private System.Windows.Forms.Timer _typingTimer;
         private bool _typing;
         private FlowLayoutPanel _messagePanel;
@@ -255,9 +251,9 @@ namespace TelegArm.UI
         private int _switchDotCount;
         private Label _connectingTitle;
         private Label _connectingDetail;
-        private MaterialButton _retryButton;
-        private MaterialButton _proxyOverlayButton;   // BATCH-TA-16f/F1 — proxy route on the connecting overlay
-        private MaterialButton _switchCancelButton;            // abort an in-flight account switch (restore the active account)
+        private RoundedButton _retryButton;
+        private RoundedButton _proxyOverlayButton;   // BATCH-TA-16f/F1 — proxy route on the connecting overlay
+        private RoundedButton _switchCancelButton;            // abort an in-flight account switch (restore the active account)
         private System.Threading.CancellationTokenSource _abortConnect;
         private bool _switchInProgress, _switchAborted;
         private bool _connectCorrupt;   // last connect failed because the session file is unreadable (permanent, not network)
@@ -306,31 +302,18 @@ namespace TelegArm.UI
             //   was attached (the app was launched BY the click), which is what DrainPending covers.
             ToastActivator.Activated += OnToastActivated;
 
-            // BATCH-TA-0.1: the sub-stamps proved BuildUi is only ~120 ms — the bulk of the pre-network cold
-            // start is HERE, between ctor entry and BuildUi. MaterialSkinManager.Instance is the singleton's
-            // first touch (it loads its OWN embedded Roboto set); ApplyTheme + the icon decode follow.
-            PerfLog.Boot("  ctor: before MaterialSkinManager.Instance");
-            _skin = MaterialSkinManager.Instance;
-            PerfLog.Boot("  ctor: MaterialSkinManager.Instance resolved");
-            _skin.AddFormToManage(this);
-            PerfLog.Boot("  ctor: AddFormToManage done");
+            // Redesign 2.7a: no MaterialSkinManager any more (it used to load its own Roboto set and re-skin this form).
             ApplyTheme();
             PerfLog.Boot("  ctor: ApplyTheme done");
 
-            // Font scaling only; never Dpi/None. MaterialSkin.2 + system-DPI awareness.
-            AutoScaleMode = AutoScaleMode.Font;
 
             Text = "TelegArm";   // taskbar / alt-tab identity — the tall title action bar that drew it is removed below
             AppIcon.Set(this);   // redesign 1.8: the embedded multi-size app.ico (falls back to the exe's icon)
             PerfLog.Boot("  ctor: window icon decoded (app.ico)");
-            ClientSize = new Size(960, 600);
-            MinimumSize = new Size(720, 480);
+            // Redesign 2.7a: logical sizes through AppForm (the content inside is still 1.x pixel layout until Phase 3).
+            Size = new Size(Px(960), Px(600));
+            LogicalMinimumSize = new Size(720, 480);
             StartPosition = FormStartPosition.CenterScreen;
-            // BORDERLESS-CAPTION: drop MaterialForm's tall 40px title ACTION bar, keep the thin 24px STATUS bar that
-            // holds min/max/close → a slim caption that just fits the buttons (reclaims ~40px of title height). Drag/
-            // resize/snap stay in MaterialForm's WndProc; the title text no longer draws in the caption (still taskbar).
-            FormStyle = MaterialForm.FormStyles.ActionBar_None;
-            PerfLog.Boot("  ctor: FormStyle set (reflected, non-const)");
             // STARTUP-SETTING: a --startup (auto-launch-at-login) start is SILENT — minimized + off-taskbar, no full
             // window. OnLoad still fires (the form is shown, just minimized) so the session resumes + the tray icon
             // appears (SetupTray, post-auth); a tray click restores via RestoreFromTray (which re-enables the taskbar).
@@ -428,20 +411,6 @@ namespace TelegArm.UI
                     break;
             }
             return base.ProcessCmdKey(ref msg, keyData);
-        }
-
-        /// <summary>BORDERLESS-CAPTION: the title ACTION bar is removed (FormStyle=ActionBar_None) so MaterialForm no
-        /// longer draws the app name. Redraw "TelegArm" into the slim STATUS bar (left side, clear of the min/max/close
-        /// on the right) after the base chrome paints. Padding.Top == the status-bar height (DPI-scaled).</summary>
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            base.OnPaint(e);   // MaterialForm draws the status bar + window buttons
-            int h = Padding.Top;   // ACTION bar removed → Padding.Top is exactly the status-bar height
-            if (h <= 1) return;
-            if (_captionFont == null) _captionFont = new Font("Segoe UI", 8.25f, FontStyle.Regular);
-            var rect = new Rectangle(12, 0, Math.Max(0, Width - 96), h);   // left; the buttons sit on the right
-            TextRenderer.DrawText(e.Graphics, "TelegArm", _captionFont, rect, Color.White,
-                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
         }
 
     }
