@@ -160,6 +160,7 @@ namespace TelegArm.Helpers
                     PeerInfo = new User { id = 1001, first_name = "Ada", last_name = "Lovelace", username = "ada", phone = "15550100" },
                 }, null));
                 Shot("p2-profile-edit-" + t, () => new ProfileForm(new TelegramService()));
+                Shot("trip-inputlab-" + t, () => new InputLabForm());   // device trip 2026-10: --input-lab
                 // Step 2.3: a photo (bytes in memory, so no download) and a document — never a video (that would start VLC).
                 WithForm("p2-viewer-" + t, () => new MediaViewerForm(new List<MediaItem>
                     {

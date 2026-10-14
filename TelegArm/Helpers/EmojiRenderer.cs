@@ -196,7 +196,7 @@ namespace TelegArm.Helpers
                 Image img = null; int len = 0;
                 if (CouldStart(pts[idx]) || IsKeycap(pts, idx))
                 {
-                    int max = Math.Min(8, pts.Count - idx);
+                    int max = MatchWindow(pts, idx);
                     for (int L = max; L >= 1; L--)
                     {
                         var im = GetByKey(KeyFromCps(pts, idx, L));
@@ -242,7 +242,7 @@ namespace TelegArm.Helpers
                 int len = 0; Image img = null;
                 if (CouldStart(pts[idx]) || IsKeycap(pts, idx))
                 {
-                    int max = Math.Min(8, pts.Count - idx);
+                    int max = MatchWindow(pts, idx);
                     for (int L = max; L >= 1; L--)
                     {
                         var im = GetByKey(KeyFromCps(pts, idx, L));
@@ -330,6 +330,30 @@ namespace TelegArm.Helpers
             if (j < pts.Count && pts[j] == 0xFE0F) j++;
             return j < pts.Count && pts[j] == 0x20E3;
         }
+
+        /// <summary>The longest catalog key in code points, U+FE0F not counted (the Noto file names drop it): 9 today —
+        /// kiss / couple with two skin tones. Headroom of one.</summary>
+        private const int MaxKeyParts = 10;
+
+        /// <summary>How many raw code points from <paramref name="idx"/> one emoji can span: up to <see cref="MaxKeyParts"/>
+        /// code points that are not U+FE0F, plus the U+FE0Fs among them. The keys skip FE0F, so it must not count against
+        /// the window. (Was a flat 8 raw code points: a 9-part sequence never fit — 95 Noto emoji could never match, and a
+        /// fully-qualified one like the kiss with skin tones is 10 raw code points. Measured 2026-10-13.)</summary>
+        private static int MatchWindow(List<int> pts, int idx)
+        {
+            int raw = 0, parts = 0;
+            while (idx + raw < pts.Count)
+            {
+                bool vs = pts[idx + raw] == 0xFE0F;
+                if (!vs && parts == MaxKeyParts) break;
+                if (!vs) parts++;
+                raw++;
+            }
+            return raw;
+        }
+
+        /// <summary>The catalog's keys (lower-case hex code points joined by '-', FE0F dropped) — SelfTest walks them all.</summary>
+        internal static ICollection<string> CatalogKeys => _entries != null ? (ICollection<string>)_entries.Keys : new string[0];
 
         private static string KeyFromCps(List<int> pts, int start, int len)
         {

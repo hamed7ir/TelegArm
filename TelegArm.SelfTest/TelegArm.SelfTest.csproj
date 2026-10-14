@@ -42,6 +42,7 @@
     <Reference Include="System" />
     <Reference Include="System.Core" />
     <Reference Include="System.Drawing" />
+    <Reference Include="System.IO.Compression" />
     <Reference Include="System.Windows.Forms" />
   </ItemGroup>
   <ItemGroup>
@@ -52,6 +53,7 @@
     <Compile Include="DpiTests.cs" />
     <Compile Include="PaletteTests.cs" />
     <Compile Include="ChromeTests.cs" />
+    <Compile Include="EmojiTests.cs" />
   </ItemGroup>
   <!-- The app sources under test. Add a file here when a test needs it (and whatever it depends on). -->
   <ItemGroup>
@@ -68,6 +70,8 @@
     <Compile Include="..\TelegArm\Helpers\ThemeHelper.cs"><Link>Linked\Helpers\ThemeHelper.cs</Link></Compile>
     <Compile Include="..\TelegArm\Helpers\WindowHit.cs"><Link>Linked\Helpers\WindowHit.cs</Link></Compile>
     <Compile Include="..\TelegArm\Helpers\KeyboardInset.cs"><Link>Linked\Helpers\KeyboardInset.cs</Link></Compile>
+    <Compile Include="..\TelegArm\Helpers\EmojiRenderer.cs"><Link>Linked\Helpers\EmojiRenderer.cs</Link></Compile>
+    <Compile Include="..\TelegArm\Helpers\PerfLog.cs"><Link>Linked\Helpers\PerfLog.cs</Link></Compile>
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Fixtures\settings-1.9.0.json"><LogicalName>settings-1.9.0.json</LogicalName></EmbeddedResource>

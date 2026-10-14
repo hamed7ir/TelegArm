@@ -100,6 +100,7 @@
     <Compile Include="Core\WebmAlphaProbe.cs" />
     <Compile Include="Helpers\DrawHelper.cs" />
     <Compile Include="Helpers\AppIcon.cs" />
+    <Compile Include="Helpers\InputPolicy.cs" />
     <Compile Include="Helpers\TextEntities.cs" />
     <Compile Include="Helpers\PerfLog.cs" />
     <Compile Include="Helpers\FileLog.cs" />
@@ -227,6 +228,7 @@
     <Compile Include="UI\Controls\SettingRowsExtra.cs" />
     <Compile Include="UI\DialogProbe.cs" />
     <Compile Include="UI\SettingsProbe.cs" />
+    <Compile Include="UI\InputLabForm.cs" />
     <Compile Include="UI\TextBoxProbe.cs" />
     <Compile Include="UI\DialogForm.cs">
       <SubType>Form</SubType>

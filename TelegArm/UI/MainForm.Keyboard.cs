@@ -103,6 +103,7 @@ namespace TelegArm.UI
             try
             {
                 Helpers.TouchKeyboard.HasHardwareKeyboard();   // log the initial [KBD] hardware keyboard= verdict at startup
+                Logger.Diag("[INPUT] " + InputPolicy.Summary);   // device trip: every input switch, once at startup
                 EnsureFocusSink();   // KBD-DISMISS-v3 PART 1: the neutral parking control must exist BEFORE any dismiss
                 _kbTimer = new Timer { Interval = 350 };
                 _kbTimer.Tick += OnKbTick;
@@ -131,7 +132,7 @@ namespace TelegArm.UI
                 {
                     if (!_kbHwSuppressed)
                     {
-                        if (LogOn) System.Diagnostics.Debug.WriteLine("[KBD] OSK detected but a HARDWARE keyboard is attached → NOT shrinking (via=" + via + " kbTop=" + kbTop + ")");
+                        if (LogOn) Logger.Diag("[KBD] OSK detected but a HARDWARE keyboard is attached → NOT shrinking (via=" + via + " kbTop=" + kbTop + ")");
                         _kbHwSuppressed = true;
                     }
                     showing = false;
@@ -146,10 +147,10 @@ namespace TelegArm.UI
                 // without leaving the app). The HIDE branch still runs for the resize; its own blur is then a no-op. Keyed
                 // on the RAW cloak edge + live focus (not the `showing` composite), so it fires even if `showing` lags.
                 bool ttCloaked = _kbActive && IsTabTipCloaked();
-                if (ttCloaked && !_ttCloakedPrev
+                if (InputPolicy.DismissGuard && ttCloaked && !_ttCloakedPrev
                     && ((_messageInput != null && _messageInput.ContainsFocus) || (_searchBox != null && _searchBox.ContainsFocus)))
                 {
-                    if (LogOn) System.Diagnostics.Debug.WriteLine("[KBD] cloak dismiss → pre-emptive blur (composer still focused)");
+                    if (LogOn) Logger.Diag("[KBD] cloak dismiss → pre-emptive blur (composer still focused)");
                     _kbSuppressed = true; _lastRealEditTouchTick = 0;   // arm suppression exactly as the HIDE dismiss branch does
                     BlurForDismiss();                                    // park on the sink NOW, pre-empting the re-summon
                 }
@@ -157,12 +158,12 @@ namespace TelegArm.UI
                 if (showing != _kbLastShowing)
                 {
                     _kbLastShowing = showing;
-                    if (LogOn) System.Diagnostics.Debug.WriteLine("[KBD] keyboard " + (showing ? "SHOW" : "HIDE")
+                    if (LogOn) Logger.Diag("[KBD] keyboard " + (showing ? "SHOW" : "HIDE")
                         + (showing ? " via=" + via + " kbTop=" + kbTop + " winTop=" + Top + " winH=" + Height + (_lastOcc.Length > 0 ? " occluded=[" + _lastOcc + "]" : "") : ""));
                     if (showing) LogShowCheck();   // Part 1.5: false-SHOW / flicker verification
                 }
 
-                if (!AppSettings.Instance.ResizeForKeyboard)
+                if (!InputPolicy.ResizeForKeyboard)
                 {
                     if (_kbActive) RestoreFromKeyboard();   // toggle turned off while shrunk → restore
                     return;
@@ -182,10 +183,10 @@ namespace TelegArm.UI
                         // (RestoreBounds), never the current Bounds.
                         _savedBounds = wasMax ? RestoreBounds : Bounds;
                         _savedMinH = MinimumSize.Height;
-                        if (LogOn) System.Diagnostics.Debug.WriteLine("[KBD] saved bounds=" + _savedBounds.X + "," + _savedBounds.Y
+                        if (LogOn) Logger.Diag("[KBD] saved bounds=" + _savedBounds.X + "," + _savedBounds.Y
                             + "," + _savedBounds.Width + "x" + _savedBounds.Height + " wasMax=" + wasMax);
                     }
-                    else if (LogOn) System.Diagnostics.Debug.WriteLine("[KBD] show while shrink active → keeping saved bounds");
+                    else if (LogOn) Logger.Diag("[KBD] show while shrink active → keeping saved bounds");
                     _kbShrinkActive = true;
                     var wa = Screen.FromControl(this).WorkingArea;
                     int left = Left, width = Width;
@@ -196,7 +197,7 @@ namespace TelegArm.UI
                     int h = Math.Max(160, kbTop - wa.Top - 4);
                     MinimumSize = new Size(MinimumSize.Width, 120);
                     SetBounds(left, wa.Top, width, h);
-                    if (LogOn) System.Diagnostics.Debug.WriteLine("[KBD] resize→ top=" + wa.Top + " h=" + h + " bottom=" + (wa.Top + h) + " (above kbTop=" + kbTop + ")");
+                    if (LogOn) Logger.Diag("[KBD] resize→ top=" + wa.Top + " h=" + h + " bottom=" + (wa.Top + h) + " (above kbTop=" + kbTop + ")");
                 }
                 else if (!showing && _kbActive)
                 {
@@ -204,10 +205,14 @@ namespace TelegArm.UI
                     // (so the restore can't re-pick the composer as the active control), THEN restore. Enter SUPPRESSION:
                     // until a genuine hardware tap on the box, every composer/search refocus (the OS/TabTip re-summon,
                     // dev0/org0) is bounced back to the sink — state-based, so the unbounded 3-5s async re-focus can't slip.
-                    _kbSuppressed = true; _lastRealEditTouchTick = 0;   // stale tap can't authorize a reshow
-                    if ((_messageInput != null && _messageInput.ContainsFocus)
-                        || (_searchBox != null && _searchBox.ContainsFocus))
-                        BlurForDismiss();          // park focus on the sink — the OSK has no text field to re-summon for
+                    // Device trip: with the dismiss guard switched off, only the resize is undone (InputPolicy).
+                    if (InputPolicy.DismissGuard)
+                    {
+                        _kbSuppressed = true; _lastRealEditTouchTick = 0;   // stale tap can't authorize a reshow
+                        if ((_messageInput != null && _messageInput.ContainsFocus)
+                            || (_searchBox != null && _searchBox.ContainsFocus))
+                            BlurForDismiss();          // park focus on the sink — the OSK has no text field to re-summon for
+                    }
                     RestoreFromKeyboard();         // reclaim the space, AFTER the park
                 }
 
@@ -231,7 +236,7 @@ namespace TelegArm.UI
             {
                 var active = Form.ActiveForm;
                 if (active != null && !ReferenceEquals(active, this) && active.ContainsFocus && FocusedIsText(active)
-                    && AppSettings.Instance.ResizeForKeyboard && !Helpers.TouchKeyboard.HasHardwareKeyboard()
+                    && InputPolicy.ResizeForKeyboard && !Helpers.TouchKeyboard.HasHardwareKeyboard()
                     && DetectKeyboard(out int kbTop, out string via) && kbTop > 0)
                 {
                     var screen = Screen.FromControl(active).Bounds;
@@ -259,7 +264,7 @@ namespace TelegArm.UI
                 // 1.2: wasMax → hand the geometry back to Windows (NO SetBounds — the OS owns maximized).
                 if (wasMax) WindowState = FormWindowState.Maximized;
                 else { WindowState = FormWindowState.Normal; Bounds = _savedBounds; }
-                if (LogOn) System.Diagnostics.Debug.WriteLine("[KBD] restore → " + _savedBounds.Width + "x" + _savedBounds.Height + " wasMax=" + wasMax);
+                if (LogOn) Logger.Diag("[KBD] restore → " + _savedBounds.Width + "x" + _savedBounds.Height + " wasMax=" + wasMax);
             }
             catch { }
             finally { _kbShrinkActive = false; }   // cleared LAST — closes the capture guard window (1.1)
@@ -306,7 +311,7 @@ namespace TelegArm.UI
                     return true;
                 }
             }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[KBD] InputPane read failed: " + ex.GetType().Name + ": " + ex.Message); }
+            catch (Exception ex) { Logger.Diag("[KBD] InputPane read failed: " + ex.GetType().Name + ": " + ex.Message); }
 
             _lastOcc = "";
             if (KeyboardShowing(out kbTop)) { via = "TabTip"; return true; }
@@ -350,7 +355,7 @@ namespace TelegArm.UI
                 double occH = 0;
                 try { if (WinRtKeyboard.TryOccludedRect(out double _, out double _, out double _, out double oh)) occH = oh; } catch { }
                 bool composite = exists && !cloaked && onScr;   // the TabTip "shown" predicate (occludedH>0 covers the InputPane path)
-                System.Diagnostics.Debug.WriteLine("[KBD] sig " + tag + " exists=" + exists + " vis=" + vis + " cloaked=" + cloaked
+                Logger.Diag("[KBD] sig " + tag + " exists=" + exists + " vis=" + vis + " cloaked=" + cloaked
                     + " rect=(" + top + ".." + bot + " h=" + ht + ") onScreen=" + onScr + " occludedH=" + occH.ToString("0")
                     + " composite=" + composite);
             }
@@ -391,7 +396,7 @@ namespace TelegArm.UI
                 {
                     Control fc = ActiveControl;
                     string who = fc == null ? "null" : (string.IsNullOrEmpty(fc.Name) ? fc.GetType().Name : fc.Name + "(" + fc.GetType().Name + ")");
-                    System.Diagnostics.Debug.WriteLine("[KBD] keyboard dismissed → blur (parked=" + ReferenceEquals(fc, _kbFocusSink) + "); focus now = " + who);
+                    Logger.Diag("[KBD] keyboard dismissed → blur (parked=" + ReferenceEquals(fc, _kbFocusSink) + "); focus now = " + who);
                 }
             }
             catch { }
@@ -425,6 +430,7 @@ namespace TelegArm.UI
                     try
                     {
                         if (IsDisposed || box == null || box.IsDisposed || !box.ContainsFocus) return;
+                        if (!InputPolicy.DismissGuard) { _kbSuppressed = false; return; }   // device trip: guard switched off
                         if (Helpers.TouchKeyboard.HasHardwareKeyboard()) return;   // hardware kbd: no OSK to fight
                         if (!_kbSuppressed) return;                                 // normal entry — allow the keyboard
                         int since = unchecked(Environment.TickCount - _lastRealEditTouchTick);
@@ -432,11 +438,11 @@ namespace TelegArm.UI
                         if (genuineTap)
                         {
                             _kbSuppressed = false;   // a real finger re-engaged the box → allow the keyboard, end suppression
-                            if (LogOn) System.Diagnostics.Debug.WriteLine("[KBD] suppression cleared: " + name + " genuine hardware tap " + since + "ms");
+                            if (LogOn) Logger.Diag("[KBD] suppression cleared: " + name + " genuine hardware tap " + since + "ms");
                         }
                         else
                         {
-                            if (LogOn) System.Diagnostics.Debug.WriteLine("[KBD] suppressed refocus bounced: " + name + " (no hardware tap; lastRealTouch=" + (_lastRealEditTouchTick == 0 ? "none" : since + "ms") + ")");
+                            if (LogOn) Logger.Diag("[KBD] suppressed refocus bounced: " + name + " (no hardware tap; lastRealTouch=" + (_lastRealEditTouchTick == 0 ? "none" : since + "ms") + ")");
                             BlurForDismiss();
                         }
                     }
@@ -456,7 +462,7 @@ namespace TelegArm.UI
             {
                 // Redesign 1.5 — the Plain engine: the EDIT is ThemedTextBox.Inner, reached without reflection. Same
                 // diagnostics on it, and the SAME input shim (EditInputProbe) the Legacy inner box gets.
-                HookInnerKbdDiag(field.Plain, field.Plain.Inner, name);
+                HookInnerKbdDiag(field.Plain, field.Plain.Inner, name + "[Plain]");
                 // A tap on the FRAME around the EDIT never reaches EditInputProbe (it subclasses the EDIT only), so record a
                 // genuine finger/mouse tap here — raised before the frame focuses the EDIT — or the post-dismiss suppression
                 // bounces that focus straight back to the sink (review 1.5).
@@ -470,12 +476,12 @@ namespace TelegArm.UI
                 var inner = _baseTextBoxField != null ? _baseTextBoxField.GetValue(box) as Control : null;
 
                 // Per-keystroke / per-focus ECHO tracing — gated behind AppSettings.KbdDiag (checked at event time).
-                box.GotFocus += (s, e) => { if (KbdDiag) System.Diagnostics.Debug.WriteLine("[KBD] focus " + name + " GOT"); };
-                box.LostFocus += (s, e) => { if (KbdDiag) System.Diagnostics.Debug.WriteLine("[KBD] focus " + name + " LOST"); };
-                box.KeyDown += (s, e) => { if (KbdDiag) System.Diagnostics.Debug.WriteLine("[KBD] " + name + " keydown " + e.KeyCode); };
+                box.GotFocus += (s, e) => { if (KbdDiag) Logger.Diag("[KBD] focus " + name + " GOT"); };
+                box.LostFocus += (s, e) => { if (KbdDiag) Logger.Diag("[KBD] focus " + name + " LOST"); };
+                box.KeyDown += (s, e) => { if (KbdDiag) Logger.Diag("[KBD] " + name + " keydown " + e.KeyCode); };
                 box.KeyPress += (s, e) =>
                 {
-                    if (KbdDiag) System.Diagnostics.Debug.WriteLine(
+                    if (KbdDiag) Logger.Diag(
                         "[KBD] " + name + " keypress " + KeyDesc(e.KeyChar)
                         + " Handled=" + e.Handled
                         + " focus=" + FocusWhere(box, inner)
@@ -484,12 +490,12 @@ namespace TelegArm.UI
                 };
                 box.TextChanged += (s, e) =>
                 {
-                    if (KbdDiag) System.Diagnostics.Debug.WriteLine(
+                    if (KbdDiag) Logger.Diag(
                         "[KBD] " + name + " TextChanged outer.Text=" + Quote(box.Text)
                         + " inner.Text=" + Quote(inner != null ? inner.Text : "<null>"));
                 };
 
-                if (inner != null) HookInnerKbdDiag(box, inner, name);
+                if (inner != null) HookInnerKbdDiag(box, inner, name + "[Legacy]");
             }
             catch { }
         }
@@ -503,23 +509,23 @@ namespace TelegArm.UI
                 {
                     // Runtime-state snapshot at hook time — one-shot launch breadcrumb (unconditional).
                     var tbState = inner as System.Windows.Forms.TextBoxBase;
-                    System.Diagnostics.Debug.WriteLine("[KBD] STATE " + name + "(inner) ReadOnly="
+                    Logger.Diag("[KBD] STATE " + name + "(inner) ReadOnly="
                         + (tbState != null ? tbState.ReadOnly.ToString() : "?") + " Enabled=" + inner.Enabled);
                     Control innerRef = inner;   // capture for the focus closures
                     inner.GotFocus += (s, e) =>
                     {
                         if (KbdDiag)
                         {
-                            System.Diagnostics.Debug.WriteLine("[KBD] focus " + name + "(inner) GOT");
+                            Logger.Diag("[KBD] focus " + name + "(inner) GOT");
                             LogEditStyle(innerRef, name + "(inner)", "focus");
                         }
                         LogImeContext(innerRef, name + "(inner)");   // UNCONDITIONAL — the IMM-context heartbeat at focus
                     };
-                    inner.LostFocus += (s, e) => { if (KbdDiag) System.Diagnostics.Debug.WriteLine("[KBD] focus " + name + "(inner) LOST"); };
-                    inner.KeyDown += (s, e) => { if (KbdDiag) System.Diagnostics.Debug.WriteLine("[KBD] " + name + "(inner) keydown " + e.KeyCode); };
+                    inner.LostFocus += (s, e) => { if (KbdDiag) Logger.Diag("[KBD] focus " + name + "(inner) LOST"); };
+                    inner.KeyDown += (s, e) => { if (KbdDiag) Logger.Diag("[KBD] " + name + "(inner) keydown " + e.KeyCode); };
                     inner.KeyPress += (s, e) =>
                     {
-                        if (KbdDiag) System.Diagnostics.Debug.WriteLine(
+                        if (KbdDiag) Logger.Diag(
                             "[KBD] " + name + "(inner) keypress " + KeyDesc(((KeyPressEventArgs)e).KeyChar)
                             + " Handled=" + ((KeyPressEventArgs)e).Handled
                             + " focus=" + FocusWhere(box, inner)
@@ -527,7 +533,7 @@ namespace TelegArm.UI
                     };
                     inner.TextChanged += (s, e) =>
                     {
-                        if (KbdDiag) System.Diagnostics.Debug.WriteLine("[KBD] " + name + "(inner) TextChanged inner.Text=" + Quote(inner.Text));
+                        if (KbdDiag) Logger.Diag("[KBD] " + name + "(inner) TextChanged inner.Text=" + Quote(inner.Text));
                     };
                     // The productized input shim (EditInputProbe): tier0-first, synchronous force on dead input,
                     // nav-key force, caret-yank guard. Also applies the IS_PASSWORD input scope per handle.
@@ -553,6 +559,9 @@ namespace TelegArm.UI
         private void AttachInputProbe(Control inner, string name)
         {
             if (inner == null) return;
+            // Device trip: shim Off = not attached at all (decided per handle, so it takes a restart). That also drops the
+            // dismiss bookkeeping the probe carries (NoteRealEditTouch / OnTextBoxFocusGain) — prefer Observe.
+            if (InputPolicy.Shim == InputPolicy.ShimMode.Off) { Logger.Diag("[INPUT] shim Off → " + name + " not attached"); return; }
             EditInputProbe current = null;
             void Attach()
             {
@@ -566,7 +575,7 @@ namespace TelegArm.UI
             inner.HandleCreated += (s, e) => Attach();
             inner.HandleDestroyed += (s, e) =>
             {
-                if (current != null) { try { current.ReleaseHandle(); } catch { } _inputProbes.Remove(current); current = null; }
+                if (current != null) { current.EndSession(); try { current.ReleaseHandle(); } catch { } _inputProbes.Remove(current); current = null; }
             };
         }
 
@@ -606,12 +615,48 @@ namespace TelegArm.UI
             // re-focus (injected/system, or NO pointer at all) that re-summons the keyboard 3-5s after a dismiss.
             private int _lastPtrTick;
             private string _lastPtrLabel = "none";
+            // Device trip: this focus session's tally — reset at WM_SETFOCUS, written as one [INPUT-AB] line at WM_KILLFOCUS
+            // and added to InputPolicy's totals (Settings → Advanced → Input counters). Never any typed text.
+            private bool _sess;
+            private int _sessStart, _sNative, _sDead, _sForced, _sYank, _sNavNative, _sNavDead;
+
+            private void BeginSession()
+            {
+                EndSession();
+                _sess = true; _sessStart = Environment.TickCount;
+                _sNative = _sDead = _sForced = _sYank = _sNavNative = _sNavDead = 0;
+            }
+
+            /// <summary>Closes the focus session: one [INPUT-AB] line (when anything was typed) and the running totals.</summary>
+            public void EndSession()
+            {
+                if (!_sess) return;
+                _sess = false;
+                int keys = _sNative + _sDead + _sNavNative + _sNavDead;
+                if (keys == 0 && _sYank == 0) return;
+                var f = InputPolicy.For(_name);
+                f.Sessions++; if (_sDead + _sNavDead > 0) f.SessionsWithDead++;
+                f.Native += _sNative; f.Dead += _sDead; f.Forced += _sForced; f.Yank += _sYank; f.NavNative += _sNavNative; f.NavDead += _sNavDead;
+                if (LogOn)
+                {
+                    bool hw = false; try { hw = Helpers.TouchKeyboard.HasHardwareKeyboard(); } catch { }
+                    bool kbUp = _owner is MainForm mf && mf._kbLastShowing;
+                    Logger.Diag("[INPUT-AB] " + _name + " shim=" + InputPolicy.Shim + " ms=" + unchecked(Environment.TickCount - _sessStart)
+                        + " native=" + _sNative + " dead=" + _sDead + " forced=" + _sForced + " yank=" + _sYank
+                        + " nav=" + _sNavNative + " navDead=" + _sNavDead + " hwKb=" + hw + " kbUp=" + kbUp);
+                }
+            }
 
             public EditInputProbe(Control edit, string name, Form owner) { _edit = edit; _name = name; _owner = owner; }
 
+            // The owning MainForm, or null. ⚠ Never a hard cast: an exception thrown in a NativeWindow's WndProc is swallowed
+            // silently (NativeWindow.OnThreadException is empty), so a throwing cast drops the keystroke with no trace —
+            // found by the device-trip shim probe, which attaches the probe with no owner.
+            private MainForm Main => _owner as MainForm;
+
             // Gated write (belt) — hot call sites ALSO wrap with `if (LogOn)` so the argument string is never
             // even built when logging is off (braces — the true hot-path rule).
-            private void Log(string s) { if (LogOn) System.Diagnostics.Debug.WriteLine("[KBD] " + _name + " " + s); }
+            private void Log(string s) { if (LogOn) Logger.Diag("[KBD] " + _name + " " + s); }
 
             /// <summary>KBD-DISMISS-v3 INSTRUMENT: decode the CURRENT input message's provenance — device (touch/mouse/
             /// pen) + origin (hardware=real finger; injected/system=OS/TabTip synthetic) + sent/posted. The decisive
@@ -659,19 +704,19 @@ namespace TelegArm.UI
                     string kind = m.Msg == WM_LBUTTONDOWN ? "LBDOWN" : m.Msg == WM_LBUTTONDBLCLK ? "LBDBLCLK"
                                 : m.Msg == WM_POINTERDOWN ? "POINTERDOWN" : "TOUCH";
                     bool hardware; _lastPtrTick = Environment.TickCount; _lastPtrLabel = kind + " " + InputSrc(out hardware);
-                    if (hardware) ((MainForm)_owner).NoteRealEditTouch();   // genuine finger/mouse → re-allow composer focus
-                    if (LogOn) System.Diagnostics.Debug.WriteLine("[KBD] PTR " + _name + " " + _lastPtrLabel);
+                    if (hardware) Main?.NoteRealEditTouch();   // genuine finger/mouse → re-allow composer focus
+                    if (LogOn) Logger.Diag("[KBD] PTR " + _name + " " + _lastPtrLabel);
                 }
-                if (m.Msg == WM_CHAR) ((MainForm)_owner)._lastComposerKeyTick = Environment.TickCount;   // KBD-CLOSE-PROBE: idle-vs-typing
+                if (m.Msg == WM_CHAR && Main != null) Main._lastComposerKeyTick = Environment.TickCount;   // KBD-CLOSE-PROBE: idle-vs-typing
 
                 // (KbdDiag) programmatic caret/text manipulation traces — these only ever come from code.
                 if (KbdDiag)
                 {
                     switch (m.Msg)
                     {
-                        case EM_SETSEL: System.Diagnostics.Debug.WriteLine("[KBD] EMSG " + _name + " EM_SETSEL start=" + m.WParam.ToInt64() + " end=" + m.LParam.ToInt64()); break;
-                        case EM_REPLACESEL: System.Diagnostics.Debug.WriteLine("[KBD] EMSG " + _name + " EM_REPLACESEL canUndo=" + (m.WParam != IntPtr.Zero) + " text=" + PtrText(m.LParam)); break;
-                        case WM_SETTEXT: System.Diagnostics.Debug.WriteLine("[KBD] EMSG " + _name + " WM_SETTEXT text=" + PtrText(m.LParam)); break;
+                        case EM_SETSEL: Logger.Diag("[KBD] EMSG " + _name + " EM_SETSEL start=" + m.WParam.ToInt64() + " end=" + m.LParam.ToInt64()); break;
+                        case EM_REPLACESEL: Logger.Diag("[KBD] EMSG " + _name + " EM_REPLACESEL canUndo=" + (m.WParam != IntPtr.Zero) + " text=" + PtrText(m.LParam)); break;
+                        case WM_SETTEXT: Logger.Diag("[KBD] EMSG " + _name + " WM_SETTEXT text=" + PtrText(m.LParam)); break;
                     }
                 }
 
@@ -679,17 +724,19 @@ namespace TelegArm.UI
                 // keyboard reconnections (tap-away+retap) that decide dead-vs-native, so they anchor every RT read.
                 if (m.Msg == WM_SETFOCUS)
                 {
-                    if (LogOn) System.Diagnostics.Debug.WriteLine("[KBD] RAW " + _name + " WM_SETFOCUS otherHwnd=0x" + m.WParam.ToInt64().ToString("X")
+                    if (LogOn) Logger.Diag("[KBD] RAW " + _name + " WM_SETFOCUS otherHwnd=0x" + m.WParam.ToInt64().ToString("X")
                         + " lastPtr=" + (_lastPtrTick == 0 ? "never" : unchecked(Environment.TickCount - _lastPtrTick) + "ms[" + _lastPtrLabel + "]") + " srcNow=" + InputSrc(out _));
                     _needStyleLog = true;
+                    BeginSession();
                     base.WndProc(ref m);
-                    ((MainForm)_owner).OnTextBoxFocusGain(_edit, _name);   // KBD-DISMISS-v3 PART 3: re-park a post-dismiss cooldown refocus
+                    Main?.OnTextBoxFocusGain(_edit, _name);   // KBD-DISMISS-v3 PART 3: re-park a post-dismiss cooldown refocus
                     return;
                 }
                 if (m.Msg == WM_KILLFOCUS)
                 {
-                    if (LogOn) System.Diagnostics.Debug.WriteLine("[KBD] RAW " + _name + " WM_KILLFOCUS otherHwnd=0x" + m.WParam.ToInt64().ToString("X"));
+                    if (LogOn) Logger.Diag("[KBD] RAW " + _name + " WM_KILLFOCUS otherHwnd=0x" + m.WParam.ToInt64().ToString("X"));
                     base.WndProc(ref m);
+                    EndSession();
                     return;
                 }
 
@@ -752,7 +799,7 @@ namespace TelegArm.UI
                 int rep = (int)(lp & 0xFFFF), scan = (int)((lp >> 16) & 0xFF), ext = (int)((lp >> 24) & 1);
                 int ctx = (int)((lp >> 29) & 1), prev = (int)((lp >> 30) & 1), up = (int)((lp >> 31) & 1);
                 bool self = _owner != null && _owner.IsHandleCreated && GetForegroundWindow() == _owner.Handle;
-                System.Diagnostics.Debug.WriteLine("[KBD] RAW " + _name + " " + MsgName(m.Msg) + " " + WParamDesc(m.WParam)
+                Logger.Diag("[KBD] RAW " + _name + " " + MsgName(m.Msg) + " " + WParamDesc(m.WParam)
                     + " lParam=0x" + lp.ToString("X8") + " rep=" + rep + " scan=0x" + scan.ToString("X2")
                     + " ext=" + ext + " ctx=" + ctx + " prev=" + prev + " up=" + up
                     + " mods=" + ModSnapshot()
@@ -764,7 +811,7 @@ namespace TelegArm.UI
             /// mover was observed since (they all invalidate the expectation), it can only be CUAS's message-invisible
             /// yank — restore it. A live selection disables the guard (selections are legit state). Catches
             /// yank-to-anywhere (both the →0 and →end variants were observed on RT).</summary>
-            private void CorrectYank(System.Windows.Forms.TextBoxBase tb)
+            private void CorrectYank(System.Windows.Forms.TextBoxBase tb, bool observeOnly)
             {
                 try
                 {
@@ -772,6 +819,13 @@ namespace TelegArm.UI
                     if (exp >= 0 && tb.SelectionLength == 0 && tb.SelectionStart != exp && exp <= (tb.Text ?? "").Length)
                     {
                         int actual = tb.SelectionStart;
+                        _sYank++;
+                        if (observeOnly)
+                        {
+                            _expectedCaret = -1;   // accept where it is — counted once, not again at every keystroke
+                            if (LogOn) Log("caret-yank observed " + actual + " (expected " + exp + ", not corrected)");
+                            return;
+                        }
                         _inSelfEdit = true;
                         try { tb.SelectionStart = exp; }
                         finally { _inSelfEdit = false; }
@@ -788,26 +842,40 @@ namespace TelegArm.UI
                 //   forcing it would type into a disabled field (the Plain composer is ReadOnly instead of Enabled=false).
                 //   Inert on the Legacy path: its inner box is never read-only.
                 if (tb == null || tb.ReadOnly) { base.WndProc(ref m); return; }
-                CorrectYank(tb);
+                bool observe = InputPolicy.Shim == InputPolicy.ShimMode.Observe;   // device trip: count, never force
+                CorrectYank(tb, observe);
                 string before = _edit.Text ?? "";
-                int caretBefore = tb.SelectionStart;
+                int caretBefore = tb.SelectionStart, selBefore = tb.SelectionLength;
 
                 base.WndProc(ref m);   // tier 0 — native
                 if (!string.Equals(before, _edit.Text ?? "", StringComparison.Ordinal))
                 {
                     _expectedCaret = tb.SelectionStart;   // healthy native edit — SILENT
+                    _sNative++;
                     if (KbdDiag) Log(EditDesc(ch, isBackspace) + " (tier0 native) caret " + caretBefore + "->" + tb.SelectionStart);
                     return;
                 }
-                if (isBackspace && caretBefore == 0 && tb.SelectionLength == 0) { _expectedCaret = 0; return; }   // legit no-op — silent
+                // A selection replaced by the SAME character leaves the text identical — but the EDIT did act: the selection
+                // collapsed just after it. Dead input leaves the selection untouched. (Without this the shim inserted a second
+                // copy, and Observe would count a false dead key — analysis R-1.)
+                if (selBefore > 0 && tb.SelectionLength == 0 && tb.SelectionStart == caretBefore + 1) { _expectedCaret = tb.SelectionStart; _sNative++; return; }
+                if (isBackspace && caretBefore == 0 && selBefore == 0) { _expectedCaret = 0; return; }   // legit no-op — silent
+
+                _sDead++;
+                if (observe)
+                {
+                    if (LogOn) Log("DEAD " + EditDesc(ch, isBackspace) + " caret " + caretBefore + " (observe: not forced)");   // anomaly line
+                    return;
+                }
 
                 // Dead mode → RE-CHECK the caret before forcing: the RT fingerprint ("forced Left 3->2" then
                 // "forced backspace 2->2" = delete at a yanked position) proved CUAS yanks the caret DURING the
                 // dead keystroke's own base.WndProc — i.e., between the entry check above and this point. The
                 // pre-force correction makes the forced edit land where the user's caret really was.
-                CorrectYank(tb);
+                CorrectYank(tb, false);
 
                 // Force SYNCHRONOUSLY in place (strict FIFO, zero added latency).
+                _sForced++;
                 if (isBackspace) ForceBackspace(tb, caretBefore);
                 else ForceInsert(tb, ch, caretBefore);
             }
@@ -880,7 +948,8 @@ namespace TelegArm.UI
                     return;
                 }
 
-                CorrectYank(tb);
+                bool observe = InputPolicy.Shim == InputPolicy.ShimMode.Observe;
+                CorrectYank(tb, observe);
                 string before = tb.Text ?? "";
                 int s0 = tb.SelectionStart, l0 = tb.SelectionLength;
 
@@ -889,6 +958,7 @@ namespace TelegArm.UI
                 if (s0 != s1 || l0 != l1 || !string.Equals(before, tb.Text ?? "", StringComparison.Ordinal))
                 {
                     _expectedCaret = tb.SelectionStart;   // healthy native nav/edit — SILENT
+                    _sNavNative++;
                     if (KbdDiag) Log("nav " + NavName(vk) + " (tier0 native) caret " + s0 + "->" + s1);
                     return;
                 }
@@ -901,6 +971,13 @@ namespace TelegArm.UI
                     (vk == VKEND && s0 == len && l0 == 0) ||
                     (vk == VKDEL && ((s0 == len && l0 == 0) || len == 0));
                 if (noop) { _expectedCaret = s0; return; }
+
+                _sNavDead++;
+                if (observe)
+                {
+                    if (LogOn) Log("DEAD " + NavName(vk) + " caret " + s0 + " (observe: not forced)");   // anomaly line
+                    return;
+                }
 
                 // Dead mode → force the nav/edit directly (under the self-edit flag so our own EM messages
                 // don't invalidate the expectation; it's set to the final position right after).
@@ -1010,7 +1087,7 @@ namespace TelegArm.UI
                 if (!Logger.Enabled) return;   // hot-path rule: no log formatting when logging is off
                 if (edit == null || !edit.IsHandleCreated) return;
                 int style = GetWindowLong(edit.Handle, GWL_STYLE);
-                System.Diagnostics.Debug.WriteLine("[KBD] STYLE " + name + " [" + when + "] style=0x" + style.ToString("X8")
+                Logger.Diag("[KBD] STYLE " + name + " [" + when + "] style=0x" + style.ToString("X8")
                     + " ES_READONLY=" + (((style & ES_READONLY) != 0) ? "yes" : "no") + " Enabled=" + edit.Enabled);
             }
             catch { }
@@ -1050,7 +1127,7 @@ namespace TelegArm.UI
                 IntPtr fg = GetForegroundWindow();
                 var sb = new System.Text.StringBuilder(96);
                 if (fg != IntPtr.Zero) GetClassName(fg, sb, sb.Capacity);
-                System.Diagnostics.Debug.WriteLine("[KBD] SHOW-check tabtipVis=" + vis
+                Logger.Diag("[KBD] SHOW-check tabtipVis=" + vis
                     + " rect=" + r.Left + "," + r.Top + "," + r.Right + "," + r.Bottom + " fg=" + sb.ToString());
             }
             catch { }
@@ -1091,7 +1168,7 @@ namespace TelegArm.UI
                 string state = "vis=" + vis + " cloaked=" + cloaked
                     + " rect=" + r.Left + "," + r.Top + "," + (r.Right - r.Left) + "x" + (r.Bottom - r.Top)
                     + " fg=" + FgClass() + " composerFocus=" + composerFocus + " searchFocus=" + searchFocus + " typing=" + typing;
-                if (state != _ttLast) { _ttLast = state; System.Diagnostics.Debug.WriteLine("[KBD] tabtip-tick " + state); }
+                if (state != _ttLast) { _ttLast = state; Logger.Diag("[KBD] tabtip-tick " + state); }
             }
             catch { }
         }
@@ -1104,7 +1181,7 @@ namespace TelegArm.UI
                 if (!Logger.Enabled) return;   // hot-path rule: no log formatting (or IMM calls) when logging is off
                 if (edit == null || !edit.IsHandleCreated) return;
                 IntPtr himc = ImmGetContext(edit.Handle);
-                System.Diagnostics.Debug.WriteLine("[KBD] IME " + name + " imeCtx=" + (himc == IntPtr.Zero ? "null" : "0x" + himc.ToInt64().ToString("X")));
+                Logger.Diag("[KBD] IME " + name + " imeCtx=" + (himc == IntPtr.Zero ? "null" : "0x" + himc.ToInt64().ToString("X")));
                 if (himc != IntPtr.Zero) ImmReleaseContext(edit.Handle, himc);
             }
             catch { }
@@ -1183,7 +1260,7 @@ namespace TelegArm.UI
                     : _messageInput.Plain != null ? _messageInput.Plain.Inner
                     : _baseTextBoxField != null ? _baseTextBoxField.GetValue(_messageInput.Legacy) as Control : null;
                 string innerT = inner != null ? (inner.Text ?? "") : "";
-                System.Diagnostics.Debug.WriteLine("[KBD] SEND via=" + via + " outer.len=" + outer.Length
+                Logger.Diag("[KBD] SEND via=" + via + " outer.len=" + outer.Length
                     + " inner.len=" + innerT.Length + " text=" + Quote(outer));
             }
             catch { }
@@ -1227,7 +1304,7 @@ namespace TelegArm.UI
                 if (IsDisposed) return;
                 if ((_messageInput != null && _messageInput.ContainsFocus) || (_searchBox != null && _searchBox.ContainsFocus))
                 {
-                    if (LogOn) System.Diagnostics.Debug.WriteLine("[KBD] cleared auto-refocused text field after WA_ACTIVE (no keyboard auto-reshow)");
+                    if (LogOn) Logger.Diag("[KBD] cleared auto-refocused text field after WA_ACTIVE (no keyboard auto-reshow)");
                     ActiveControl = null;   // established pattern in this form; removes focus → the OSK won't auto-reshow
                 }
             }
@@ -1251,7 +1328,7 @@ namespace TelegArm.UI
                 var sb = new System.Text.StringBuilder(96);
                 GetClassName(fg, sb, sb.Capacity);
                 string cls = sb.ToString();
-                if (LogOn) System.Diagnostics.Debug.WriteLine("[KBD] deactivation fg-class=" + cls);
+                if (LogOn) Logger.Diag("[KBD] deactivation fg-class=" + cls);
                 if (cls.IndexOf("IPTip", StringComparison.OrdinalIgnoreCase) >= 0                    // legacy TabTip
                     || cls.Equals("Windows.UI.Core.CoreWindow", StringComparison.OrdinalIgnoreCase)  // immersive input surface
                     || cls.Equals("ApplicationFrameWindow", StringComparison.OrdinalIgnoreCase)) return true;

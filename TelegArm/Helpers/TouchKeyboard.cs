@@ -100,7 +100,7 @@ namespace TelegArm.Helpers
             if (!_verdictLogged || present != _lastVerdict)
             {
                 _verdictLogged = true; _lastVerdict = present;
-                Debug.WriteLine("[KBD] hardware keyboard=" + present + " via=" + src);   // permanent truth line (attach/detach change)
+                Logger.Diag("[KBD] hardware keyboard=" + present + " via=" + src);   // permanent truth line (attach/detach change)
             }
             return present;
         }
@@ -199,7 +199,7 @@ namespace TelegArm.Helpers
 
             public bool PreFilterMessage(ref Message m)
             {
-                if (m.Msg == WM_LBUTTONDOWN && LastInputWasTouch() && IsTabletMode())
+                if (m.Msg == WM_LBUTTONDOWN && InputPolicy.AutoLaunch && LastInputWasTouch() && IsTabletMode())   // device trip: off switch
                 {
                     // Editable text field tapped by touch while in tablet posture → pop the OSK.
                     if (Control.FromHandle(m.HWnd) is TextBoxBase tb && !tb.ReadOnly)

@@ -35,6 +35,10 @@ namespace TelegArm.Helpers
                           + Informational(typeof(WTelegram.Client).Assembly)));
             sb.AppendLine("Logging: " + Safe(() => AppSettings.Instance.FileLogging ? "on" : "off")
                           + "  data root via " + (StoragePaths.CacheVia ?? "(unresolved)"));
+            // Device trip 2026-10: which composer and input switches this run used, and what the typing counters saw.
+            sb.AppendLine("Composer: " + Safe(() => (TelegArm.UI.Controls.InputBox.UsePlain ? "Plain" : "Legacy")
+                          + "  window frame=" + (string.IsNullOrEmpty(AppSettings.Instance.ChromeMode) ? "TelegArm" : AppSettings.Instance.ChromeMode)));
+            sb.AppendLine(Safe(InputPolicy.Report));
             return sb.ToString();
         }
 

@@ -403,7 +403,7 @@ namespace TelegArm.UI
                     // DroidFinestra's (originally TelegArm's) WM_ACTIVATE fix: on a NON-click reactivation WinForms
                     // restores focus to the last text field, and Windows then re-shows the touch keyboard for it —
                     // the "tap the keyboard's ✕, it comes back" loop. A real tap arrives as a click, not WA_ACTIVE.
-                    if ((m.WParam.ToInt64() & 0xFFFF) == WA_ACTIVE)
+                    if ((m.WParam.ToInt64() & 0xFFFF) == WA_ACTIVE && InputPolicy.RefocusClear)   // device trip: off switch
                         try { BeginInvoke((Action)ClearAutoRefocusedTextField); } catch { }
                     break;
             }

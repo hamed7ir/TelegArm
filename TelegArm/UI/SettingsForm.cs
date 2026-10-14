@@ -823,9 +823,6 @@ namespace TelegArm.UI
             // SCROLL-SMOOTH-T1 A/B: composited scrolling (the style participates in handle creation).
             var compSw = new ToggleRow("Smoother scrolling (composited)", s.CompositedScroll) { Subtitle = "Less row overlap while scrolling · after restart" };
             compSw.Changed += (snd, ev) => { s.CompositedScroll = compSw.On; s.Save(); };
-            // REDESIGN 1.5 — the composer / search engine for device gate G1.
-            var engineSw = new ToggleRow("Plain text boxes (test)", string.Equals(s.ComposerEngine, "Plain", StringComparison.OrdinalIgnoreCase)) { Subtitle = "New composer and search box · after restart" };
-            engineSw.Changed += (snd, ev) => { s.ComposerEngine = engineSw.On ? "Plain" : ""; s.Save(); };
             // DPI-MODE-TOGGLE: opt-in DPI-unaware declaration (STEP 0.4: DpiMode is the source of truth; Save mirrors it).
             var dpiSw = new ToggleRow("Proportional scaling on high-DPI displays", s.DpiUnaware) { Subtitle = "Fixes mismatched sizes; blurry · after restart" };
             dpiSw.Changed += (snd, ev) => { s.DpiMode = dpiSw.On ? "Unaware" : ""; s.Save(); };
@@ -838,7 +835,9 @@ namespace TelegArm.UI
             var scale = new ActionRow("Display scaling") { Subtitle = Dpi.Mode + " · " + Dpi.SystemDpi + " dpi — tap for details" };
             scale.Click += (snd, ev) => ThemedDialog.Show(this, "Display scaling", Dpi.ProbeSummary.Replace(" request=", "\nrequest=")
                 .Replace(" call=", "\ncall=").Replace(" mode=", "\nmode=").Replace(" monitors=", "\nmonitors="), "OK");
-            page.Section("Display & window", compSw, engineSw, dpiSw, frame, scale);
+            page.Section("Display & window", compSw, dpiSw, frame, scale);
+
+            BuildInputTestSection(page, s);
 
             // STEP 0.1 — one tap collects what a bug report needs and nothing private (DiagReport says what and why).
             var copy = new ActionRow("Copy diagnostics", "Copy") { Subtitle = "Version, Windows build, DPI and connection mode" };
@@ -855,6 +854,53 @@ namespace TelegArm.UI
             var data = new ActionRow("Open data folder", "Open") { Subtitle = "Settings, accounts and caches live here" };
             data.Click += (snd, ev) => { try { System.Diagnostics.Process.Start(StoragePaths.ResolveDataRoot()); } catch (Exception ex) { ThemedDialog.Show(this, "Data folder", ex.Message, "OK"); } };
             page.Section("Support", copy, data);
+        }
+
+        /// <summary>Device trip 2026-10 (alpha.2): every switch the RT typing A/B needs, on the device itself (env vars are
+        /// impractical there). All live except the composer engine and shim Off (restart). See Helpers.InputPolicy.</summary>
+        private void BuildInputTestSection(PageStack page, AppSettings s)
+        {
+            // REDESIGN 1.5 — the composer / search engine for device gate G1 (was "Plain text boxes (test)").
+            bool plain = string.Equals(s.ComposerEngine, "Plain", StringComparison.OrdinalIgnoreCase);
+            var engine = new SegmentedRow("Composer text box", new[] { "MaterialSkin", "Plain" }, plain ? 1 : 0) { Subtitle = "Composer and chat search · after restart" };
+            engine.SelectedIndexChanged += (snd, ev) => { s.ComposerEngine = engine.SelectedIndex == 1 ? "Plain" : ""; s.Save(); };
+
+            var mode = InputPolicy.Shim;
+            var shim = new SegmentedRow("Typing workaround", new[] { "On", "Observe", "Off" },
+                                        mode == InputPolicy.ShimMode.Observe ? 1 : mode == InputPolicy.ShimMode.Off ? 2 : 0)
+            { Subtitle = "Observe counts dead keys without fixing them · Off after restart" };
+            shim.SelectedIndexChanged += (snd, ev) =>
+            {
+                int i = shim.SelectedIndex;
+                s.InputShim = i == 1 ? "Observe" : i == 2 ? "Off" : "";
+                s.Save();
+                Logger.Diag("[INPUT] " + InputPolicy.Summary);
+            };
+
+            var resize = new ToggleRow("Move the window above the keyboard", s.ResizeForKeyboard) { Subtitle = "The main window shrinks; dialogs move up" };
+            resize.Changed += (snd, ev) => { s.ResizeForKeyboard = resize.On; s.Save(); Logger.Diag("[INPUT] " + InputPolicy.Summary); };
+            var launch = KeyboardSwitch(InputPolicy.Launch, "Open the keyboard on tap", "TelegArm starts it; off leaves it to Windows");
+            var dismiss = KeyboardSwitch(InputPolicy.Dismiss, "Keep it closed after closing it", "Stops Windows bringing the keyboard back");
+            var refocus = KeyboardSwitch(InputPolicy.Refocus, "No text focus on reactivation", "Switching back to TelegArm opens no keyboard");
+            var actGuard = KeyboardSwitch(InputPolicy.ActGuard, "Ignore the keyboard's focus steal", "Animations keep playing while it is open");
+
+            var trace = new ToggleRow("Per-keystroke input tracing", s.KbdDiag) { Subtitle = "Very detailed; needs diagnostic logging" };
+            trace.Changed += (snd, ev) => { s.KbdDiag = trace.On; s.Save(); };
+            var counters = new ActionRow("Input counters", "View") { Subtitle = "Native, dead and forced keys since launch" };
+            counters.Click += (snd, ev) =>
+            {
+                string report = InputPolicy.Report();
+                int b = ThemedDialog.Show(this, "Input counters", report, "Copy", "Close");
+                if (b == 0) { try { Clipboard.SetText(report); } catch { } }
+            };
+            page.Section("Typing and touch keyboard (device test)", engine, shim, resize, launch, dismiss, refocus, actGuard, trace, counters);
+        }
+
+        private static ToggleRow KeyboardSwitch(string token, string caption, string subtitle)
+        {
+            var row = new ToggleRow(caption, InputPolicy.IsOn(token)) { Subtitle = subtitle };
+            row.Changed += (snd, ev) => InputPolicy.SetOn(token, row.On);
+            return row;
         }
 
         private static string CrashStatusText(int n) =>

@@ -84,6 +84,8 @@ $gates = @(
         $af = @($all | Where-Object { $_.Name -eq 'AppForm.cs' })
         if (@(Hits $af 'DwmSetWindowAttribute\(Handle,\s*DWMWA_WINDOW_CORNER_PREFERENCE').Count -eq 0 -or @(Hits $af 'int\s+round\s*=\s*DWMWCP_ROUND').Count -eq 0) {
             'UI\AppForm.cs: the DWMWCP_ROUND request in ApplyDwmAttributes is gone' } } }
+    @{ From = 'always'; Name = 'input evidence survives Release: no Debug.WriteLine for [KBD]/[INPUT] lines (R7, device trip)'; Test = {
+        Hits $all 'Debug\.WriteLine\(\s*"\[(KBD|INPUT)' $null } }
     @{ From = '2.1'; Name = 'no Material in the files Phase 2 has converted (plan 5 (f))'; Test = {
         $done = @($all | Where-Object { $converted -contains $_.FullName.Substring($app.Length + 1) })
         # String literals are cut too: About's credits name the library (it ships until 2.8), which is not a use of it.

@@ -216,7 +216,7 @@ namespace TelegArm.UI.Controls
             base.OnMouseDown(e);
             if (!_inputEnabled) return;
             _inner.Focus();
-            try { if (TouchKeyboard.LastInputWasTouch() && TouchKeyboard.IsTabletMode()) TouchKeyboard.Show(); } catch { }
+            try { if (InputPolicy.AutoLaunch && TouchKeyboard.LastInputWasTouch() && TouchKeyboard.IsTabletMode()) TouchKeyboard.Show(); } catch { }
         }
 
         private const int EM_SETMARGINS = 0x00D3, EC_LEFTMARGIN = 0x0001, EC_RIGHTMARGIN = 0x0002;

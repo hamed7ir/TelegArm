@@ -81,10 +81,39 @@ namespace TelegArm.UI
             });
             check(sel == 1 && shown, "settings: Down on the rail opens the next page", "selected=" + sel + " shown=" + shown);
 
+            // Device trip: the "Typing and touch keyboard" switches write the settings InputPolicy reads (live).
+            Show(owner, f =>
+            {
+                try
+                {
+                    var shim = FindRow<SegmentedRow>(f, "Typing workaround");
+                    var launch = FindRow<ToggleRow>(f, "Open the keyboard on tap");
+                    shim.SetSelected(1, true);
+                    bool observed = InputPolicy.Shim == InputPolicy.ShimMode.Observe && s.InputShim == "Observe";
+                    launch.On = false;
+                    bool launchOff = !InputPolicy.AutoLaunch && s.KeyboardOff.Contains("launch");
+                    shim.SetSelected(0, true); launch.On = true;
+                    bool restored = InputPolicy.Shim == InputPolicy.ShimMode.On && InputPolicy.AutoLaunch && s.InputShim == "" && s.KeyboardOff == "";
+                    check(observed && launchOff && restored, "settings: the device-test switches drive InputPolicy live",
+                          "observe=" + observed + " launchOff=" + launchOff + " restored=" + restored);
+                }
+                catch (Exception ex) { check(false, "settings: the device-test switches drive InputPolicy live", ex.GetType().Name + ": " + ex.Message); }
+                Key(f, Keys.Escape);
+            });
+
             using (var f = new SettingsForm()) info("settings at DPI " + f.WindowDpiValue + ": " + f.Size);
         }
 
         private static T Row<T>(Form f, string name) where T : class { return (T)Field(f, name); }
+
+        /// <summary>The first row of type T whose caption is <paramref name="caption"/>, anywhere in the form.</summary>
+        private static T FindRow<T>(Control root, string caption) where T : Control
+        {
+            T hit = null;
+            Find(root, c => { if (hit == null && c is T && c.Text == caption) hit = (T)c; });
+            if (hit == null) throw new InvalidOperationException("no row '" + caption + "'");
+            return hit;
+        }
 
         private static object Field(object o, string name)
         {

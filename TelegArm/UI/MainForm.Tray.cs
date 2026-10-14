@@ -45,16 +45,16 @@ namespace TelegArm.UI
             if (m.Msg == WM_ACTIVATEAPP)
             {
                 bool active = m.WParam != IntPtr.Zero;   // wParam != 0 → app activated; 0 → app backgrounded
-                if (!active && IsSpuriousDeactivation())
+                if (!active && InputPolicy.ActivationGuard && IsSpuriousDeactivation())   // device trip: the guard has an off switch
                 {
                     // FIX 1: the WinRT/touch keyboard is a SEPARATE surface that steals process activation while
                     // we're still the real foreground app + a text field is focused → this is NOT a background.
                     // Do NOT pause the WebM animation / churn — that pause+resume on every steal was the flicker.
-                    if (LogOn) System.Diagnostics.Debug.WriteLine("[KBD] WM_ACTIVATEAPP active=False → IGNORED (keyboard overlay, still foreground) fg=" + FgClass() + " composerFocus=" + (_messageInput != null && _messageInput.ContainsFocus));
+                    if (LogOn) Logger.Diag("[KBD] WM_ACTIVATEAPP active=False → IGNORED (keyboard overlay, still foreground) fg=" + FgClass() + " composerFocus=" + (_messageInput != null && _messageInput.ContainsFocus));
                 }
                 else
                 {
-                    if (LogOn) System.Diagnostics.Debug.WriteLine("[KBD] WM_ACTIVATEAPP active=" + active);
+                    if (LogOn) Logger.Diag("[KBD] WM_ACTIVATEAPP active=" + active);
                     if (active != _appActive)
                     {
                         _appActive = active;
@@ -69,14 +69,14 @@ namespace TelegArm.UI
             else if (m.Msg == 0x0006)   // WM_ACTIVATE — 0=inactive 1=active(non-click) 2=clickactive
             {
                 long wa = m.WParam.ToInt64() & 0xFFFF;
-                if (LogOn) System.Diagnostics.Debug.WriteLine("[KBD] WM_ACTIVATE " + wa);
+                if (LogOn) Logger.Diag("[KBD] WM_ACTIVATE " + wa);
                 // WA_ACTIVE (1, NOT a mouse click): reactivated by the keyboard-close returning activation / alt-tab /
                 // startup → WinForms auto-restores focus to the last text field, and Windows then auto-RESHOWS the
                 // touch keyboard for it (the close→reshow loop). Clear that auto-focus so ONLY a user TAP (which
                 // comes through WA_CLICKACTIVE / a direct hit, never WA_ACTIVE) opens the keyboard.
-                if (wa == 1) try { BeginInvoke((Action)ClearAutoRefocusedTextField); } catch { }
+                if (wa == 1 && InputPolicy.RefocusClear) try { BeginInvoke((Action)ClearAutoRefocusedTextField); } catch { }
             }
-            else if (m.Msg == 0x0086) { if (LogOn) System.Diagnostics.Debug.WriteLine("[KBD] WM_NCACTIVATE active=" + (m.WParam != IntPtr.Zero)); }
+            else if (m.Msg == 0x0086) { if (LogOn) Logger.Diag("[KBD] WM_NCACTIVATE active=" + (m.WParam != IntPtr.Zero)); }
             else if (m.Msg == WM_DWMCOLORIZATIONCOLORCHANGED)
             {
                 // Windows accent / colorization changed (fires on 8.1 AND 10/11). Re-read the CHOSEN accent from
@@ -102,7 +102,7 @@ namespace TelegArm.UI
                 {
                     string area = "";
                     try { if (m.LParam != IntPtr.Zero) area = System.Runtime.InteropServices.Marshal.PtrToStringAuto(m.LParam) ?? ""; } catch { }
-                    System.Diagnostics.Debug.WriteLine("[KBD] WM_SETTINGCHANGE wParam=0x" + m.WParam.ToInt64().ToString("X") + " area=" + area + " fg=" + FgClass());
+                    Logger.Diag("[KBD] WM_SETTINGCHANGE wParam=0x" + m.WParam.ToInt64().ToString("X") + " area=" + area + " fg=" + FgClass());
                 }
             }
             base.WndProc(ref m);

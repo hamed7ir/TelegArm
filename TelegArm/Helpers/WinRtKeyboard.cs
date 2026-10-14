@@ -51,10 +51,10 @@ namespace TelegArm.Helpers
                 var interop = (IInputPaneInterop)f;
                 Guid paneIid = typeof(InputPane).GUID;
                 _pane = interop.GetForWindow(hwnd, ref paneIid);
-                Debug.WriteLine("[KBD] InputPane interop OK via RoGetActivationFactory (pane=" + (_pane != null) + ")");
+                Logger.Diag("[KBD] InputPane interop OK via RoGetActivationFactory (pane=" + (_pane != null) + ")");
                 if (_pane != null) return true;
             }
-            catch (Exception ex) { Debug.WriteLine("[KBD] RoGetActivationFactory interop failed: " + ex.GetType().Name + ": " + ex.Message); }
+            catch (Exception ex) { Logger.Diag("[KBD] RoGetActivationFactory interop failed: " + ex.GetType().Name + ": " + ex.Message); }
 
             // Approach 2: the managed activation factory + QI (works on some runtimes).
             try
@@ -63,12 +63,12 @@ namespace TelegArm.Helpers
                 var interop = (IInputPaneInterop)factory;
                 Guid paneIid = typeof(InputPane).GUID;
                 _pane = interop.GetForWindow(hwnd, ref paneIid);
-                Debug.WriteLine("[KBD] InputPane interop OK via GetActivationFactory (pane=" + (_pane != null) + ")");
+                Logger.Diag("[KBD] InputPane interop OK via GetActivationFactory (pane=" + (_pane != null) + ")");
             }
             catch (Exception ex)
             {
                 _pane = null;
-                Debug.WriteLine("[KBD] InputPane interop UNAVAILABLE → TabTip fallback: " + ex.GetType().Name + ": " + ex.Message);
+                Logger.Diag("[KBD] InputPane interop UNAVAILABLE → TabTip fallback: " + ex.GetType().Name + ": " + ex.Message);
             }
             return _pane != null;
         }

@@ -123,15 +123,17 @@ namespace TelegArm
 
             // STEP 1.3 — the design gallery (--gallery) and its real-window chrome probe (--gallery-probe <file>).
             // Same rules as --shoot: before the mutex, storage isolated, never a Telegram client.
-            string probe = null; bool gallery = false;
+            string probe = null; bool gallery = false, inputLab = false;
             var cmd = Environment.GetCommandLineArgs();
             for (int i = 1; i < cmd.Length; i++)
             {
                 if (string.Equals(cmd[i], "--gallery", StringComparison.OrdinalIgnoreCase)) gallery = true;
+                // Device trip 2026-10: the typing A/B lab — same isolation as the gallery (UI/InputLabForm.cs).
+                else if (string.Equals(cmd[i], "--input-lab", StringComparison.OrdinalIgnoreCase)) { gallery = true; inputLab = true; }
                 else if (string.Equals(cmd[i], "--gallery-probe", StringComparison.OrdinalIgnoreCase))
                 { gallery = true; probe = i + 1 < cmd.Length ? System.IO.Path.GetFullPath(cmd[i + 1]) : System.IO.Path.GetFullPath("gallery-probe.txt"); }
             }
-            if (gallery) { RunGallery(probe); return; }
+            if (gallery) { RunGallery(probe, inputLab); return; }
 
             Mutex mutex;
             try
@@ -411,7 +413,7 @@ namespace TelegArm
 
         /// <summary>STEP 1.3 — the design gallery, with the same isolation and startup as the screenshot rig. With a
         /// probe file it runs the real-window chrome checks and exits with the number of failures.</summary>
-        private static void RunGallery(string probeFile)
+        private static void RunGallery(string probeFile, bool inputLab = false)
         {
             string iso = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
                                                 "TelegArm-gallery-" + Guid.NewGuid().ToString("N").Substring(0, 8));
@@ -437,7 +439,7 @@ namespace TelegArm
             ThemeHelper.StartListening();
             int code = 0;
             if (probeFile != null) code = DesignGalleryForm.RunProbe(probeFile);
-            else Application.Run(new DesignGalleryForm());
+            else Application.Run(inputLab ? (Form)new InputLabForm() : new DesignGalleryForm());
             ThemeHelper.StopListening();
             try { System.IO.Directory.Delete(iso, true); } catch { }
             Environment.Exit(code);

@@ -185,6 +185,15 @@ namespace TelegArm.Core
         /// this setting. TELEGARM_COMPOSER=plain|legacy overrides it. Restart to apply.</summary>
         public string ComposerEngine { get; set; } = "";
 
+        /// <summary>Device trip 2026-10 (alpha.2) — the composer/search input shim: "" = On (1.x: force dead keystrokes),
+        /// "Observe" = never force, count and log dead keystrokes only, "Off" = not attached (restart). TELEGARM_INPUTSHIM
+        /// overrides. See Helpers.InputPolicy.</summary>
+        public string InputShim { get; set; } = "";
+
+        /// <summary>Device trip 2026-10 — the touch-keyboard workarounds switched OFF, comma-separated: launch, dismiss,
+        /// refocus, actguard. "" = all on (1.x). TELEGARM_KBOFF overrides. The window shrink is ResizeForKeyboard.</summary>
+        public string KeyboardOff { get; set; } = "";
+
         // ── Storage ──────────────────────────────────────────────────────────
         // Cache root is resolved at load time (Documents-first write-test probe — see StoragePaths) rather
         // than hard-wired to %APPDATA%, which is unreliable on RT 8.1. Left null here so a fresh instance
@@ -247,6 +256,8 @@ namespace TelegArm.Core
             if (AccentColor == null) AccentColor = "";
             if (ChromeMode == null) ChromeMode = "";
             if (ComposerEngine == null) ComposerEngine = "";
+            if (InputShim == null) InputShim = "";
+            if (KeyboardOff == null) KeyboardOff = "";
             // MediaCacheFolder: null is meaningful (unresolved) — NormalizeCachePath resolves it.
         }
 

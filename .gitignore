@@ -59,3 +59,5 @@ packages/
 # img-icon/{icon,trayicon,trayicon-unread}.ico + img-icon/TelegArm.png from the
 # repo — while TelegArm.csproj REQUIRES them (<ApplicationIcon> + <Content>), so a
 # fresh clone could not build. Anchor any future asset rule with a leading "/".
+# Device-trip packages (built locally; never published)
+/trip/
