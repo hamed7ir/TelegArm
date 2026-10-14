@@ -27,8 +27,8 @@ namespace TelegArm.UI.Controls
     ///    work on a multiline EDIT, and the composer's cue changes for bot keyboards. While the field is focused nothing
     ///    is drawn over it at all (1.x reverted an overpaint of the focused composer in case it broke WM_CHAR on RT).
     ///  • A tap on the frame (outside the EDIT) raises MouseDown FIRST — MainForm records it as a genuine touch there, or
-    ///    the post-dismiss suppression bounces the focus (review 1.5) — then focuses the EDIT and, on touch, shows the
-    ///    keyboard: TouchKeyboard.Filter only reacts to taps on a TextBoxBase.
+    ///    the post-dismiss suppression bounces the focus (review 1.5) — then focuses the EDIT. It never launches the
+    ///    touch keyboard (that kills native typing on RT, device result 2026-10-14); Windows opens it for the EDIT.
     ///  • The EDIT's colours and font are OURS. MaterialSkin re-skins every control of a managed form (BackColor, ForeColor,
     ///    Font = Roboto) whenever ANY dialog or Settings sets its theme — the EDIT turned into a grey Roboto box inside the
     ///    frame (review 1.5, measured). The EDIT accepts those writes only from this control (<see cref="Recolor"/>, the
@@ -209,14 +209,14 @@ namespace TelegArm.UI.Controls
         }
 
         /// <summary>A tap or click on the frame around the EDIT. MouseDown is raised FIRST (the owner records a genuine touch
-        /// there), then the EDIT is focused and, on touch, the keyboard shown (the touch keyboard filter only sees taps that
-        /// land on the EDIT itself).</summary>
+        /// there), then the EDIT is focused. ⚠ The keyboard is NOT launched from here any more: TelegArm starting TabTip
+        /// itself kills native EDIT typing on RT (device result 2026-10-14). A tap on the EDIT itself gets Windows' own
+        /// keyboard; a tap on the thin frame only focuses.</summary>
         protected override void OnMouseDown(MouseEventArgs e)
         {
             base.OnMouseDown(e);
             if (!_inputEnabled) return;
             _inner.Focus();
-            try { if (InputPolicy.AutoLaunch && TouchKeyboard.LastInputWasTouch() && TouchKeyboard.IsTabletMode()) TouchKeyboard.Show(); } catch { }
         }
 
         private const int EM_SETMARGINS = 0x00D3, EC_LEFTMARGIN = 0x0001, EC_RIGHTMARGIN = 0x0002;

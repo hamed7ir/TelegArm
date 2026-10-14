@@ -308,8 +308,11 @@ namespace TelegArm
             // 8.1 and Windows 7 this whole feature correctly does nothing and "nothing" needs a reason.
             TelegArm.Helpers.ShellNotify.Init();
 
-            // Pop the on-screen keyboard when a text field is tapped by touch on a keyboard-less tablet.
-            Application.AddMessageFilter(new TouchKeyboard.Filter());
+            // ⚠ NO TabTip launcher for text boxes (device result 2026-10-14, alpha.2 Input Lab on the Surface RT): TelegArm
+            //   starting TabTip.exe itself on a touch tap (the old TouchKeyboard.Filter) KILLED typing in every native EDIT —
+            //   MaterialSkin's and a plain TextBox alike — the "dead input" of 1.x. Windows opens the keyboard for an EDIT on
+            //   its own (Finestra relies on that and types fine). Only a control that takes WM_CHAR itself (the new composer)
+            //   may call TouchKeyboard.Show(); it is immune.
 
             // Prune old cached media in the background (at most once a day); never blocks the UI.
             var settings = AppSettings.Instance; // force init on the UI thread first

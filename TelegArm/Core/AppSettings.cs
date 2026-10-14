@@ -179,10 +179,10 @@ namespace TelegArm.Core
         /// --native-caption and TELEGARM_CHROME=native|custom override it. Restart to apply.</summary>
         public string ChromeMode { get; set; } = "";
 
-        /// <summary>Redesign step 1.5 — the text box behind the composer and the chat-list search: "" / "Legacy" =
-        /// MaterialSkin's MaterialTextBox2 (1.x, the known-good RT input path), "Plain" = ThemedTextBox (a plain native
-        /// TextBox in a painted frame). Legacy until device gate G1 passes on the RT; step 1.5b then deletes Legacy and
-        /// this setting. TELEGARM_COMPOSER=plain|legacy overrides it. Restart to apply.</summary>
+        /// <summary>Redesign step 1.5 — the text box behind the composer and the chat-list search: "" / "Plain" =
+        /// ThemedTextBox (a plain native TextBox in a painted frame; the default since 2026-10-14), "Legacy" = MaterialSkin's
+        /// MaterialTextBox2 (the fallback until the new composer lands). TELEGARM_COMPOSER=plain|legacy overrides it.
+        /// Restart to apply.</summary>
         public string ComposerEngine { get; set; } = "";
 
         /// <summary>Device trip 2026-10 (alpha.2) — the composer/search input shim: "" = On (1.x: force dead keystrokes),

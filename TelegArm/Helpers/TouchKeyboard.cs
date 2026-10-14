@@ -192,16 +192,17 @@ namespace TelegArm.Helpers
                 try { if (File.Exists(p)) { Process.Start(p); return; } } catch { }
         }
 
-        /// <summary>Install once via <c>Application.AddMessageFilter</c>.</summary>
+        /// <summary>The app-wide tap filter that launched TabTip for any tapped TextBoxBase. ⚠ NO LONGER INSTALLED by the app
+        /// (device result 2026-10-14: launching TabTip ourselves kills native EDIT typing on RT — see Program.cs). Kept only
+        /// for the Input Lab's "Keyboard launcher" A/B switch, which reproduces the old behaviour on demand.</summary>
         public sealed class Filter : IMessageFilter
         {
             private const int WM_LBUTTONDOWN = 0x0201;
 
             public bool PreFilterMessage(ref Message m)
             {
-                if (m.Msg == WM_LBUTTONDOWN && InputPolicy.AutoLaunch && LastInputWasTouch() && IsTabletMode())   // device trip: off switch
+                if (m.Msg == WM_LBUTTONDOWN && LastInputWasTouch() && IsTabletMode())
                 {
-                    // Editable text field tapped by touch while in tablet posture → pop the OSK.
                     if (Control.FromHandle(m.HWnd) is TextBoxBase tb && !tb.ReadOnly)
                         Show();
                 }

@@ -23,7 +23,10 @@ namespace TelegArm.UI.Controls
 
         private InputBox(MaterialTextBox2 legacy, ThemedTextBox plain) { Legacy = legacy; Plain = plain; }
 
-        /// <summary>Plain when ComposerEngine (or TELEGARM_COMPOSER) says so; Legacy otherwise. Read once per process.</summary>
+        /// <summary>Plain unless ComposerEngine (or TELEGARM_COMPOSER) says "Legacy". Read once per process.
+        /// ⚠ Plain became the DEFAULT on 2026-10-14: the device trip showed the RT "dead input" came from TelegArm launching
+        /// TabTip itself (now removed, Program.cs), not from the text box — a plain native EDIT types fine on RT without it.
+        /// Legacy (MaterialSkin) stays selectable as the fallback until the new composer lands.</summary>
         public static bool UsePlain
         {
             get
@@ -35,7 +38,7 @@ namespace TelegArm.UI.Controls
                 try { setting = AppSettings.Instance.ComposerEngine ?? ""; } catch { }
                 if (string.Equals(env, "plain", StringComparison.OrdinalIgnoreCase)) _plain = true;
                 else if (string.Equals(env, "legacy", StringComparison.OrdinalIgnoreCase)) _plain = false;
-                else _plain = string.Equals(setting, "Plain", StringComparison.OrdinalIgnoreCase);
+                else _plain = !string.Equals(setting, "Legacy", StringComparison.OrdinalIgnoreCase);
                 Logger.Diag("[COMPOSER] engine=" + (_plain.Value ? "Plain" : "Legacy") + " (" + (env != null && env.Length > 0 ? "TELEGARM_COMPOSER" : setting.Length > 0 ? "setting" : "default") + ")");
                 return _plain.Value;
             }

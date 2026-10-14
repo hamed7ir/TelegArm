@@ -87,15 +87,15 @@ namespace TelegArm.UI
                 try
                 {
                     var shim = FindRow<SegmentedRow>(f, "Typing workaround");
-                    var launch = FindRow<ToggleRow>(f, "Open the keyboard on tap");
+                    var dismiss = FindRow<ToggleRow>(f, "Keep it closed after closing it");
                     shim.SetSelected(1, true);
                     bool observed = InputPolicy.Shim == InputPolicy.ShimMode.Observe && s.InputShim == "Observe";
-                    launch.On = false;
-                    bool launchOff = !InputPolicy.AutoLaunch && s.KeyboardOff.Contains("launch");
-                    shim.SetSelected(0, true); launch.On = true;
-                    bool restored = InputPolicy.Shim == InputPolicy.ShimMode.On && InputPolicy.AutoLaunch && s.InputShim == "" && s.KeyboardOff == "";
-                    check(observed && launchOff && restored, "settings: the device-test switches drive InputPolicy live",
-                          "observe=" + observed + " launchOff=" + launchOff + " restored=" + restored);
+                    dismiss.On = false;
+                    bool dismissOff = !InputPolicy.DismissGuard && s.KeyboardOff.Contains("dismiss");
+                    shim.SetSelected(0, true); dismiss.On = true;
+                    bool restored = InputPolicy.Shim == InputPolicy.ShimMode.On && InputPolicy.DismissGuard && s.InputShim == "" && s.KeyboardOff == "";
+                    check(observed && dismissOff && restored, "settings: the device-test switches drive InputPolicy live",
+                          "observe=" + observed + " dismissOff=" + dismissOff + " restored=" + restored);
                 }
                 catch (Exception ex) { check(false, "settings: the device-test switches drive InputPolicy live", ex.GetType().Name + ": " + ex.Message); }
                 Key(f, Keys.Escape);

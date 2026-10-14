@@ -14,7 +14,7 @@ namespace TelegArm.Helpers
     /// So nothing is deleted before the trip; each suspect gets an off switch instead, all LIVE (read per event):
     ///   • <see cref="Shim"/> — the forced-insert workaround on the composer/search EDIT: On (1.x) / Observe (never force;
     ///     count and log dead keystrokes) / Off (not attached — restart; also drops the dismiss bookkeeping it carries);
-    ///   • <see cref="AutoLaunch"/>, <see cref="DismissGuard"/>, <see cref="RefocusClear"/>, <see cref="ActivationGuard"/> —
+    ///   • <see cref="DismissGuard"/>, <see cref="RefocusClear"/>, <see cref="ActivationGuard"/> —
     ///     the touch-keyboard workarounds, one by one, and the window shrink (<see cref="ResizeForKeyboard"/>: its own
     ///     setting, or the "resize" token in TELEGARM_KBOFF for a scripted run).
     /// Defaults are 1.x behaviour exactly ("" everywhere). Env vars override for scripted runs (read once).</summary>
@@ -45,7 +45,7 @@ namespace TelegArm.Helpers
         }
 
         /// <summary>The touch-keyboard workaround tokens that can be switched off.</summary>
-        public const string Launch = "launch", Dismiss = "dismiss", Refocus = "refocus", ActGuard = "actguard", Resize = "resize";
+        public const string Dismiss = "dismiss", Refocus = "refocus", ActGuard = "actguard", Resize = "resize";
 
         /// <summary>Is this touch-keyboard workaround ON? (TELEGARM_KBOFF / AppSettings.KeyboardOff list the OFF ones.)</summary>
         public static bool IsOn(string token)
@@ -55,9 +55,6 @@ namespace TelegArm.Helpers
             return !Contains(list, token);
         }
 
-        /// <summary>Open the touch keyboard ourselves on a touch tap of a text field (TouchKeyboard.Filter, and the
-        /// ThemedTextBox frame tap). Off = Windows' own auto-invoke only, as Finestra/DroidFinestra do.</summary>
-        public static bool AutoLaunch => IsOn(Launch);
         /// <summary>After the keyboard is closed: park focus on the sink and bounce the OS re-summon (the "it never
         /// goes down" fix).</summary>
         public static bool DismissGuard => IsOn(Dismiss);
@@ -106,7 +103,7 @@ namespace TelegArm.Helpers
                 bool resize = ResizeForKeyboard; string engine = "";
                 try { engine = AppSettings.Instance.ComposerEngine; } catch { }
                 return "shim=" + Shim + (EnvShim != null ? "(env)" : "")
-                    + " launch=" + Onf(AutoLaunch) + " dismiss=" + Onf(DismissGuard) + " refocus=" + Onf(RefocusClear)
+                    + " dismiss=" + Onf(DismissGuard) + " refocus=" + Onf(RefocusClear)
                     + " actguard=" + Onf(ActivationGuard) + (EnvKbOff != null ? "(env)" : "")
                     + " resize=" + Onf(resize) + " engineSetting=" + (string.IsNullOrEmpty(engine) ? "Legacy" : engine)
 #if DEBUG

@@ -861,9 +861,9 @@ namespace TelegArm.UI
         private void BuildInputTestSection(PageStack page, AppSettings s)
         {
             // REDESIGN 1.5 — the composer / search engine for device gate G1 (was "Plain text boxes (test)").
-            bool plain = string.Equals(s.ComposerEngine, "Plain", StringComparison.OrdinalIgnoreCase);
+            bool plain = !string.Equals(s.ComposerEngine, "Legacy", StringComparison.OrdinalIgnoreCase);
             var engine = new SegmentedRow("Composer text box", new[] { "MaterialSkin", "Plain" }, plain ? 1 : 0) { Subtitle = "Composer and chat search · after restart" };
-            engine.SelectedIndexChanged += (snd, ev) => { s.ComposerEngine = engine.SelectedIndex == 1 ? "Plain" : ""; s.Save(); };
+            engine.SelectedIndexChanged += (snd, ev) => { s.ComposerEngine = engine.SelectedIndex == 0 ? "Legacy" : ""; s.Save(); };
 
             var mode = InputPolicy.Shim;
             var shim = new SegmentedRow("Typing workaround", new[] { "On", "Observe", "Off" },
@@ -879,7 +879,6 @@ namespace TelegArm.UI
 
             var resize = new ToggleRow("Move the window above the keyboard", s.ResizeForKeyboard) { Subtitle = "The main window shrinks; dialogs move up" };
             resize.Changed += (snd, ev) => { s.ResizeForKeyboard = resize.On; s.Save(); Logger.Diag("[INPUT] " + InputPolicy.Summary); };
-            var launch = KeyboardSwitch(InputPolicy.Launch, "Open the keyboard on tap", "TelegArm starts it; off leaves it to Windows");
             var dismiss = KeyboardSwitch(InputPolicy.Dismiss, "Keep it closed after closing it", "Stops Windows bringing the keyboard back");
             var refocus = KeyboardSwitch(InputPolicy.Refocus, "No text focus on reactivation", "Switching back to TelegArm opens no keyboard");
             var actGuard = KeyboardSwitch(InputPolicy.ActGuard, "Ignore the keyboard's focus steal", "Animations keep playing while it is open");
@@ -893,7 +892,7 @@ namespace TelegArm.UI
                 int b = ThemedDialog.Show(this, "Input counters", report, "Copy", "Close");
                 if (b == 0) { try { Clipboard.SetText(report); } catch { } }
             };
-            page.Section("Typing and touch keyboard (device test)", engine, shim, resize, launch, dismiss, refocus, actGuard, trace, counters);
+            page.Section("Typing and touch keyboard (device test)", engine, shim, resize, dismiss, refocus, actGuard, trace, counters);
         }
 
         private static ToggleRow KeyboardSwitch(string token, string caption, string subtitle)
