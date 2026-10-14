@@ -109,6 +109,10 @@ namespace TelegArm.Helpers
                     Capture(f, "main-chats-" + t);
                     OpenDemoChat(f);
                     Capture(f, "main-chat-" + t);
+                    // The transfers indicator in the chat header, beside the ⋮ / magnifier / dock buttons (it shows only while
+                    // transfers exist, so the rig forces it): its glyph must sit on the same centre line as theirs.
+                    var dl = Field(f, "_dlIndicator") as Control;
+                    if (dl != null) { dl.Visible = true; Settle(f); Capture(f, "main-transfers-" + t); dl.Visible = false; }
                     // Plan E3: a five-line draft — the colour-emoji composer grows with it (Plain stays one row).
                     var ib = Field(f, "_messageInput");
                     ib.GetType().GetProperty("Enabled").SetValue(ib, true);

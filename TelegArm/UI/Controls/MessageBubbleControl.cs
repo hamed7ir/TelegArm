@@ -14,32 +14,54 @@ namespace TelegArm.UI.Controls
     /// color; incoming are left-aligned in grey, with an optional sender name.
     /// Width/height are computed from the wrapped text; Persian/Arabic text is
     /// detected and rendered right-to-left so it stays inside the bubble.
+    ///
+    /// Redesign step 3.2 (the ChatListItemControl pattern): every length is LOGICAL (96-DPI) and drawn through P() at
+    /// the bubble's DPI; the metrics that used to be consts are now properties over P(), so each use scales with no
+    /// other edit. Every font is a shared FontCache font for that DPI, fetched where it is used — NEVER disposed,
+    /// never in a using. Media natural sizes and the 160 px sticker box are logical too (same physical size as at
+    /// 96). At 96 DPI every value is exactly what it was. The bubble is MEASURED BEFORE it is added (CreateBubble), so
+    /// the host hands it its DPI (LayoutDpi); OnParentChanged re-measures only if the window's DPI differs. On a DPI
+    /// change it refreshes fonts and drops the InlineText layout, but does NOT measure: the host's relayout does.
     /// </summary>
-    public class MessageBubbleControl : Control, IFlashable
+    public class MessageBubbleControl : Control, IFlashable, IDpiAware
     {
-        // Private font fields — never rely on Control.Font (ambient, not ours; MaterialSkin used to override it).
-        // Persian/Arabic text uses Vazirmatn (nicer + larger); Latin uses Roboto. Chosen
-        // in the ctor from the message's script (RTL detection).
-        private Font _textFont;   // not readonly: an album caption can re-derive it for the caption's script
-        private readonly Font _senderFont;
-        private readonly Font _timeFont;
-        private readonly Font _replyFont;
+        private int _dpi;                                          // the DPI this bubble is laid out at; 0 = not known yet
+        private int CurDpi { get { return _dpi > 0 ? _dpi : Dpi.Of(this); } }
+        private int P(int v) { return Dpi.Px(v, CurDpi); }        // a logical length at the bubble's DPI
 
-        private const int Pad = 10;       // inner bubble padding
-        private const int VMargin = 4;    // vertical gap between bubbles
-        private const int SideGap = 12;   // gap from panel edge
-        private const int TimeH = 14;     // timestamp strip height
-        private const int SenderH = 16;   // sender-name strip height
-        private const int ReplyH = 26;    // "replying to…" quote strip height (text only)
-        private const int ReplyNameH = 15; // extra strip for the quoted sender's name line
-        private const int FwdH = 17;      // "Forwarded from …" header strip height
-        private const int MinBubbleWidth = 80;   // floor so the timestamp always fits
-        private const int MinBubbleHeight = 48;  // floor for very short messages
+        /// <summary>The DPI to lay out (and measure) at. Bubbles are measured BEFORE they are parented, so the host sets
+        /// this at creation to its window's DPI; once parented the window's DPI wins (OnParentChanged / OnDpiChanged).</summary>
+        public int LayoutDpi
+        {
+            get { return CurDpi; }
+            set { if (value > 0 && value != _dpi) { _dpi = value; SyncRichDpi(); } }
+        }
+
+        // Fonts — never Control.Font (ambient, not ours; MaterialSkin used to override it). Persian/Arabic text uses
+        // Vazirmatn (nicer + larger); Latin uses Roboto, chosen from the message's script. Shared FontCache fonts at the
+        // bubble's DPI (step 3.2): never dispose them. Only TextFont follows an album caption's re-derived _rtl; the
+        // others keep the script the bubble was BUILT with (_builtRtl) — exactly what the old ctor-made fields did.
+        private readonly bool _builtRtl;
+        private Font TextFont => _rtl ? FontHelper.PersianAt(12f, CurDpi) : FontHelper.UiAt(9.75f, CurDpi);
+        private Font SenderFont => _builtRtl ? FontHelper.PersianAt(10.5f, CurDpi, FontStyle.Bold) : FontHelper.UiAt(8.5f, CurDpi, FontStyle.Bold);
+        private Font TimeFont => FontHelper.UiAt(7.5f, CurDpi);
+        private Font ReplyFont => _builtRtl ? FontHelper.PersianAt(10f, CurDpi) : FontHelper.UiAt(8.25f, CurDpi);
+
+        private int Pad => P(10);             // inner bubble padding
+        private int VMargin => P(4);          // vertical gap between bubbles
+        private int SideGap => P(12);         // gap from panel edge
+        private int TimeH => P(14);           // timestamp strip height
+        private int SenderH => P(16);         // sender-name strip height
+        private int ReplyH => P(26);          // "replying to…" quote strip height (text only)
+        private int ReplyNameH => P(15);      // extra strip for the quoted sender's name line
+        private int FwdH => P(17);            // "Forwarded from …" header strip height
+        private int MinBubbleWidth => P(80);  // floor so the timestamp always fits
+        private int MinBubbleHeight => P(48); // floor for very short messages
 
         // Content-width policy (Telegram-style): media, captions and text all live within
         // min(absolute cap, a fraction of the chat pane). Media SCALES TO FIT this — the bubble
         // never shrinks to hug the media (that caused the narrow-caption ribbon).
-        private const int AbsContentCap = 480;          // max content width (logical px)
+        private int AbsContentCap => P(480);            // max content width (logical px)
         private const double ContentFraction = 0.72;    // of the chat-pane width
 
         private string _text;       // not readonly: an album caption (which may live on a non-first item) re-sets it
@@ -72,13 +94,15 @@ namespace TelegArm.UI.Controls
         private string TimeStamp() => _date == default(DateTime) ? "" : _date.ToLocalTime().ToString("HH:mm");
         /// <summary>The timestamp text, prefixed with "edited" when the message was edited.</summary>
         private string StampText() { return (Edited ? "edited " : "") + TimeStamp(); }
-        private const int StatusGlyphW = 14, MetaGap = 6;   // ticks footprint + gap reserved for the outgoing meta strip
+        private int StatusGlyphW => P(14);   // ticks footprint reserved for the outgoing meta strip
+        private int MetaGap => P(6);         // gap reserved for the outgoing meta strip
         /// <summary>BUBBLE-DATETIME (B): the full width the meta strip needs = stamp text + (outgoing: ticks + gap).
         /// Folded into the bubble content width so "edited HH:MM" + ticks never left-clips; measured with the paint font.</summary>
         // CHANNEL-META-EXTRAS: channel-post view count (eye + compact number) sits LEFT of the stamp on the meta row;
         // the "sign messages" post_author sits far-LEFT. StampText stays time-only; these reserve their own width so
         // nothing clips (the FIT/DATETIME discipline). Admin role (groups) is a separate label by the sender name.
-        private const int EyeW = 13, EyeGap = 3;
+        private int EyeW => P(13);
+        private int EyeGap => P(3);
         private int _views = -1;           // >= 0 → render the channel-post view count
         private string _postAuthor;        // channel byline when the channel signs posts (Message.post_author)
         private string _adminRole;         // group owner/admin/custom-rank label (top row, by the sender name)
@@ -93,10 +117,10 @@ namespace TelegArm.UI.Controls
             if (n < 1000000) { double k = n / 1000.0; return (k < 10 ? k.ToString("0.0") : k.ToString("0")) + "K"; }
             double m = n / 1000000.0; return (m < 10 ? m.ToString("0.0") : m.ToString("0")) + "M";
         }
-        private float ViewsBlockW(Graphics g) => _views < 0 ? 0f : EyeW + EyeGap + g.MeasureString(FormatViews(_views), _timeFont).Width + MetaGap;
-        private float AuthorBlockW(Graphics g) => string.IsNullOrEmpty(_postAuthor) ? 0f : g.MeasureString(_postAuthor, _timeFont).Width + MetaGap;
+        private float ViewsBlockW(Graphics g) => _views < 0 ? 0f : EyeW + EyeGap + g.MeasureString(FormatViews(_views), TimeFont).Width + MetaGap;
+        private float AuthorBlockW(Graphics g) => string.IsNullOrEmpty(_postAuthor) ? 0f : g.MeasureString(_postAuthor, TimeFont).Width + MetaGap;
         private int MetaWidth(Graphics g) => (int)Math.Ceiling(
-            g.MeasureString(StampText(), _timeFont).Width + ViewsBlockW(g) + AuthorBlockW(g))
+            g.MeasureString(StampText(), TimeFont).Width + ViewsBlockW(g) + AuthorBlockW(g))
             + (_outgoing ? StatusGlyphW + MetaGap : 0);
 
         /// <summary>Group sender's avatar photo (incoming only; referenced — the cache owns it).</summary>
@@ -110,9 +134,9 @@ namespace TelegArm.UI.Controls
         public long AvatarPeerId { get; set; }
         /// <summary>Raised when the sender avatar is clicked (open the member's profile).</summary>
         public event EventHandler AvatarClicked;
-        private const int AvatarLane = 40;   // 32px avatar + 8px gap
+        private int AvatarLane => P(40);   // 32px avatar + 8px gap
         private int LeftInset => (!_outgoing && ShowAvatar) ? AvatarLane : 0;
-        private Rectangle AvatarRect => new Rectangle(SideGap, Height - VMargin - 34, 32, 32);
+        private Rectangle AvatarRect => new Rectangle(SideGap, Height - VMargin - P(34), P(32), P(32));
 
         private Rectangle _senderRect;   // painted sender-name area (clickable → profile)
 
@@ -180,7 +204,7 @@ namespace TelegArm.UI.Controls
 
         private List<ReactionChip> _reactions;
         private readonly List<KeyValuePair<string, Rectangle>> _reactionRects = new List<KeyValuePair<string, Rectangle>>();
-        private const int ReactionH = 26;   // reaction strip height (chips are ReactionH-6 tall)
+        private int ReactionH => P(26);   // reaction strip height (chips are ReactionH-6 tall)
 
         private bool HasReactions => _reactions != null && _reactions.Count > 0;
 
@@ -203,7 +227,7 @@ namespace TelegArm.UI.Controls
         private int _commentCount;
         private long _linkedChatId;              // linked discussion supergroup (stored for the later thread-open)
         private Rectangle _commentsRect;         // painted footer band → hit-test → CommentsClicked
-        private const int CommentH = 30;         // comments footer strip height (separator + one line)
+        private int CommentH => P(30);           // comments footer strip height (separator + one line)
         private bool HasComments => _hasComments;
 
         /// <summary>Raised when the comments footer is tapped: (post msg_id, linked discussion chat_id).</summary>
@@ -222,7 +246,7 @@ namespace TelegArm.UI.Controls
 
         // ── REPLIES-INBOX "View in chat" footer (display + tap-target only) ────────────────────────────────
         private Rectangle _viewInChatRect;       // painted bottom row → hit-test → ViewInChatClicked
-        private const int ViewInChatH = 30;      // "View in chat" row height (separator + one line + chevron)
+        private int ViewInChatH => P(30);        // "View in chat" row height (separator + one line + chevron)
         /// <summary>REPLIES-INBOX: show a bottom "View in chat ›" row on a Replies-inbox entry (tap → open the source thread).</summary>
         public bool ShowViewInChat { get; set; }
         private bool HasViewInChat => ShowViewInChat;
@@ -233,13 +257,14 @@ namespace TelegArm.UI.Controls
         public bool IsFile { get; set; }
         public string FileName { get; set; }
         public string FileSizeText { get; set; }
-        private const int FileCardW = 260, FileCardH = 72;
+        private int FileCardW => P(260);
+        private int FileCardH => P(72);
 
         // ── Inline photo support ─────────────────────────────────────────────
         public enum PhotoState { None, Placeholder, Loading, Loaded }
 
-        private const int MaxPhotoHeight = 360;   // max displayed photo height (taller portrait is cover-cropped)
-        private const int MaxThumbHeight = 280;   // max displayed video-thumbnail height
+        private int MaxPhotoHeight => P(360);   // max displayed photo height (taller portrait is cover-cropped)
+        private int MaxThumbHeight => P(280);   // max displayed video-thumbnail height
 
         private PhotoState _photoState = PhotoState.None;
         private int _photoW = 1, _photoH = 1;       // intrinsic photo dimensions
@@ -267,8 +292,9 @@ namespace TelegArm.UI.Controls
         private List<AlbumTile> _album;   // non-null → render a grid (photo/video) OR a row list (audio)
         private bool _albumAudio;         // true → render as a vertical audio row list
         private readonly List<KeyValuePair<int, Rectangle>> _albumTileRects = new List<KeyValuePair<int, Rectangle>>();
-        private const int AlbumGap = 3;
-        private const int AudioRowH = 56, AudioCircle = 44;   // one audio row + its circular cover button
+        private int AlbumGap => P(3);
+        private int AudioRowH => P(56);      // one audio row
+        private int AudioCircle => P(44);    // its circular cover button
         private int _albumAudioTick;      // progress-repaint throttle
         private bool _audioStateHooked;
 
@@ -369,7 +395,7 @@ namespace TelegArm.UI.Controls
             Invalidate();
         }
 
-        private static Rectangle AudioRowCircle(Rectangle rowRect)
+        private Rectangle AudioRowCircle(Rectangle rowRect)   // instance since step 3.2: AudioCircle is per-DPI
         {
             return new Rectangle(rowRect.X, rowRect.Y + (rowRect.Height - AudioCircle) / 2, AudioCircle, AudioCircle);
         }
@@ -410,12 +436,12 @@ namespace TelegArm.UI.Controls
             if (_useRich)
             {
                 using (var g = Graphics.FromHwnd(IntPtr.Zero))
-                { _rich.Measure(g, contentW, _textFont); _rich.Position(contentW, _rtl); return _rich.Height + 6; }
+                { _rich.Measure(g, contentW, TextFont); _rich.Position(contentW, _rtl); return _rich.Height + P(6); }
             }
             if (string.IsNullOrEmpty(_text)) return 0;
-            using (var g = Graphics.FromHwnd(IntPtr.Zero))
+            using (var g = Graphics.FromHwnd(IntPtr.Zero))   // pixel-unit fonts measure the same on any DC (step 3.2)
             using (var sf = MakeFormat())
-                return (int)Math.Ceiling(g.MeasureString(_text, _textFont, new SizeF(contentW, float.MaxValue), sf).Height) + 6;
+                return (int)Math.Ceiling(g.MeasureString(_text, TextFont, new SizeF(contentW, float.MaxValue), sf).Height) + P(6);
         }
 
         private void PaintAlbum(Graphics g)
@@ -435,7 +461,7 @@ namespace TelegArm.UI.Controls
             Color bubbleColor = _outgoing ? AccentColor : (ThemeHelper.PaletteFor(IsDark).BubbleIn);
             Color textColor = _outgoing ? Color.White : (ThemeHelper.PaletteFor(IsDark).BubbleInText);
             using (var b = new SolidBrush(bubbleColor))
-            using (var path = DrawHelper.RoundedRect(rect, 14))
+            using (var path = DrawHelper.RoundedRect(rect, P(14)))
                 g.FillPath(b, path);
 
             int innerX = bx + Pad;
@@ -452,7 +478,7 @@ namespace TelegArm.UI.Controls
                                            : (ThemeHelper.PaletteFor(IsDark).BubbleInSub);
                 for (int i = 0; i < n; i++)
                 {
-                    var rowRect = new Rectangle(innerX, ty + i * AudioRowH, contentW, AudioRowH - 4);
+                    var rowRect = new Rectangle(innerX, ty + i * AudioRowH, contentW, AudioRowH - P(4));
                     _albumTileRects.Add(new KeyValuePair<int, Rectangle>(_album[i].MessageId, rowRect));
                     DrawAudioRow(g, _album[i], rowRect, textColor, subColor);
                 }
@@ -466,11 +492,11 @@ namespace TelegArm.UI.Controls
                     int r = i / cols, c = i % cols;
                     var tr = new Rectangle(innerX + c * (tile + AlbumGap), ty + r * (tile + AlbumGap), tile, tile);
                     _albumTileRects.Add(new KeyValuePair<int, Rectangle>(_album[i].MessageId, tr));
-                    using (var pth = DrawHelper.RoundedRect(tr, 6))
+                    using (var pth = DrawHelper.RoundedRect(tr, P(6)))
                     {
                         var prev = g.Clip;
                         g.SetClip(pth);
-                        if (_album[i].Image != null) DrawFittedImage(g, _album[i].Image, tr, cover: true);
+                        if (_album[i].Image != null) DrawFittedImage(g, _album[i].Image, tr, P(8), cover: true);
                         else using (var fb = new SolidBrush(IsDark ? Color.FromArgb(70, 70, 74) : Color.FromArgb(208, 208, 212))) g.FillPath(fb, pth);
                         g.Clip = prev; prev.Dispose();
                     }
@@ -484,23 +510,23 @@ namespace TelegArm.UI.Controls
                 if (_useRich)
                 {
                     _richOrigin = new Point(innerX, ty);
-                    _rich.PaintCached(g, innerX, ty, textColor, LinkColor, _textFont, IsDark, AccentColor, _outgoing, bubbleColor);
+                    _rich.PaintCached(g, innerX, ty, textColor, LinkColor, TextFont, IsDark, AccentColor, _outgoing, bubbleColor);
                     PaintSelection(g, innerX, ty);   // translucent highlight OVER the opaque text bitmap
                 }
                 else using (var sf = MakeFormat())
                 using (var tb = new SolidBrush(textColor))
-                    g.DrawString(_text, _textFont, tb, new RectangleF(innerX, ty, contentW, captionH - 6), sf);
+                    g.DrawString(_text, TextFont, tb, new RectangleF(innerX, ty, contentW, captionH - P(6)), sf);
             }
 
             Color timeColor = _outgoing ? Color.FromArgb(220, 255, 255, 255)
                                         : (ThemeHelper.PaletteFor(IsDark).BubbleInTime);
             using (var timeSf = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Far })
             using (var tcb = new SolidBrush(timeColor))
-                g.DrawString(StampText(), _timeFont, tcb, new RectangleF(bx + Pad, by + bubbleH - TimeH, bubbleW - 2 * Pad, TimeH), timeSf);
-            DrawStatusGlyph(g, bx + Pad + 6, by + bubbleH - TimeH / 2f, timeColor);
+                g.DrawString(StampText(), TimeFont, tcb, new RectangleF(bx + Pad, by + bubbleH - TimeH, bubbleW - 2 * Pad, TimeH), timeSf);
+            DrawStatusGlyph(g, bx + Pad + P(6), by + bubbleH - TimeH / 2f, timeColor);
             DrawMetaExtras(g, new RectangleF(bx + Pad, by + bubbleH - TimeH, bubbleW - 2 * Pad, TimeH), timeColor);
 
-            DrawFooter(g, bx, by + bubbleH + 2, bubbleW);
+            DrawFooter(g, bx, by + bubbleH + P(2), bubbleW);
         }
 
         /// <summary>One audio-album row: circular cover/play-download button + title + "M:SS • size".</summary>
@@ -515,46 +541,49 @@ namespace TelegArm.UI.Controls
             bool downloading = t.Handle != null && t.Handle.State == DownloadHandle.DState.Downloading;
             bool paused = t.Handle != null && t.Handle.State == DownloadHandle.DState.Paused;
             if (downloading)
-                DrawHelper.DrawProgressRing(g, Rectangle.Inflate(circle, -3, -3), t.Handle.Fraction, Color.White, Color.FromArgb(120, 255, 255, 255), cancel: true);
+                DrawHelper.DrawProgressRing(g, Rectangle.Inflate(circle, -P(3), -P(3)), t.Handle.Fraction, Color.White, Color.FromArgb(120, 255, 255, 255), cancel: true);
             else if (paused)
             {
                 // Frozen ring + a play triangle = "tap to resume" (DOWNLOAD-UX 3.3; resume = fresh transfer).
-                DrawHelper.DrawProgressRing(g, Rectangle.Inflate(circle, -3, -3), t.Handle.Fraction, Color.White, Color.FromArgb(120, 255, 255, 255), cancel: false);
+                DrawHelper.DrawProgressRing(g, Rectangle.Inflate(circle, -P(3), -P(3)), t.Handle.Fraction, Color.White, Color.FromArgb(120, 255, 255, 255), cancel: false);
+                float k = circle.Width / 44f;   // drawn for the 44 px circle; scales with it
                 float cx = circle.X + circle.Width / 2f, cy = circle.Y + circle.Height / 2f;
                 using (var wb = new SolidBrush(Color.White))
-                    g.FillPolygon(wb, new[] { new PointF(cx - 4, cy - 6), new PointF(cx + 6, cy), new PointF(cx - 4, cy + 6) });
+                    g.FillPolygon(wb, new[] { new PointF(cx - 4 * k, cy - 6 * k), new PointF(cx + 6 * k, cy), new PointF(cx - 4 * k, cy + 6 * k) });
             }
             else
                 DrawAudioRowGlyph(g, circle, t);
 
-            int tx = circle.Right + 10;
+            int tx = circle.Right + P(10);
             int tw = rowRect.Right - tx;
             var tf = (_rtl ? TextFormatFlags.Right : TextFormatFlags.Left) | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix;
-            TextRenderer.DrawText(g, t.Title ?? "Audio", _senderFont, new Rectangle(tx, rowRect.Y + 7, tw, 20), fg, tf | TextFormatFlags.EndEllipsis);
-            TextRenderer.DrawText(g, t.Sub ?? "", _timeFont, new Rectangle(tx, rowRect.Y + 29, tw, 16), sub, tf);
+            TextRenderer.DrawText(g, t.Title ?? "Audio", SenderFont, new Rectangle(tx, rowRect.Y + P(7), tw, P(20)), fg, tf | TextFormatFlags.EndEllipsis);
+            TextRenderer.DrawText(g, t.Sub ?? "", TimeFont, new Rectangle(tx, rowRect.Y + P(29), tw, P(16)), sub, tf);
         }
 
+        /// <summary>Drawn for the 44 px circle; scales with it.</summary>
         private void DrawAudioRowGlyph(Graphics g, Rectangle circle, AlbumTile t)
         {
+            float k = circle.Width / 44f;
             float cx = circle.X + circle.Width / 2f, cy = circle.Y + circle.Height / 2f;
             using (var wb = new SolidBrush(Color.White))
-            using (var pen = new Pen(Color.White, 2.4f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            using (var pen = new Pen(Color.White, 2.4f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round })
             {
                 if (!t.Cached)   // download arrow
                 {
-                    g.DrawLine(pen, cx, cy - 7, cx, cy + 4);
-                    g.DrawLine(pen, cx - 5, cy - 1, cx, cy + 4);
-                    g.DrawLine(pen, cx + 5, cy - 1, cx, cy + 4);
-                    g.DrawLine(pen, cx - 6, cy + 8, cx + 6, cy + 8);
+                    g.DrawLine(pen, cx, cy - 7 * k, cx, cy + 4 * k);
+                    g.DrawLine(pen, cx - 5 * k, cy - 1 * k, cx, cy + 4 * k);
+                    g.DrawLine(pen, cx + 5 * k, cy - 1 * k, cx, cy + 4 * k);
+                    g.DrawLine(pen, cx - 6 * k, cy + 8 * k, cx + 6 * k, cy + 8 * k);
                 }
                 else if (AudioPlayer.IsPlayingId(t.DocId))   // pause
                 {
-                    g.FillRectangle(wb, cx - 5, cy - 7, 3.6f, 14);
-                    g.FillRectangle(wb, cx + 1.4f, cy - 7, 3.6f, 14);
+                    g.FillRectangle(wb, cx - 5 * k, cy - 7 * k, 3.6f * k, 14 * k);
+                    g.FillRectangle(wb, cx + 1.4f * k, cy - 7 * k, 3.6f * k, 14 * k);
                 }
                 else   // play
                 {
-                    g.FillPolygon(wb, new[] { new PointF(cx - 5, cy - 8), new PointF(cx + 8, cy), new PointF(cx - 5, cy + 8) });
+                    g.FillPolygon(wb, new[] { new PointF(cx - 5 * k, cy - 8 * k), new PointF(cx + 8 * k, cy), new PointF(cx - 5 * k, cy + 8 * k) });
                 }
             }
         }
@@ -619,7 +648,7 @@ namespace TelegArm.UI.Controls
             int cardW = Math.Min(FileCardW, MaxInnerWidth + 2 * Pad);
             int bx = _outgoing ? Width - cardW - SideGap : SideGap + LeftInset;
             int top = VMargin + FwdBlockH + ReplyBlockH;
-            return new Rectangle(bx + 12, top + 12, 48, 48);
+            return new Rectangle(bx + P(12), top + P(12), P(48), P(48));
         }
 
         private void StartFileDownload()
@@ -708,13 +737,22 @@ namespace TelegArm.UI.Controls
         // ── Link-preview card (MessageMediaWebPage) ──────────────────────────
         // A web-page preview stacked BELOW the message text (like a quote block): accent bar +
         // site/title/description + a small thumbnail. Tapping the card opens the URL.
-        private const int CardBar = 3, CardPad = 8, CardGap = 6, CardThumb = 56, CardTopGap = 4;
+        private int CardBar => P(3);
+        private int CardPad => P(8);
+        private int CardGap => P(6);
+        private int CardThumb => P(56);
+        private int CardTopGap => P(4);
         private bool _hasCard, _cardHasThumb;
         private string _cardSite, _cardTitle, _cardDesc, _cardUrl;
         private Image _cardThumb;                 // referenced — MainForm's thumb cache owns it
         private Rectangle _cardRect;              // painted card area (hit-test → open url)
         private int _cardHeight, _cardTextColW, _cardSiteH, _cardTitleH, _cardDescH;
-        private Font _cardTitleFont, _cardDescFont, _cardSiteFont;
+        // Shared per-DPI card fonts (step 3.2: never disposed). They used to be made once in SetLinkPreview from _rtl;
+        // only an album caption (SetCaption) ever changes _rtl after the ctor, and albums carry no card, so the
+        // built script is the same value.
+        private Font CardTitleFont => _builtRtl ? FontHelper.PersianAt(11f, CurDpi, FontStyle.Bold) : FontHelper.UiAt(9f, CurDpi, FontStyle.Bold);
+        private Font CardDescFont => _builtRtl ? FontHelper.PersianAt(10.5f, CurDpi) : FontHelper.UiAt(8.5f, CurDpi);
+        private Font CardSiteFont => _builtRtl ? FontHelper.PersianAt(9.5f, CurDpi, FontStyle.Bold) : FontHelper.UiAt(8f, CurDpi, FontStyle.Bold);
 
         /// <summary>Attaches a web-page link preview (rendered as a card under the text). url empty = no card.</summary>
         public void SetLinkPreview(string site, string title, string desc, string url, bool hasThumb)
@@ -722,12 +760,6 @@ namespace TelegArm.UI.Controls
             _cardSite = site; _cardTitle = title; _cardDesc = desc; _cardUrl = url; _cardHasThumb = hasThumb;
             _hasCard = !string.IsNullOrEmpty(url) &&
                        (hasThumb || !string.IsNullOrEmpty(site) || !string.IsNullOrEmpty(title) || !string.IsNullOrEmpty(desc));
-            if (_hasCard && _cardTitleFont == null)
-            {
-                _cardTitleFont = _rtl ? FontHelper.Persian(11f, FontStyle.Bold) : FontHelper.Ui(9f, FontStyle.Bold);
-                _cardDescFont = _rtl ? FontHelper.Persian(10.5f) : FontHelper.Ui(8.5f);
-                _cardSiteFont = _rtl ? FontHelper.Persian(9.5f, FontStyle.Bold) : FontHelper.Ui(8f, FontStyle.Bold);
-            }
             Measure();
             if (!IsDisposed) Invalidate();
         }
@@ -742,7 +774,7 @@ namespace TelegArm.UI.Controls
                         ((entities != null && entities.Length > 0) || EmojiRenderer.ContainsEmoji(_text));
             _rich?.Dispose();
             _useRich = need;
-            _rich = need ? new InlineText(_text, entities, CustomEmojiResolver) : null;
+            _rich = need ? new InlineText(_text, entities, CustomEmojiResolver) { LayoutDpi = CurDpi } : null;   // step 3.2: its pixel font's DPI
             _sel?.Attach(_rich);   // rebind the selection engine to the new InlineText (clears any selection)
             Measure();
             if (!IsDisposed) Invalidate();
@@ -763,11 +795,8 @@ namespace TelegArm.UI.Controls
             bool newRtl = IsRtl(_text);
             if (newRtl != _rtl)
             {
-                _rtl = newRtl;
+                _rtl = newRtl;   // TextFont follows _rtl (shared fonts — nothing to swap or dispose, step 3.2)
                 RightToLeft = _rtl ? RightToLeft.Yes : RightToLeft.No;
-                var old = _textFont;
-                _textFont = _rtl ? FontHelper.Persian(12f) : FontHelper.Ui(9.75f);
-                if (old != null) old.Dispose();
             }
             SetEntities(entities);   // rebuilds _useRich/_rich from _text + entities → Measure + Invalidate
         }
@@ -826,11 +855,13 @@ namespace TelegArm.UI.Controls
         /// </summary>
         private void GetMediaLayout(out int contentW, out int dispW, out int dispH)
         {
-            int natW = Math.Max(1, _photoW), natH = Math.Max(1, _photoH);
+            // Step 3.2: the natural size is LOGICAL (a photo keeps its physical size at any DPI), as is the sticker box.
+            int natW = Math.Max(1, P(_photoW)), natH = Math.Max(1, P(_photoH));
 
             if (IsSticker)
             {
-                double s = Math.Min(160.0 / natW, 160.0 / natH);
+                double box = P(160);
+                double s = Math.Min(box / natW, box / natH);
                 if (s > 1) s = 1;
                 dispW = Math.Max(1, (int)(natW * s));
                 dispH = Math.Max(1, (int)(natH * s));
@@ -1000,17 +1031,47 @@ namespace TelegArm.UI.Controls
             _outgoing = outgoing;
             _date = date;
             _rtl = IsRtl(_text);
+            _builtRtl = _rtl;
             if (_rtl) RightToLeft = RightToLeft.Yes;
-
-            _textFont = _rtl ? FontHelper.Persian(12f) : FontHelper.Ui(9.75f);
-            _senderFont = _rtl ? FontHelper.Persian(10.5f, FontStyle.Bold) : FontHelper.Ui(8.5f, FontStyle.Bold);
-            _timeFont = FontHelper.Ui(7.5f);
-            _replyFont = _rtl ? FontHelper.Persian(10f) : FontHelper.Ui(8.25f);
+            // (Fonts are the TextFont/SenderFont/TimeFont/ReplyFont properties: shared, per-DPI — step 3.2.)
 
             Margin = new Padding(0);
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer
                      | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
             _sel = new InlineTextSelection(this);
+        }
+
+        /// <summary>Step 3.2 — bubbles are built (and measured) before they are added: adopt the window's DPI once
+        /// parented, re-measuring only if it differs from the DPI the bubble was measured at (no extra measure per
+        /// bubble in the normal case, where CreateBubble already set LayoutDpi).</summary>
+        protected override void OnParentChanged(EventArgs e)
+        {
+            base.OnParentChanged(e);
+            if (Parent == null) return;
+            int d = Dpi.Of(this);
+            if (d == _dpi) return;
+            int was = CurDpi;   // what fonts + metrics used so far (the default DPI while _dpi was 0)
+            _dpi = d;
+            SyncRichDpi();
+            if (d != was) { Measure(); Invalidate(); }
+        }
+
+        void IDpiAware.OnDpiChanged(int oldDpi, int newDpi)
+        {
+            _dpi = newDpi;     // the fonts and every metric follow CurDpi from here on
+            SyncRichDpi();     // the InlineText layout was measured at the old DPI: drop it
+            // NOT Measure(): DpiScaler has ratio-scaled Height already, and the host's deferred relayout pass measures
+            // every bubble once (step 3.4) — measuring here too would double the Tegra 3 cost of a DPI change.
+            Invalidate();
+        }
+
+        /// <summary>Hands the inline engine the bubble's DPI (its pixel-unit fonts' points and its own lengths) and
+        /// drops its cached layout + bitmap, so the next measure/paint lays out afresh at that DPI.</summary>
+        private void SyncRichDpi()
+        {
+            if (_rich == null) return;
+            int d = CurDpi;
+            if (_rich.LayoutDpi != d) { _rich.LayoutDpi = d; _rich.InvalidateLayout(); }
         }
 
         // ── Within-bubble text selection (shared engine over _rich) ──────────────────────────────
@@ -1094,16 +1155,16 @@ namespace TelegArm.UI.Controls
             int maxInner = MaxInnerWidth;
 
             int longest = _useRich
-                ? _rich.Measure(g, maxInner, _textFont)
-                : (int)Math.Ceiling(g.MeasureString(_text, _textFont, new SizeF(maxInner, float.MaxValue), sf).Width);
+                ? _rich.Measure(g, maxInner, TextFont)
+                : (int)Math.Ceiling(g.MeasureString(_text, TextFont, new SizeF(maxInner, float.MaxValue), sf).Width);
 
             int senderW = 0;
             if (_sender != null)
             {
-                var sm = g.MeasureString(_sender, _senderFont, new SizeF(maxInner, float.MaxValue), sf);
+                var sm = g.MeasureString(_sender, SenderFont, new SizeF(maxInner, float.MaxValue), sf);
                 senderW = (int)Math.Ceiling(sm.Width);
                 if (!string.IsNullOrEmpty(_adminRole))   // CHANNEL-META-EXTRAS (3): name + role share the top row
-                    senderW += (int)Math.Ceiling(g.MeasureString(_adminRole, _timeFont).Width) + 10;
+                    senderW += (int)Math.Ceiling(g.MeasureString(_adminRole, TimeFont).Width) + P(10);
             }
 
             // The timestamp is painted inside the bubble, so the bubble must be wide
@@ -1114,15 +1175,15 @@ namespace TelegArm.UI.Controls
             if (HasReply)
             {
                 replyW = (int)Math.Ceiling(
-                    g.MeasureString(ReplyPreview, _replyFont, new SizeF(maxInner, ReplyH), sf).Width) + 12;
+                    g.MeasureString(ReplyPreview, ReplyFont, new SizeF(maxInner, ReplyH), sf).Width) + P(12);
                 if (HasReplySender)
                     replyW = Math.Max(replyW, (int)Math.Ceiling(
-                        g.MeasureString(ReplySender, _replyFont, new SizeF(maxInner, ReplyNameH), sf).Width) + 12);
+                        g.MeasureString(ReplySender, ReplyFont, new SizeF(maxInner, ReplyNameH), sf).Width) + P(12));
             }
 
             int fwdW = HasForward
-                ? (int)Math.Ceiling(g.MeasureString("Forwarded from " + ForwardedFrom, _replyFont,
-                    new SizeF(maxInner, FwdH), sf).Width) + 4
+                ? (int)Math.Ceiling(g.MeasureString("Forwarded from " + ForwardedFrom, ReplyFont,
+                    new SizeF(maxInner, FwdH), sf).Width) + P(4)
                 : 0;
 
             int minInner = MinBubbleWidth - 2 * Pad;       // floor from min bubble width
@@ -1142,8 +1203,9 @@ namespace TelegArm.UI.Controls
             }
             else
             {
-                // Re-measure height at the final content width (+1px slack to avoid rewrap).
-                var fit = g.MeasureString(_text, _textFont, new SizeF(contentW + 1, float.MaxValue), sf);
+                // Re-measure height at the final content width (+1px slack to avoid rewrap; a rounding guard, not a
+                // length — it stays 1 at every DPI, step 3.2).
+                var fit = g.MeasureString(_text, TextFont, new SizeF(contentW + 1, float.MaxValue), sf);
                 textH = (int)Math.Ceiling(fit.Height);
             }
 
@@ -1156,8 +1218,15 @@ namespace TelegArm.UI.Controls
         }
 
         // ── Interactive layer: polls + inline keyboards (shared row/cell render + hit-test) ──────────
-        private const int PollLabelH = 16, PollOptRowH = 44, PollVoteRowH = 38, PollFooterH = 20, PollQGap = 6, PollOptGap = 6;
-        private const int KbRowH = 38, KbGap = 5, KbTopGap = 4;
+        private int PollLabelH => P(16);
+        private int PollOptRowH => P(44);
+        private int PollVoteRowH => P(38);
+        private int PollFooterH => P(20);
+        private int PollQGap => P(6);
+        private int PollOptGap => P(6);
+        private int KbRowH => P(38);
+        private int KbGap => P(5);
+        private int KbTopGap => P(4);
 
         public enum KbKind { Callback, Url, SwitchInline, UrlAuth, Unsupported }
         public sealed class KbButtonVM { public string Label; public KbKind Kind; public byte[] Data; public string Url; public string Query; public bool SamePeer; }
@@ -1220,12 +1289,12 @@ namespace TelegArm.UI.Controls
         /// used by BOTH Measure and PaintPoll so painted and measured heights always agree.</summary>
         private int PollContentHeight(int contentW)
         {
-            int h = PollLabelH + MeasureWrapped(_pollQuestion, _senderFont, contentW) + PollQGap;
+            int h = PollLabelH + MeasureWrapped(_pollQuestion, SenderFont, contentW) + PollQGap;
             h += _pollOptions.Count * (PollOptRowH + PollOptGap);
             if (_pollMultiple && !_pollResults) h += PollVoteRowH + PollOptGap;
             if (PollRetractable()) h += PollVoteRowH;
             if (_pollQuiz && _pollResults && !string.IsNullOrEmpty(_pollSolution))
-                h += MeasureWrapped(_pollSolution, _timeFont, contentW) + 4;
+                h += MeasureWrapped(_pollSolution, TimeFont, contentW) + P(4);
             h += PollFooterH;
             return h;
         }
@@ -1245,7 +1314,7 @@ namespace TelegArm.UI.Controls
             Color fg = _outgoing ? Color.White : (ThemeHelper.PaletteFor(IsDark).BubbleInText);
             Color sub = _outgoing ? Color.FromArgb(210, 255, 255, 255) : (ThemeHelper.PaletteFor(IsDark).BubbleInSub);
             using (var b = new SolidBrush(bubbleColor))
-            using (var path = DrawHelper.RoundedRect(rect, 14))
+            using (var path = DrawHelper.RoundedRect(rect, P(14)))
                 g.FillPath(b, path);
 
             int innerX = bx + Pad, ty = by + Pad;
@@ -1256,11 +1325,11 @@ namespace TelegArm.UI.Controls
             var tf = (_rtl ? TextFormatFlags.Right : TextFormatFlags.Left) | TextFormatFlags.NoPrefix;
 
             string typeLabel = _pollClosed ? "Final results" : (_pollQuiz ? "Quiz" : (_pollPublic ? "Poll" : "Anonymous Poll"));
-            TextRenderer.DrawText(g, typeLabel, _timeFont, new Rectangle(innerX, ty, contentW, PollLabelH), sub, tf);
+            TextRenderer.DrawText(g, typeLabel, TimeFont, new Rectangle(innerX, ty, contentW, PollLabelH), sub, tf);
             ty += PollLabelH;
 
-            int qh = MeasureWrapped(_pollQuestion, _senderFont, contentW);
-            TextRenderer.DrawText(g, _pollQuestion ?? "", _senderFont, new Rectangle(innerX, ty, contentW, qh), fg, tf | TextFormatFlags.WordBreak);
+            int qh = MeasureWrapped(_pollQuestion, SenderFont, contentW);
+            TextRenderer.DrawText(g, _pollQuestion ?? "", SenderFont, new Rectangle(innerX, ty, contentW, qh), fg, tf | TextFormatFlags.WordBreak);
             ty += qh + PollQGap;
 
             _pollRects.Clear();
@@ -1283,92 +1352,95 @@ namespace TelegArm.UI.Controls
             else if (PollRetractable())
             {
                 _pollRetractRect = new Rectangle(innerX, ty, contentW, PollVoteRowH);
-                TextRenderer.DrawText(g, "Retract vote", _timeFont, _pollRetractRect, _outgoing ? Color.White : AccentColor,
+                TextRenderer.DrawText(g, "Retract vote", TimeFont, _pollRetractRect, _outgoing ? Color.White : AccentColor,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
                 ty += PollVoteRowH;
             }
 
             if (_pollQuiz && _pollResults && !string.IsNullOrEmpty(_pollSolution))
             {
-                int sh = MeasureWrapped(_pollSolution, _timeFont, contentW);
-                TextRenderer.DrawText(g, _pollSolution, _timeFont, new Rectangle(innerX, ty, contentW, sh), sub, tf | TextFormatFlags.WordBreak);
-                ty += sh + 4;
+                int sh = MeasureWrapped(_pollSolution, TimeFont, contentW);
+                TextRenderer.DrawText(g, _pollSolution, TimeFont, new Rectangle(innerX, ty, contentW, sh), sub, tf | TextFormatFlags.WordBreak);
+                ty += sh + P(4);
             }
 
             string footer = _pollTotal <= 0 ? "No votes yet"
                 : (_pollTotal + (_pollMultiple ? (_pollTotal == 1 ? " answer" : " answers") : (_pollTotal == 1 ? " voter" : " voters")));
-            TextRenderer.DrawText(g, footer, _timeFont, new Rectangle(innerX, ty, contentW, PollFooterH), sub, tf);
+            TextRenderer.DrawText(g, footer, TimeFont, new Rectangle(innerX, ty, contentW, PollFooterH), sub, tf);
 
             Color timeColor = _outgoing ? Color.FromArgb(220, 255, 255, 255) : (ThemeHelper.PaletteFor(IsDark).BubbleInTime);
             using (var timeSf = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Far })
             using (var tcb = new SolidBrush(timeColor))
-                g.DrawString(StampText(), _timeFont, tcb, new RectangleF(bx + Pad, by + bodyH - TimeH, bubbleW - 2 * Pad, TimeH), timeSf);
-            DrawStatusGlyph(g, bx + Pad + 6, by + bodyH - TimeH / 2f, timeColor);
+                g.DrawString(StampText(), TimeFont, tcb, new RectangleF(bx + Pad, by + bodyH - TimeH, bubbleW - 2 * Pad, TimeH), timeSf);
+            DrawStatusGlyph(g, bx + Pad + P(6), by + bodyH - TimeH / 2f, timeColor);
             DrawMetaExtras(g, new RectangleF(bx + Pad, by + bodyH - TimeH, bubbleW - 2 * Pad, TimeH), timeColor);
 
-            DrawFooter(g, bx, by + bodyH + 2, bubbleW);
+            DrawFooter(g, bx, by + bodyH + P(2), bubbleW);
         }
 
         private void DrawPollOption(Graphics g, Rectangle rect, PollOptionVM opt, Color fg, Color sub)
         {
             int pct = (_pollResults && _pollTotal > 0) ? (int)Math.Round(opt.Voters * 100.0 / _pollTotal) : 0;
             using (var bg = new SolidBrush(_outgoing ? Color.FromArgb(40, 255, 255, 255) : (IsDark ? Color.FromArgb(74, 74, 78) : Color.FromArgb(236, 236, 238))))
-            using (var p = DrawHelper.RoundedRect(rect, 9))
+            using (var p = DrawHelper.RoundedRect(rect, P(9)))
                 g.FillPath(bg, p);
 
             if (_pollResults)   // proportional result bar
             {
                 int barW = Math.Max(0, (int)(rect.Width * Math.Min(1f, pct / 100f)));
-                if (barW > 4)
+                if (barW > P(4))
                 {
                     Color barCol = opt.Correct ? Color.FromArgb(120, 76, 175, 80) : Color.FromArgb(110, AccentColor);
                     var br = new Rectangle(rect.X, rect.Y, barW, rect.Height);
                     using (var bb = new SolidBrush(barCol))
-                    using (var bp = DrawHelper.RoundedRect(br, 9))
+                    using (var bp = DrawHelper.RoundedRect(br, P(9)))
                         g.FillPath(bb, bp);
                 }
             }
 
             var tf = (_rtl ? TextFormatFlags.Right : TextFormatFlags.Left) | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
-            int lx = rect.X + 12, lw = rect.Width - 24;
-            if (_pollResults) { lw -= 44; }                                  // room for the % on the right
-            else if (_pollMultiple) { lx += 26; lw -= 26; }                  // room for the checkbox on the left
+            int lx = rect.X + P(12), lw = rect.Width - P(24);
+            if (_pollResults) { lw -= P(44); }                               // room for the % on the right
+            else if (_pollMultiple) { lx += P(26); lw -= P(26); }            // room for the checkbox on the left
 
             if (!_pollResults && _pollMultiple)   // pre-vote checkbox
             {
-                var cb = new Rectangle(rect.X + 12, rect.Y + (rect.Height - 18) / 2, 18, 18);
+                int cbD = P(18);
+                var cb = new Rectangle(rect.X + P(12), rect.Y + (rect.Height - cbD) / 2, cbD, cbD);
                 bool sel = _pollSelected.Contains(opt.Option);
-                using (var pen = new Pen(sel ? AccentColor : sub, 1.8f)) g.DrawEllipse(pen, cb);
-                if (sel) using (var fb = new SolidBrush(AccentColor)) g.FillEllipse(fb, Rectangle.Inflate(cb, -4, -4));
+                using (var pen = new Pen(sel ? AccentColor : sub, Dpi.F(1.8f, CurDpi))) g.DrawEllipse(pen, cb);
+                if (sel) using (var fb = new SolidBrush(AccentColor)) g.FillEllipse(fb, Rectangle.Inflate(cb, -P(4), -P(4)));
             }
 
-            TextRenderer.DrawText(g, opt.Text ?? "", _textFont, new Rectangle(lx, rect.Y, lw, rect.Height), fg, tf);
+            TextRenderer.DrawText(g, opt.Text ?? "", TextFont, new Rectangle(lx, rect.Y, lw, rect.Height), fg, tf);
 
             if (_pollResults)
             {
-                TextRenderer.DrawText(g, pct + "%", _timeFont, new Rectangle(rect.Right - 44, rect.Y, 38, rect.Height), fg,
+                float k = Dpi.F(1f, CurDpi);
+                TextRenderer.DrawText(g, pct + "%", TimeFont, new Rectangle(rect.Right - P(44), rect.Y, P(38), rect.Height), fg,
                     TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
-                if (_pollQuiz && opt.Correct) DrawTick(g, rect.Right - 60, rect.Y + rect.Height / 2, Color.FromArgb(76, 175, 80), true);
-                else if (_pollQuiz && opt.Chosen && !opt.Correct) DrawTick(g, rect.Right - 60, rect.Y + rect.Height / 2, Color.FromArgb(229, 57, 53), false);
-                else if (opt.Chosen) DrawTick(g, rect.Right - 60, rect.Y + rect.Height / 2, _outgoing ? Color.White : AccentColor, true);
+                if (_pollQuiz && opt.Correct) DrawTick(g, rect.Right - P(60), rect.Y + rect.Height / 2, Color.FromArgb(76, 175, 80), true, k);
+                else if (_pollQuiz && opt.Chosen && !opt.Correct) DrawTick(g, rect.Right - P(60), rect.Y + rect.Height / 2, Color.FromArgb(229, 57, 53), false, k);
+                else if (opt.Chosen) DrawTick(g, rect.Right - P(60), rect.Y + rect.Height / 2, _outgoing ? Color.White : AccentColor, true, k);
             }
         }
 
-        private static void DrawTick(Graphics g, int cx, int cy, Color c, bool check)
+        /// <summary>Drawn at 96-DPI sizes; <paramref name="k"/> = dpi / 96 scales it.</summary>
+        private static void DrawTick(Graphics g, int cx, int cy, Color c, bool check, float k)
         {
-            using (var pen = new Pen(c, 2.2f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            using (var pen = new Pen(c, 2.2f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round })
             {
-                if (check) { g.DrawLine(pen, cx - 5, cy, cx - 1, cy + 4); g.DrawLine(pen, cx - 1, cy + 4, cx + 6, cy - 4); }
-                else { g.DrawLine(pen, cx - 5, cy - 5, cx + 5, cy + 5); g.DrawLine(pen, cx + 5, cy - 5, cx - 5, cy + 5); }
+                if (check) { g.DrawLine(pen, cx - 5 * k, cy, cx - 1 * k, cy + 4 * k); g.DrawLine(pen, cx - 1 * k, cy + 4 * k, cx + 6 * k, cy - 4 * k); }
+                else { g.DrawLine(pen, cx - 5 * k, cy - 5 * k, cx + 5 * k, cy + 5 * k); g.DrawLine(pen, cx + 5 * k, cy - 5 * k, cx - 5 * k, cy + 5 * k); }
             }
         }
 
         private void DrawPillButton(Graphics g, Rectangle rect, string label, Color fill, Color text, bool dim)
         {
             using (var b = new SolidBrush(dim ? Color.FromArgb(90, fill) : fill))
-            using (var p = DrawHelper.RoundedRect(rect, 9))
+            using (var p = DrawHelper.RoundedRect(rect, P(9)))
                 g.FillPath(b, p);
-            TextRenderer.DrawText(g, label, _senderFont, rect, text,
+            TextRenderer.DrawText(g, label, SenderFont, rect, text,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
         }
 
@@ -1388,8 +1460,8 @@ namespace TelegArm.UI.Controls
         private int ViewInChatWidth(Graphics g)
         {
             if (!HasViewInChat) return 0;
-            int textW = TextRenderer.MeasureText(g, "View in chat", _senderFont).Width;
-            return CmtPadL + textW + CmtGap + 12 + CmtPadR + 2;   // pad + text + gap + chevron + pad + slack
+            int textW = TextRenderer.MeasureText(g, "View in chat", SenderFont).Width;
+            return CmtPadL + textW + CmtGap + P(12) + CmtPadR + P(2);   // pad + text + gap + chevron + pad + slack
         }
 
         /// <summary>REPLIES-INBOX: a full-width bottom row "View in chat ›" (accent, subtle top separator, chevron on
@@ -1402,9 +1474,9 @@ namespace TelegArm.UI.Controls
             var band = new Rectangle(bx, y, bandW, ViewInChatH);
             _viewInChatRect = band;
             Color sep = IsDark ? Color.FromArgb(46, 255, 255, 255) : Color.FromArgb(30, 0, 0, 0);
-            using (var sp = new Pen(sep)) g.DrawLine(sp, band.Left + 2, band.Top, band.Right - 2, band.Top);
+            using (var sp = new Pen(sep)) g.DrawLine(sp, band.Left + P(2), band.Top, band.Right - P(2), band.Top);   // hairline: stays 1 px
             const string label = "View in chat";
-            const int chevW = 12;
+            int chevW = P(12);
             var flags = TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis;
             if (_rtl)
             {
@@ -1412,7 +1484,7 @@ namespace TelegArm.UI.Controls
                 DrawChevron(g, chevRect, AccentColor, true);
                 var textRect = new Rectangle(chevRect.Right + CmtGap, band.Top,
                     band.Right - CmtPadR - (chevRect.Right + CmtGap), ViewInChatH);
-                TextRenderer.DrawText(g, label, _senderFont, textRect, AccentColor, flags | TextFormatFlags.Right);
+                TextRenderer.DrawText(g, label, SenderFont, textRect, AccentColor, flags | TextFormatFlags.Right);
             }
             else
             {
@@ -1420,18 +1492,22 @@ namespace TelegArm.UI.Controls
                 DrawChevron(g, chevRect, AccentColor, false);
                 var textRect = new Rectangle(band.Left + CmtPadL, band.Top,
                     chevRect.Left - CmtGap - (band.Left + CmtPadL), ViewInChatH);
-                TextRenderer.DrawText(g, label, _senderFont, textRect, AccentColor, flags | TextFormatFlags.Left);
+                TextRenderer.DrawText(g, label, SenderFont, textRect, AccentColor, flags | TextFormatFlags.Left);
             }
         }
 
-        /// <summary>A small chevron (› LTR / ‹ RTL) drawn as two strokes — no font glyph (RT-safe).</summary>
+        /// <summary>A small chevron (› LTR / ‹ RTL) drawn as two strokes — no font glyph (RT-safe). Drawn for a 12 px
+        /// wide box; scales with it (integer points, as before, so 96 DPI is unchanged).</summary>
         private static void DrawChevron(Graphics g, Rectangle r, Color c, bool pointLeft)
         {
+            float k = r.Width / 12f;
+            int S(int v) => (int)Math.Round(v * k, MidpointRounding.AwayFromZero);
+            int i3 = S(3), i5 = S(5), i6 = S(6);
             int cy = r.Y + r.Height / 2;
-            int cx = pointLeft ? r.Right - 3 : r.Left + 3;
-            int dx = pointLeft ? -6 : 6;
-            using (var pen = new Pen(c, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
-                g.DrawLines(pen, new[] { new Point(cx, cy - 5), new Point(cx + dx, cy), new Point(cx, cy + 5) });
+            int cx = pointLeft ? r.Right - i3 : r.Left + i3;
+            int dx = pointLeft ? -i6 : i6;
+            using (var pen = new Pen(c, 2f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+                g.DrawLines(pen, new[] { new Point(cx, cy - i5), new Point(cx + dx, cy), new Point(cx, cy + i5) });
         }
 
         // COMMENTS-INDICATOR: "N comments / Leave a comment" strip under a broadcast post — GDI+ speech-bubble glyph
@@ -1439,16 +1515,19 @@ namespace TelegArm.UI.Controls
         // Records _commentsRect for the tap target; resets it to empty when the footer is absent.
         // COMMENTS-FIT-v2: ONE shared source for the footer's paint metrics + label, so the width RESERVED in
         // ComputeLayout and the width PAINTED here can never diverge (the #1 cause of "reserved but still clips").
-        private const int CmtGlyphW = 16, CmtPadL = 6, CmtGap = 6, CmtPadR = 6;
+        private int CmtGlyphW => P(16);
+        private int CmtPadL => P(6);
+        private int CmtGap => P(6);
+        private int CmtPadR => P(6);
         private string CommentLabel() => _commentCount > 0 ? (_commentCount == 1 ? "1 comment" : _commentCount + " comments") : "Leave a comment";
 
         /// <summary>The bubble width the comments footer needs to paint its label without clipping — measured with the
-        /// SAME font (_senderFont), glyph width and paddings DrawCommentsFooter paints with. Guarantee: bubbleW >= this.</summary>
+        /// SAME font (SenderFont), glyph width and paddings DrawCommentsFooter paints with. Guarantee: bubbleW >= this.</summary>
         private int CommentsFooterWidth(Graphics g)
         {
             if (!HasComments) return 0;
-            int textW = TextRenderer.MeasureText(g, CommentLabel(), _senderFont).Width;   // default padding ≈ DrawText's
-            return CmtPadL + CmtGlyphW + CmtGap + textW + CmtPadR + 2;   // +2 slack vs measure/paint padding
+            int textW = TextRenderer.MeasureText(g, CommentLabel(), SenderFont).Width;   // default padding ≈ DrawText's
+            return CmtPadL + CmtGlyphW + CmtGap + textW + CmtPadR + P(2);   // +2 slack vs measure/paint padding
         }
 
         private void DrawCommentsFooter(Graphics g, int bx, int y, int bubbleW)
@@ -1461,9 +1540,10 @@ namespace TelegArm.UI.Controls
             var band = new Rectangle(bx, y, bandW, CommentH);
             _commentsRect = band;
             Color sep = IsDark ? Color.FromArgb(46, 255, 255, 255) : Color.FromArgb(30, 0, 0, 0);
-            using (var sp = new Pen(sep)) g.DrawLine(sp, band.Left + 2, band.Top, band.Right - 2, band.Top);
+            using (var sp = new Pen(sep)) g.DrawLine(sp, band.Left + P(2), band.Top, band.Right - P(2), band.Top);   // hairline: stays 1 px
             string label = CommentLabel();
-            var gRect = new Rectangle(0, band.Top + (CommentH - 13) / 2, CmtGlyphW, 13);
+            int glyphH = P(13);
+            var gRect = new Rectangle(band.Left, band.Top + (CommentH - glyphH) / 2, CmtGlyphW, glyphH);   // X is set below
             var flags = TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix;
             Rectangle textRect;
             if (_rtl)
@@ -1479,19 +1559,23 @@ namespace TelegArm.UI.Controls
                 flags |= TextFormatFlags.Left;
             }
             DrawCommentGlyph(g, gRect, AccentColor);
-            TextRenderer.DrawText(g, label, _senderFont, textRect, AccentColor, flags);
+            TextRenderer.DrawText(g, label, SenderFont, textRect, AccentColor, flags);
         }
 
-        // A small speech-bubble glyph, GDI+-drawn (cross-OS: never an emoji-font codepoint).
+        // A small speech-bubble glyph, GDI+-drawn (cross-OS: never an emoji-font codepoint). Drawn for a 16 x 13 box;
+        // scales with it (integer offsets, as before, so 96 DPI is unchanged).
         private void DrawCommentGlyph(Graphics g, Rectangle r, Color c)
         {
-            var body = new Rectangle(r.X, r.Y, r.Width, r.Height - 3);
-            using (var p = new Pen(c, 1.4f))
-            using (var path = DrawHelper.RoundedRect(body, 3))
+            float k = r.Width / 16f;
+            int S(int v) => (int)Math.Round(v * k, MidpointRounding.AwayFromZero);
+            int i3 = S(3), i4 = S(4), i8 = S(8);
+            var body = new Rectangle(r.X, r.Y, r.Width, r.Height - i3);
+            using (var p = new Pen(c, 1.4f * k))
+            using (var path = DrawHelper.RoundedRect(body, i3))
             {
                 g.DrawPath(p, path);
-                g.DrawLine(p, r.X + 4, body.Bottom - 1, r.X + 4, r.Bottom);   // little tail
-                g.DrawLine(p, r.X + 4, r.Bottom, r.X + 8, body.Bottom - 1);
+                g.DrawLine(p, r.X + i4, body.Bottom - 1, r.X + i4, r.Bottom);   // little tail
+                g.DrawLine(p, r.X + i4, r.Bottom, r.X + i8, body.Bottom - 1);
             }
         }
 
@@ -1512,17 +1596,16 @@ namespace TelegArm.UI.Controls
                     var r = new Rectangle(cx, y, cw, KbRowH);
                     _kbRects.Add(new KeyValuePair<KbButtonVM, Rectangle>(row[i], r));
                     using (var b = new SolidBrush(cell))
-                    using (var p = DrawHelper.RoundedRect(r, 8))
+                    using (var p = DrawHelper.RoundedRect(r, P(8)))
                         g.FillPath(b, p);
                     if (_kbLoading == row[i])
-                        DrawHelper.DrawProgressRing(g, new Rectangle(r.X + r.Width / 2 - 9, r.Y + (KbRowH - 18) / 2, 18, 18), 0f, text, Color.FromArgb(90, text), false);
+                        DrawHelper.DrawProgressRing(g, new Rectangle(r.X + r.Width / 2 - P(9), r.Y + (KbRowH - P(18)) / 2, P(18), P(18)), 0f, text, Color.FromArgb(90, text), false);
                     else
                     {
                         // Per-button script-aware font (Vazirmatn for Persian) + inline Noto emoji, centered —
-                        // button labels have their own script + often carry emoji.
+                        // button labels have their own script + often carry emoji. Shared font: never dispose.
                         string label = row[i].Label ?? "";
-                        using (var bf = FontHelper.For(label, 9.5f))
-                            EmojiRenderer.DrawLineCentered(g, label, bf, text, r);
+                        EmojiRenderer.DrawLineCentered(g, label, FontHelper.ForAt(label, 9.5f, CurDpi), text, r);
                     }
                 }
                 y += KbRowH + KbGap;
@@ -1620,12 +1703,12 @@ namespace TelegArm.UI.Controls
             {
                 if (_useRich)
                 {
-                    _rich.Measure(g, contentW, _textFont);
+                    _rich.Measure(g, contentW, TextFont);
                     _rich.Position(contentW, _rtl);
-                    return _rich.Height + 4;
+                    return _rich.Height + P(4);
                 }
-                var sz = g.MeasureString(_text, _textFont, new SizeF(contentW, float.MaxValue), sf);
-                return (int)Math.Ceiling(sz.Height) + 4;
+                var sz = g.MeasureString(_text, TextFont, new SizeF(contentW, float.MaxValue), sf);
+                return (int)Math.Ceiling(sz.Height) + P(4);
             }
         }
 
@@ -1669,7 +1752,7 @@ namespace TelegArm.UI.Controls
                     : (ThemeHelper.PaletteFor(IsDark).BubbleInText);
 
                 using (var b = new SolidBrush(bubbleColor))
-                using (var path = DrawHelper.RoundedRect(rect, 14))
+                using (var path = DrawHelper.RoundedRect(rect, P(14)))
                     g.FillPath(b, path);
 
                 int innerX = bx + Pad;
@@ -1688,13 +1771,13 @@ namespace TelegArm.UI.Controls
                 if (_useRich)
                 {
                     _richOrigin = new Point(innerX, ty);
-                    _rich.PaintCached(g, innerX, ty, textColor, LinkColor, _textFont, IsDark, AccentColor, _outgoing, bubbleColor);
+                    _rich.PaintCached(g, innerX, ty, textColor, LinkColor, TextFont, IsDark, AccentColor, _outgoing, bubbleColor);
                     PaintSelection(g, innerX, ty);   // translucent highlight OVER the opaque text bitmap
                 }
                 else
                 {
                     using (var tb = new SolidBrush(textColor))
-                        g.DrawString(_text, _textFont, tb,
+                        g.DrawString(_text, TextFont, tb,
                             new RectangleF(innerX, ty, contentW, textH), sf);
                 }
 
@@ -1705,12 +1788,12 @@ namespace TelegArm.UI.Controls
                     : (ThemeHelper.PaletteFor(IsDark).BubbleInTime);
                 using (var timeSf = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Far })
                 using (var tcb = new SolidBrush(timeColor))
-                    g.DrawString(StampText(), _timeFont, tcb,
+                    g.DrawString(StampText(), TimeFont, tcb,
                         new RectangleF(bx + Pad, by + bubbleH - TimeH, bubbleW - 2 * Pad, TimeH), timeSf);
-                DrawStatusGlyph(g, bx + Pad + 6, by + bubbleH - TimeH / 2f, timeColor);
+                DrawStatusGlyph(g, bx + Pad + P(6), by + bubbleH - TimeH / 2f, timeColor);
                 DrawMetaExtras(g, new RectangleF(bx + Pad, by + bubbleH - TimeH, bubbleW - 2 * Pad, TimeH), timeColor);
 
-                DrawFooter(g, bx, by + bubbleH + 2, bubbleW);
+                DrawFooter(g, bx, by + bubbleH + P(2), bubbleW);
             }
 
             DrawSelectionCheck(g);
@@ -1737,10 +1820,8 @@ namespace TelegArm.UI.Controls
             {
                 using (var b = new SolidBrush(DrawHelper.AvatarColor(AvatarPeerId)))
                     g.FillEllipse(b, ar);
-                string letter = string.IsNullOrEmpty(_sender) ? "?" : _sender.Substring(0, 1).ToUpper();
-                using (var f = FontHelper.For(_sender ?? "", 13f, FontStyle.Bold))
-                    TextRenderer.DrawText(g, letter, f, ar, Color.White,
-                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                string letter = string.IsNullOrEmpty(_sender) ? "?" : DrawHelper.Initial(_sender);
+                DrawHelper.DrawInitial(g, letter, FontHelper.ForAt(_sender ?? "", 13f, CurDpi, FontStyle.Bold), ar, Color.White);   // ink-centred (owner report 2026-10-14)   // shared font: never dispose
             }
         }
 
@@ -1750,23 +1831,24 @@ namespace TelegArm.UI.Controls
                 using (var fb = new SolidBrush(Color.FromArgb(70, AccentColor)))
                     g.FillRectangle(fb, ClientRectangle);   // brief "jump to pinned" pulse (all paint paths)
             if (!SelectionMode) return;
-            const int d = 18;
-            int x = _outgoing ? SideGap + 2 : Width - SideGap - d - 2;
+            int d = P(18);
+            float k = d / 18f;   // the check is drawn for the 18 px circle; scales with it
+            int x = _outgoing ? SideGap + P(2) : Width - SideGap - d - P(2);
             int y = (Height - d) / 2;
             var circle = new Rectangle(x, y, d, d);
             if (Selected)
             {
                 using (var b = new SolidBrush(AccentColor))
                     g.FillEllipse(b, circle);
-                using (var pen = new Pen(Color.White, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                using (var pen = new Pen(Color.White, 2f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round })
                     g.DrawLines(pen, new[]
                     {
-                        new PointF(x + 4.5f, y + 9f), new PointF(x + 7.5f, y + 12f), new PointF(x + 13.5f, y + 6f)
+                        new PointF(x + 4.5f * k, y + 9f * k), new PointF(x + 7.5f * k, y + 12f * k), new PointF(x + 13.5f * k, y + 6f * k)
                     });
             }
             else
             {
-                using (var pen = new Pen(IsDark ? Color.FromArgb(120, 120, 120) : Color.FromArgb(170, 170, 170), 1.6f))
+                using (var pen = new Pen(IsDark ? Color.FromArgb(120, 120, 120) : Color.FromArgb(170, 170, 170), 1.6f * k))
                     g.DrawEllipse(pen, circle);
             }
         }
@@ -1797,28 +1879,28 @@ namespace TelegArm.UI.Controls
             if (HasReply) DrawReplyHeader(g, bx, by + fwdOff, cardW);
 
             using (var b = new SolidBrush(bubbleColor))
-            using (var path = DrawHelper.RoundedRect(rect, 12))
+            using (var path = DrawHelper.RoundedRect(rect, P(12)))
                 g.FillPath(b, path);
 
             bool dlActive = _fileHandle != null && _fileHandle.State == DownloadHandle.DState.Downloading;
-            var iconRect = new Rectangle(bx + 12, rect.Y + 12, 48, 48);
+            var iconRect = new Rectangle(bx + P(12), rect.Y + P(12), P(48), P(48));
             if (dlActive)   // progress ring + ✕ replaces the file icon while downloading
                 DrawHelper.DrawProgressRing(g, iconRect, _fileHandle.Fraction, textColor, Color.FromArgb(90, subColor), cancel: true);
             else
                 DrawHelper.DrawFileIcon(g, iconRect, FileName);
 
-            int tx = iconRect.Right + 12;
-            int tw = bx + cardW - 12 - tx;
-            TextRenderer.DrawText(g, FileName ?? "File", _senderFont, new Rectangle(tx, rect.Y + 14, tw, 22), textColor,
+            int tx = iconRect.Right + P(12);
+            int tw = bx + cardW - P(12) - tx;
+            TextRenderer.DrawText(g, FileName ?? "File", SenderFont, new Rectangle(tx, rect.Y + P(14), tw, P(22)), textColor,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
             string sizeLine = dlActive
                 ? DrawHelper.FormatSize(_fileHandle.Transmitted) + " / " + DrawHelper.FormatSize(_fileHandle.Total)
                 : (FileSizeText ?? "");
-            TextRenderer.DrawText(g, sizeLine, _timeFont, new Rectangle(tx, rect.Y + 40, tw, 18), subColor,
+            TextRenderer.DrawText(g, sizeLine, TimeFont, new Rectangle(tx, rect.Y + P(40), tw, P(18)), subColor,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
-            DrawStatusGlyph(g, bx + cardW - 14, rect.Bottom - 12, subColor);
+            DrawStatusGlyph(g, bx + cardW - P(14), rect.Bottom - P(12), subColor);
 
-            DrawFooter(g, bx, rect.Bottom + 2, rect.Width);
+            DrawFooter(g, bx, rect.Bottom + P(2), rect.Width);
         }
 
         private void PaintPhoto(Graphics g, Color panelBg)
@@ -1844,7 +1926,7 @@ namespace TelegArm.UI.Controls
 
             if (!IsSticker && !IsRoundVideo)   // stickers + round video notes have no bubble background
                 using (var b = new SolidBrush(bubbleColor))
-                using (var path = DrawHelper.RoundedRect(rect, 14))
+                using (var path = DrawHelper.RoundedRect(rect, P(14)))
                     g.FillPath(b, path);
 
             int innerX = bx + Pad;
@@ -1871,7 +1953,7 @@ namespace TelegArm.UI.Controls
                 switch (_photoState)
                 {
                     case PhotoState.Loaded when _image != null:
-                        DrawFittedImage(g, _image, _imageRect, cover: !IsSticker);   // photos/videos fill+crop; stickers fit
+                        DrawFittedImage(g, _image, _imageRect, P(8), cover: !IsSticker);   // photos/videos fill+crop; stickers fit
                         break;
                     case PhotoState.Loading:
                         FillImageArea(g, _imageRect);
@@ -1880,7 +1962,7 @@ namespace TelegArm.UI.Controls
                     default: // Placeholder
                         FillImageArea(g, _imageRect);
                         if (!IsVideoThumb)
-                            TextRenderer.DrawText(g, "📷  Photo (tap to download)", _textFont, _imageRect,
+                            TextRenderer.DrawText(g, "📷  Photo (tap to download)", TextFont, _imageRect,
                                 Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter
                                 | TextFormatFlags.WordBreak);
                         break;
@@ -1897,15 +1979,17 @@ namespace TelegArm.UI.Controls
                     bool vPz = _fileHandle != null && _fileHandle.State == DownloadHandle.DState.Paused;
                     if (vDl || vPz)
                     {
-                        var ring = new Rectangle(_imageRect.X + (_imageRect.Width - 46) / 2,
-                                                 _imageRect.Y + (_imageRect.Height - 46) / 2, 46, 46);
+                        int rd = P(46);
+                        var ring = new Rectangle(_imageRect.X + (_imageRect.Width - rd) / 2,
+                                                 _imageRect.Y + (_imageRect.Height - rd) / 2, rd, rd);
                         using (var dim = new SolidBrush(Color.FromArgb(90, 0, 0, 0))) g.FillEllipse(dim, ring);
                         DrawHelper.DrawProgressRing(g, ring, _fileHandle.Fraction, Color.White, Color.FromArgb(120, 255, 255, 255), cancel: vDl);
                         if (vPz)
                         {
+                            float k = rd / 46f;   // drawn for the 46 px ring; scales with it
                             float pcx = ring.X + ring.Width / 2f, pcy = ring.Y + ring.Height / 2f;
                             using (var wb = new SolidBrush(Color.White))
-                                g.FillPolygon(wb, new[] { new PointF(pcx - 5, pcy - 7), new PointF(pcx + 8, pcy), new PointF(pcx - 5, pcy + 7) });
+                                g.FillPolygon(wb, new[] { new PointF(pcx - 5 * k, pcy - 7 * k), new PointF(pcx + 8 * k, pcy), new PointF(pcx - 5 * k, pcy + 7 * k) });
                         }
                     }
                     else DrawVideoOverlay(g, _imageRect);
@@ -1924,13 +2008,13 @@ namespace TelegArm.UI.Controls
                     if (_useRich)
                     {
                         _richOrigin = new Point(innerX, ty);
-                        _rich.PaintCached(g, innerX, ty, textColor, LinkColor, _textFont, IsDark, AccentColor, _outgoing, bubbleColor);
+                        _rich.PaintCached(g, innerX, ty, textColor, LinkColor, TextFont, IsDark, AccentColor, _outgoing, bubbleColor);
                         PaintSelection(g, innerX, ty);   // translucent highlight OVER the opaque text bitmap
                     }
                     else
                     {
                         using (var tb = new SolidBrush(textColor))
-                            g.DrawString(_text, _textFont, tb, new RectangleF(innerX, ty, contentW, captionH - 4), sf);
+                            g.DrawString(_text, TextFont, tb, new RectangleF(innerX, ty, contentW, captionH - P(4)), sf);
                     }
                 }
             }
@@ -1940,12 +2024,12 @@ namespace TelegArm.UI.Controls
                 : (ThemeHelper.PaletteFor(IsDark).BubbleInTime);
             using (var timeSf = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Far })
             using (var tcb = new SolidBrush(timeColor))
-                g.DrawString(StampText(), _timeFont, tcb,
+                g.DrawString(StampText(), TimeFont, tcb,
                     new RectangleF(bx + Pad, by + bubbleH - TimeH, bubbleW - 2 * Pad, TimeH), timeSf);
-            DrawStatusGlyph(g, bx + Pad + 6, by + bubbleH - TimeH / 2f, timeColor);
+            DrawStatusGlyph(g, bx + Pad + P(6), by + bubbleH - TimeH / 2f, timeColor);
             DrawMetaExtras(g, new RectangleF(bx + Pad, by + bubbleH - TimeH, bubbleW - 2 * Pad, TimeH), timeColor);
 
-            DrawFooter(g, bx, by + bubbleH + 2, bubbleW);
+            DrawFooter(g, bx, by + bubbleH + P(2), bubbleW);
         }
 
         /// <summary>
@@ -1960,8 +2044,8 @@ namespace TelegArm.UI.Controls
             bool persianName = FontHelper.IsPersian(_sender);
             var flags = TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix
                         | (persianName ? TextFormatFlags.Right | TextFormatFlags.RightToLeft : TextFormatFlags.Left);
-            using (var f = FontHelper.For(_sender, persianName ? 10.5f : 9f, FontStyle.Bold))
-                TextRenderer.DrawText(g, _sender, f, new Rectangle(x, y, w, SenderH), c, flags);
+            TextRenderer.DrawText(g, _sender, FontHelper.ForAt(_sender, persianName ? 10.5f : 9f, CurDpi, FontStyle.Bold),
+                new Rectangle(x, y, w, SenderH), c, flags);   // shared font: never dispose
             _senderRect = new Rectangle(x, y, w, SenderH);
             // CHANNEL-META-EXTRAS (3): group admin/owner/custom-rank label, right-aligned on the sender row.
             if (!string.IsNullOrEmpty(_adminRole))
@@ -1969,9 +2053,9 @@ namespace TelegArm.UI.Controls
                 Color rc = _outgoing ? Color.FromArgb(200, 255, 255, 255)
                                      : (IsDark ? Color.FromArgb(140, 140, 146) : Color.FromArgb(140, 140, 146));
                 bool prole = FontHelper.IsPersian(_adminRole);
-                using (var rf = FontHelper.For(_adminRole, prole ? 9f : 8f, FontStyle.Regular))
-                    TextRenderer.DrawText(g, _adminRole, rf, new Rectangle(x, y, w, SenderH), rc,
-                        TextFormatFlags.VerticalCenter | TextFormatFlags.Right | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+                TextRenderer.DrawText(g, _adminRole, FontHelper.ForAt(_adminRole, prole ? 9f : 8f, CurDpi, FontStyle.Regular),
+                    new Rectangle(x, y, w, SenderH), rc,
+                    TextFormatFlags.VerticalCenter | TextFormatFlags.Right | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
             }
         }
 
@@ -1980,7 +2064,7 @@ namespace TelegArm.UI.Controls
         private void DrawMetaExtras(Graphics g, RectangleF metaRect, Color color)
         {
             if (_views < 0 && string.IsNullOrEmpty(_postAuthor)) return;
-            float stampW = g.MeasureString(StampText(), _timeFont).Width;
+            float stampW = g.MeasureString(StampText(), TimeFont).Width;
             float x = metaRect.Right - stampW;   // left edge of the right-aligned stamp
             using (var sf = new StringFormat { Alignment = StringAlignment.Near, LineAlignment = StringAlignment.Far })
             using (var b = new SolidBrush(color))
@@ -1988,30 +2072,32 @@ namespace TelegArm.UI.Controls
                 if (_views >= 0)
                 {
                     string vc = FormatViews(_views);
-                    float vcW = g.MeasureString(vc, _timeFont).Width;
+                    float vcW = g.MeasureString(vc, TimeFont).Width;
                     x -= MetaGap + vcW;
-                    g.DrawString(vc, _timeFont, b, new RectangleF(x, metaRect.Y, vcW + 4, metaRect.Height), sf);
-                    DrawEye(g, x - EyeGap - EyeW, metaRect.Bottom - TimeH / 2f, color);
+                    g.DrawString(vc, TimeFont, b, new RectangleF(x, metaRect.Y, vcW + P(4), metaRect.Height), sf);
+                    DrawEye(g, x - EyeGap - EyeW, metaRect.Bottom - TimeH / 2f, color, EyeW);
                     x -= EyeGap + EyeW;
                 }
                 if (!string.IsNullOrEmpty(_postAuthor))
                 {
                     float availW = Math.Max(0f, x - metaRect.Left - MetaGap);
-                    if (availW > 8f)
-                        g.DrawString(_postAuthor, _timeFont, b,
+                    if (availW > Dpi.F(8f, CurDpi))
+                        g.DrawString(_postAuthor, TimeFont, b,
                             new RectangleF(metaRect.Left, metaRect.Y, availW, metaRect.Height), sf);
                 }
             }
         }
 
-        /// <summary>A small owner-drawn eye (outline almond + pupil) — deterministic, no emoji-font dependency.</summary>
-        private static void DrawEye(Graphics g, float x, float cy, Color color)
+        /// <summary>A small owner-drawn eye (outline almond + pupil) — deterministic, no emoji-font dependency. Drawn
+        /// for the 13 px wide eye (<paramref name="w"/> = EyeW at the bubble's DPI); scales with it.</summary>
+        private static void DrawEye(Graphics g, float x, float cy, Color color, float w)
         {
+            float k = w / 13f;
             var sm = g.SmoothingMode; g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            using (var pen = new Pen(color, 1.1f))
-                g.DrawEllipse(pen, x, cy - 3.5f, EyeW, 7f);
+            using (var pen = new Pen(color, 1.1f * k))
+                g.DrawEllipse(pen, x, cy - 3.5f * k, w, 7f * k);
             using (var pb = new SolidBrush(color))
-                g.FillEllipse(pb, x + EyeW / 2f - 1.5f, cy - 1.5f, 3f, 3f);
+                g.FillEllipse(pb, x + w / 2f - 1.5f * k, cy - 1.5f * k, 3f * k, 3f * k);
             g.SmoothingMode = sm;
         }
 
@@ -2022,42 +2108,40 @@ namespace TelegArm.UI.Controls
             if (!HasReactions) return;
 
             int cx = x;
-            const int chipH = ReactionH - 6, emojiSz = 16;
-            using (var f = FontHelper.Ui(8.25f, FontStyle.Bold))
+            int chipH = ReactionH - P(6), emojiSz = P(16);
+            var f = FontHelper.UiAt(8.25f, CurDpi, FontStyle.Bold);   // shared: never dispose
+            foreach (var r in _reactions)
             {
-                foreach (var r in _reactions)
+                string cnt = r.Count > 1 ? r.Count.ToString() : "";
+                int textW = cnt.Length == 0 ? 0 : TextRenderer.MeasureText(cnt, f).Width + P(3);
+                int chipW = P(7) + emojiSz + textW + P(8);
+                if (cx > x && cx + chipW > x + availW) break;   // single row: stop on overflow
+
+                var chip = new Rectangle(cx, y, chipW, chipH);
+                Color bg = r.Chosen ? AccentColor : (IsDark ? Color.FromArgb(55, 55, 58) : Color.FromArgb(224, 224, 230));
+                Color fg = r.Chosen ? Color.White : (IsDark ? Color.FromArgb(220, 220, 225) : Color.FromArgb(55, 55, 60));
+                using (var b = new SolidBrush(bg))
+                using (var path = DrawHelper.RoundedRect(chip, chipH / 2))
+                    g.FillPath(b, path);
+
+                var emojiRect = new Rectangle(cx + P(7), y + (chipH - emojiSz) / 2, emojiSz, emojiSz);
+                var img = EmojiRenderer.Get(r.Emoji);
+                if (img != null)
                 {
-                    string cnt = r.Count > 1 ? r.Count.ToString() : "";
-                    int textW = cnt.Length == 0 ? 0 : TextRenderer.MeasureText(cnt, f).Width + 3;
-                    int chipW = 7 + emojiSz + textW + 8;
-                    if (cx > x && cx + chipW > x + availW) break;   // single row: stop on overflow
-
-                    var chip = new Rectangle(cx, y, chipW, chipH);
-                    Color bg = r.Chosen ? AccentColor : (IsDark ? Color.FromArgb(55, 55, 58) : Color.FromArgb(224, 224, 230));
-                    Color fg = r.Chosen ? Color.White : (IsDark ? Color.FromArgb(220, 220, 225) : Color.FromArgb(55, 55, 60));
-                    using (var b = new SolidBrush(bg))
-                    using (var path = DrawHelper.RoundedRect(chip, chipH / 2))
-                        g.FillPath(b, path);
-
-                    var emojiRect = new Rectangle(cx + 7, y + (chipH - emojiSz) / 2, emojiSz, emojiSz);
-                    var img = EmojiRenderer.Get(r.Emoji);
-                    if (img != null)
-                    {
-                        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                        g.DrawImage(img, emojiRect);
-                    }
-                    else
-                    {
-                        TextRenderer.DrawText(g, r.Emoji, f, emojiRect, fg,
-                            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-                    }
-                    if (cnt.Length > 0)
-                        TextRenderer.DrawText(g, cnt, f, new Rectangle(emojiRect.Right + 2, y, textW + 2, chipH), fg,
-                            TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
-
-                    _reactionRects.Add(new KeyValuePair<string, Rectangle>(r.Emoji, chip));
-                    cx += chipW + 4;
+                    g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    g.DrawImage(img, emojiRect);
                 }
+                else
+                {
+                    TextRenderer.DrawText(g, r.Emoji, f, emojiRect, fg,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                }
+                if (cnt.Length > 0)
+                    TextRenderer.DrawText(g, cnt, f, new Rectangle(emojiRect.Right + P(2), y, textW + P(2), chipH), fg,
+                        TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+
+                _reactionRects.Add(new KeyValuePair<string, Rectangle>(r.Emoji, chip));
+                cx += chipW + P(4);
             }
         }
 
@@ -2075,12 +2159,13 @@ namespace TelegArm.UI.Controls
             _replyRect = new Rectangle(x, y, w, blockH);   // tap target → ReplyQuoteClicked
 
             // Accent bar spans the WHOLE block, on the leading edge (right for RTL, left for LTR).
-            int barX = rtl ? x + w - 3 : x;
+            int barW = P(3);
+            int barX = rtl ? x + w - barW : x;
             using (var ab = new SolidBrush(_outgoing ? Color.White : AccentColor))
-                g.FillRectangle(ab, barX, y + 2, 3, blockH - 4);
+                g.FillRectangle(ab, barX, y + P(2), barW, blockH - P(4));
 
-            int textX = rtl ? x : x + 9;     // text inset past the bar on the bar side
-            int textW = w - 9;
+            int textX = rtl ? x : x + P(9);  // text inset past the bar on the bar side
+            int textW = w - P(9);
             var flags = TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis
                         | TextFormatFlags.VerticalCenter
                         | (rtl ? TextFormatFlags.Right | TextFormatFlags.RightToLeft : TextFormatFlags.Left);
@@ -2091,8 +2176,8 @@ namespace TelegArm.UI.Controls
             if (HasReplySender)
             {
                 Color nameC = _outgoing ? Color.White : AccentColor;
-                using (var nf = FontHelper.For(ReplySender, FontHelper.IsPersian(ReplySender) ? 9f : 8f, FontStyle.Bold))
-                    TextRenderer.DrawText(g, ReplySender, nf, new Rectangle(textX, y, textW, ReplyNameH), nameC, flags);
+                TextRenderer.DrawText(g, ReplySender, FontHelper.ForAt(ReplySender, FontHelper.IsPersian(ReplySender) ? 9f : 8f, CurDpi, FontStyle.Bold),
+                    new Rectangle(textX, y, textW, ReplyNameH), nameC, flags);   // shared font: never dispose
                 textStripY = y + ReplyNameH;
                 textStripH = blockH - ReplyNameH;
             }
@@ -2101,7 +2186,7 @@ namespace TelegArm.UI.Controls
                 ? Color.FromArgb(235, 255, 255, 255)
                 : (IsDark ? Color.FromArgb(195, 195, 195) : Color.FromArgb(95, 95, 95));
             // TextRenderer clips to bounds + does script fallback (Persian/mixed) — no GDI+ bleed.
-            TextRenderer.DrawText(g, ReplyPreview, _replyFont, new Rectangle(textX, textStripY, textW, textStripH), rc, flags);
+            TextRenderer.DrawText(g, ReplyPreview, ReplyFont, new Rectangle(textX, textStripY, textW, textStripH), rc, flags);
         }
 
         /// <summary>Draws the "Forwarded from X" header above the content. RTL: right-aligned (Persian).</summary>
@@ -2111,38 +2196,40 @@ namespace TelegArm.UI.Controls
             Color c = _outgoing ? Color.FromArgb(235, 255, 255, 255) : SenderNameColor;
             var flags = TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis | TextFormatFlags.VerticalCenter
                         | (_rtl ? TextFormatFlags.Right | TextFormatFlags.RightToLeft : TextFormatFlags.Left);
-            using (var f = FontHelper.For(label, _rtl ? 9.5f : 8f, FontStyle.Bold))
-                TextRenderer.DrawText(g, label, f, new Rectangle(x, y, w, FwdH), c, flags);
+            TextRenderer.DrawText(g, label, FontHelper.ForAt(label, _rtl ? 9.5f : 8f, CurDpi, FontStyle.Bold),
+                new Rectangle(x, y, w, FwdH), c, flags);   // shared font: never dispose
         }
 
-        /// <summary>Status glyph: Failed → red mark; Pending → clock; else (outgoing) ✓ / ✓✓ (read).</summary>
+        /// <summary>Status glyph: Failed → red mark; Pending → clock; else (outgoing) ✓ / ✓✓ (read). The glyphs are
+        /// drawn at 96-DPI sizes around (cx, cy); k = dpi / 96 scales them (step 3.2).</summary>
         private void DrawStatusGlyph(Graphics g, float cx, float cy, Color color)
         {
-            if (Failed) { DrawFailedMark(g, cx, cy); return; }
-            if (Pending) { DrawPendingClock(g, cx, cy, color); return; }
-            if (_outgoing) { if (Read) DrawDoubleCheck(g, cx, cy, color); else DrawSingleCheck(g, cx, cy, color); }
+            float k = Dpi.F(1f, CurDpi);
+            if (Failed) { DrawFailedMark(g, cx, cy, k); return; }
+            if (Pending) { DrawPendingClock(g, cx, cy, color, k); return; }
+            if (_outgoing) { if (Read) DrawDoubleCheck(g, cx, cy, color, k); else DrawSingleCheck(g, cx, cy, color, k); }
         }
 
-        private static void DrawSingleCheck(Graphics g, float cx, float cy, Color color)
+        private static void DrawSingleCheck(Graphics g, float cx, float cy, Color color, float k)
         {
-            using (var pen = new Pen(color, 1.4f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
-                g.DrawLines(pen, new[] { new PointF(cx - 4, cy + 1), new PointF(cx - 1, cy + 4), new PointF(cx + 5, cy - 4) });
+            using (var pen = new Pen(color, 1.4f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+                g.DrawLines(pen, new[] { new PointF(cx - 4 * k, cy + 1 * k), new PointF(cx - 1 * k, cy + 4 * k), new PointF(cx + 5 * k, cy - 4 * k) });
         }
 
-        private static void DrawDoubleCheck(Graphics g, float cx, float cy, Color color)
+        private static void DrawDoubleCheck(Graphics g, float cx, float cy, Color color, float k)
         {
-            using (var pen = new Pen(color, 1.4f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+            using (var pen = new Pen(color, 1.4f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
             {
-                g.DrawLines(pen, new[] { new PointF(cx - 6, cy + 1), new PointF(cx - 3, cy + 4), new PointF(cx + 2, cy - 4) });
-                g.DrawLines(pen, new[] { new PointF(cx - 1, cy + 4), new PointF(cx, cy + 4), new PointF(cx + 6, cy - 4) });
+                g.DrawLines(pen, new[] { new PointF(cx - 6 * k, cy + 1 * k), new PointF(cx - 3 * k, cy + 4 * k), new PointF(cx + 2 * k, cy - 4 * k) });
+                g.DrawLines(pen, new[] { new PointF(cx - 1 * k, cy + 4 * k), new PointF(cx, cy + 4 * k), new PointF(cx + 6 * k, cy - 4 * k) });
             }
         }
 
         /// <summary>Small "sending" clock glyph for optimistic/pending bubbles.</summary>
-        private static void DrawPendingClock(Graphics g, float cx, float cy, Color color)
+        private static void DrawPendingClock(Graphics g, float cx, float cy, Color color, float k)
         {
-            const float r = 5f;
-            using (var pen = new Pen(color, 1.3f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            float r = 5f * k;
+            using (var pen = new Pen(color, 1.3f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round })
             {
                 g.DrawEllipse(pen, cx - r, cy - r, 2 * r, 2 * r);
                 g.DrawLine(pen, cx, cy, cx, cy - r * 0.6f);              // minute hand (up)
@@ -2151,23 +2238,23 @@ namespace TelegArm.UI.Controls
         }
 
         /// <summary>Small red "!" disc indicating a failed send.</summary>
-        private static void DrawFailedMark(Graphics g, float cx, float cy)
+        private static void DrawFailedMark(Graphics g, float cx, float cy, float k)
         {
-            const float r = 6f;
+            float r = 6f * k;
             var red = Color.FromArgb(229, 57, 53);
             using (var b = new SolidBrush(red))
                 g.FillEllipse(b, cx - r, cy - r, 2 * r, 2 * r);
-            using (var pen = new Pen(Color.White, 1.4f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            using (var pen = new Pen(Color.White, 1.4f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round })
             {
-                g.DrawLine(pen, cx, cy - 3f, cx, cy + 1f); // stem
-                g.DrawLine(pen, cx, cy + 3f, cx, cy + 3.2f); // dot
+                g.DrawLine(pen, cx, cy - 3f * k, cx, cy + 1f * k); // stem
+                g.DrawLine(pen, cx, cy + 3f * k, cx, cy + 3.2f * k); // dot
             }
         }
 
         private void FillImageArea(Graphics g, Rectangle area)
         {
             using (var b = new SolidBrush(IsDark ? Color.FromArgb(45, 45, 48) : Color.FromArgb(200, 200, 200)))
-            using (var path = DrawHelper.RoundedRect(area, 8))
+            using (var path = DrawHelper.RoundedRect(area, P(8)))
                 g.FillPath(b, path);
         }
 
@@ -2182,25 +2269,26 @@ namespace TelegArm.UI.Controls
 
         private void DrawVideoOverlay(Graphics g, Rectangle area)
         {
-            const int d = 48; // play-button circle, radius 24
+            int d = P(48);       // play-button circle, radius 24
+            float k = d / 48f;   // the triangle is drawn for the 48 px circle; scales with it
             int cx = area.X + area.Width / 2, cy = area.Y + area.Height / 2;
             using (var cb = new SolidBrush(Color.FromArgb(140, 0, 0, 0)))
                 g.FillEllipse(cb, cx - d / 2, cy - d / 2, d, d);
             using (var wb = new SolidBrush(Color.White))
                 g.FillPolygon(wb, new[]
                 {
-                    new PointF(cx - 7, cy - 11), new PointF(cx + 12, cy), new PointF(cx - 7, cy + 11)
+                    new PointF(cx - 7 * k, cy - 11 * k), new PointF(cx + 12 * k, cy), new PointF(cx - 7 * k, cy + 11 * k)
                 });
 
             if (!string.IsNullOrEmpty(DurationText))
             {
-                var sz = TextRenderer.MeasureText(DurationText, _timeFont);
-                int bw = sz.Width + 12, bh = sz.Height + 6;
-                var rect = new Rectangle(area.Right - bw - 6, area.Bottom - bh - 6, bw, bh);
+                var sz = TextRenderer.MeasureText(DurationText, TimeFont);
+                int bw = sz.Width + P(12), bh = sz.Height + P(6);
+                var rect = new Rectangle(area.Right - bw - P(6), area.Bottom - bh - P(6), bw, bh);
                 using (var bb = new SolidBrush(Color.FromArgb(150, 0, 0, 0)))
-                using (var path = DrawHelper.RoundedRect(rect, 4))
+                using (var path = DrawHelper.RoundedRect(rect, P(4)))
                     g.FillPath(bb, path);
-                TextRenderer.DrawText(g, DurationText, _timeFont, rect, Color.White,
+                TextRenderer.DrawText(g, DurationText, TimeFont, rect, Color.White,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             }
         }
@@ -2209,7 +2297,7 @@ namespace TelegArm.UI.Controls
         /// video play button). Drawn LIVE over the cached thumbnail, so it shows only in the static state.</summary>
         private void DrawStickerPlayHint(Graphics g, Rectangle area)
         {
-            int d = Math.Max(28, Math.Min(40, Math.Min(area.Width, area.Height) / 4));
+            int d = Math.Max(P(28), Math.Min(P(40), Math.Min(area.Width, area.Height) / 4));
             int cx = area.X + area.Width / 2, cy = area.Y + area.Height / 2;
             var oldMode = g.SmoothingMode;
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
@@ -2227,25 +2315,26 @@ namespace TelegArm.UI.Controls
 
         private void DrawGifBadge(Graphics g, Rectangle area)
         {
-            var sz = TextRenderer.MeasureText("GIF", _timeFont);
-            int bw = sz.Width + 12, bh = sz.Height + 6;
-            var rect = new Rectangle(area.X + 6, area.Y + 6, bw, bh);
+            var sz = TextRenderer.MeasureText("GIF", TimeFont);
+            int bw = sz.Width + P(12), bh = sz.Height + P(6);
+            var rect = new Rectangle(area.X + P(6), area.Y + P(6), bw, bh);
             using (var bb = new SolidBrush(AccentColor))
-            using (var path = DrawHelper.RoundedRect(rect, 4))
+            using (var path = DrawHelper.RoundedRect(rect, P(4)))
                 g.FillPath(bb, path);
-            TextRenderer.DrawText(g, "GIF", _timeFont, rect, Color.White,
+            TextRenderer.DrawText(g, "GIF", TimeFont, rect, Color.White,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         }
 
         private void DrawSpinner(Graphics g, Rectangle area)
         {
-            const int d = 30;
+            int d = P(30);
             var arc = new Rectangle(area.X + (area.Width - d) / 2, area.Y + (area.Height - d) / 2, d, d);
-            using (var pen = new Pen(Color.White, 3f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            using (var pen = new Pen(Color.White, Dpi.F(3f, CurDpi)) { StartCap = LineCap.Round, EndCap = LineCap.Round })
                 g.DrawArc(pen, arc, _spinnerAngle, 270);
         }
 
-        private static void DrawFittedImage(Graphics g, Image img, Rectangle area, bool cover = false)
+        /// <summary><paramref name="radius"/>: the corner radius in pixels at the caller's DPI (8 logical).</summary>
+        private static void DrawFittedImage(Graphics g, Image img, Rectangle area, int radius, bool cover = false)
         {
             // cover = fill the area and crop the overflow (center-crop); else fit/letterbox.
             double scale = cover
@@ -2259,7 +2348,7 @@ namespace TelegArm.UI.Controls
             using (var oldClip = g.Clip)
             {
                 g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                using (var path = DrawHelper.RoundedRect(area, 8))
+                using (var path = DrawHelper.RoundedRect(area, radius))
                     g.SetClip(path);
                 g.DrawImage(img, dest);
                 g.Clip = oldClip;
@@ -2288,13 +2377,13 @@ namespace TelegArm.UI.Controls
         private int MeasureCard(Graphics g, int cardW)
         {
             int thumb = _cardHasThumb ? CardThumb : 0;
-            _cardTextColW = Math.Max(20, cardW - (CardBar + CardGap) - CardPad - (thumb > 0 ? thumb + CardGap : 0));
-            _cardSiteH = string.IsNullOrEmpty(_cardSite) ? 0 : LineHeight(g, _cardSiteFont);
-            _cardTitleH = ClampWrapped(g, _cardTitle, _cardTitleFont, _cardTextColW, 2);
-            _cardDescH = ClampWrapped(g, _cardDesc, _cardDescFont, _cardTextColW, 3);
+            _cardTextColW = Math.Max(P(20), cardW - (CardBar + CardGap) - CardPad - (thumb > 0 ? thumb + CardGap : 0));
+            _cardSiteH = string.IsNullOrEmpty(_cardSite) ? 0 : LineHeight(g, CardSiteFont);
+            _cardTitleH = ClampWrapped(g, _cardTitle, CardTitleFont, _cardTextColW, 2);
+            _cardDescH = ClampWrapped(g, _cardDesc, CardDescFont, _cardTextColW, 3);
             int textH = _cardSiteH + _cardTitleH + _cardDescH
-                      + (_cardSiteH > 0 && (_cardTitleH > 0 || _cardDescH > 0) ? 2 : 0)
-                      + (_cardTitleH > 0 && _cardDescH > 0 ? 2 : 0);
+                      + (_cardSiteH > 0 && (_cardTitleH > 0 || _cardDescH > 0) ? P(2) : 0)
+                      + (_cardTitleH > 0 && _cardDescH > 0 ? P(2) : 0);
             return Math.Max(textH, thumb) + 2 * CardPad;
         }
 
@@ -2305,13 +2394,13 @@ namespace TelegArm.UI.Controls
             Color bg = _outgoing ? Color.FromArgb(36, 255, 255, 255)
                                  : (IsDark ? Color.FromArgb(40, 255, 255, 255) : Color.FromArgb(20, 0, 0, 0));
             using (var b = new SolidBrush(bg))
-            using (var p = DrawHelper.RoundedRect(_cardRect, 8))
+            using (var p = DrawHelper.RoundedRect(_cardRect, P(8)))
                 g.FillPath(b, p);
 
             Color barC = _outgoing ? Color.White : AccentColor;
             int barX = _rtl ? x + cardW - CardBar : x;
             using (var bb = new SolidBrush(barC))
-                g.FillRectangle(bb, barX, y + 4, CardBar, _cardHeight - 8);
+                g.FillRectangle(bb, barX, y + P(4), CardBar, _cardHeight - P(8));
 
             int thumb = _cardHasThumb ? CardThumb : 0;
             int textLeft, thumbX;
@@ -2324,7 +2413,7 @@ namespace TelegArm.UI.Controls
                 if (_cardThumb != null)
                 {
                     var old = g.Clip;
-                    using (var clip = DrawHelper.RoundedRect(tr, 6)) g.SetClip(clip);
+                    using (var clip = DrawHelper.RoundedRect(tr, P(6))) g.SetClip(clip);
                     double scale = Math.Max((double)tr.Width / _cardThumb.Width, (double)tr.Height / _cardThumb.Height);
                     int w = (int)(_cardThumb.Width * scale), h = (int)(_cardThumb.Height * scale);
                     g.DrawImage(_cardThumb, tr.X + (tr.Width - w) / 2, tr.Y + (tr.Height - h) / 2, w, h);  // cover-crop
@@ -2333,16 +2422,16 @@ namespace TelegArm.UI.Controls
                 else
                 {
                     using (var ph = new SolidBrush(IsDark ? Color.FromArgb(64, 64, 68) : Color.FromArgb(208, 208, 212)))
-                    using (var p = DrawHelper.RoundedRect(tr, 6)) g.FillPath(ph, p);
+                    using (var p = DrawHelper.RoundedRect(tr, P(6))) g.FillPath(ph, p);
                 }
             }
 
             Color titleC = _outgoing ? Color.White : (ThemeHelper.PaletteFor(IsDark).BubbleInText);
             Color descC = _outgoing ? Color.FromArgb(220, 255, 255, 255) : (IsDark ? Color.FromArgb(180, 180, 185) : Color.FromArgb(90, 90, 95));
             int ty = y + CardPad;
-            if (_cardSiteH > 0) { DrawCardLine(g, _cardSite, _cardSiteFont, textLeft, ty, _cardTextColW, _cardSiteH, barC, false); ty += _cardSiteH + 2; }
-            if (_cardTitleH > 0) { DrawCardLine(g, _cardTitle, _cardTitleFont, textLeft, ty, _cardTextColW, _cardTitleH, titleC, true); ty += _cardTitleH + 2; }
-            if (_cardDescH > 0) DrawCardLine(g, _cardDesc, _cardDescFont, textLeft, ty, _cardTextColW, _cardDescH, descC, true);
+            if (_cardSiteH > 0) { DrawCardLine(g, _cardSite, CardSiteFont, textLeft, ty, _cardTextColW, _cardSiteH, barC, false); ty += _cardSiteH + P(2); }
+            if (_cardTitleH > 0) { DrawCardLine(g, _cardTitle, CardTitleFont, textLeft, ty, _cardTextColW, _cardTitleH, titleC, true); ty += _cardTitleH + P(2); }
+            if (_cardDescH > 0) DrawCardLine(g, _cardDesc, CardDescFont, textLeft, ty, _cardTextColW, _cardDescH, descC, true);
         }
 
         private void DrawCardLine(Graphics g, string text, Font font, int x, int y, int w, int h, Color color, bool multiline)
@@ -2379,13 +2468,7 @@ namespace TelegArm.UI.Controls
                         if (t.Handle != null) { t.Handle.Changed -= OnAlbumAudioProgress; t.Handle = null; }   // DOWNLOAD-UX: unsubscribe only, never cancel
                 if (_audioStateHooked) { AudioPlayer.StateChanged -= OnAlbumAudioStateChanged; _audioStateHooked = false; }
                 if (_rich != null) { _rich.Dispose(); _rich = null; }   // release the cached text bitmap + fonts
-                _textFont.Dispose();
-                _senderFont.Dispose();
-                _timeFont.Dispose();
-                _replyFont.Dispose();
-                _cardTitleFont?.Dispose();
-                _cardDescFont?.Dispose();
-                _cardSiteFont?.Dispose();
+                // (No font disposal: step 3.2 — every font here is a shared FontCache font, never disposed.)
                 _spinnerTimer?.Dispose();
                 _flashTimer?.Dispose();
                 _rich?.Dispose();            // frees the inline engine's style fonts

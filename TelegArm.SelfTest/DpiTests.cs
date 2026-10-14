@@ -26,6 +26,10 @@ namespace TelegArm.SelfTest
             Add(t, "scaler: a container we size ourselves lays out its docked child again (review 1.1)", NestedContainerRelayout);
             Add(t, "scaler: a scrolled AutoScroll panel keeps its place, scaled (review 1.1)", ScrolledPanelKeepsPlace);
             Add(t, "fonts: PersianAt and a Rescale round trip meet on the same cached font (review 1.1)", FontKeysNormalised);
+            Add(t, "scale: Effective(raw, 100) == raw (the RT's 100% is untouched by step 3.8a)", EffectiveIdentity);
+            Add(t, "scale: Effective is exact for 7 monitor DPIs x 7 detents (50-200%)", EffectiveExact);
+            Add(t, "scale: --scale, then TELEGARM_SCALE, then the setting; anything invalid is ignored", ScaleResolution);
+            Add(t, "scale: 144 -> 150% (216) -> 144 and 96 -> 50% (48) -> 96 return every value exactly", ScaleRoundTrips);
         }
 
         private sealed class Thrower : Panel, IDpiAware
@@ -105,8 +109,67 @@ namespace TelegArm.SelfTest
         private static void OfFallsBackToSystem()
         {
             using (var p = new Panel())
-                Check.Equal(Dpi.SystemDpi, Dpi.Of(p), "Of(an unparented panel)");
-            Check.Equal(Dpi.SystemDpi, Dpi.Of(null), "Of(null)");
+                Check.Equal(Dpi.DefaultDpi, Dpi.Of(p), "Of(an unparented panel)");
+            Check.Equal(Dpi.DefaultDpi, Dpi.Of(null), "Of(null)");
+            Check.Equal(Dpi.Effective(Dpi.SystemDpi), Dpi.DefaultDpi, "DefaultDpi = the system DPI at the user's scale");
+        }
+
+        private static readonly int[] MonitorDpis = { 96, 120, 144, 168, 192, 216, 240 };
+        private static readonly int[] Detents = { 50, 75, 100, 125, 150, 175, 200 };
+
+        private static void EffectiveIdentity()
+        {
+            for (int r = 1; r <= 1000; r++)
+                if (Dpi.Effective(r, 100) != r) throw new CheckFailed("Effective(" + r + ", 100) = " + Dpi.Effective(r, 100));
+            Check.Equal(0, Dpi.Effective(0, 150), "Effective(0, 150)");
+        }
+
+        private static void EffectiveExact()
+        {
+            foreach (int raw in MonitorDpis)
+            {
+                int prev = 0;
+                foreach (int pct in Detents)
+                {
+                    if (raw * pct % 100 != 0) throw new CheckFailed("not exact: " + raw + " x " + pct + "%");
+                    int e = Dpi.Effective(raw, pct);
+                    Check.Equal(raw * pct / 100, e, "Effective(" + raw + ", " + pct + ")");
+                    if (e <= prev) throw new CheckFailed("not increasing at " + raw + " x " + pct + "%");
+                    prev = e;
+                }
+            }
+        }
+
+        private static void ScaleResolution()
+        {
+            string src;
+            Check.Equal(150, Dpi.ResolveScale(new[] { "app.exe", "--scale=150" }, "75", 125, out src), "--scale wins");
+            Check.Equal("--scale", src, "source");
+            Check.Equal(75, Dpi.ResolveScale(new[] { "app.exe" }, "75", 125, out src), "then TELEGARM_SCALE");
+            Check.Equal("TELEGARM_SCALE", src, "source");
+            Check.Equal(125, Dpi.ResolveScale(null, null, 125, out src), "then the setting");
+            Check.Equal("setting", src, "source");
+            Check.Equal(100, Dpi.ResolveScale(new[] { "--scale=110" }, "250", 130, out src), "off-step and out-of-range values are ignored");
+            Check.Equal("default", src, "source");
+            Check.Equal(200, Dpi.ResolveScale(new[] { "--scale=200%" }, null, 100, out src), "a trailing % is accepted");
+        }
+
+        private static void ScaleRoundTrips()
+        {
+            var t = Build();
+            DpiScaler.Rescale(t.Root, 96, 144);
+            var at144 = Snapshot(t);
+            DpiScaler.Rescale(t.Root, 144, Dpi.Effective(144, 150));
+            DpiScaler.Rescale(t.Root, Dpi.Effective(144, 150), 144);
+            Same(at144, Snapshot(t), "after 144 -> 216 -> 144");
+
+            var u = Build();
+            var at96 = Snapshot(u);
+            DpiScaler.Rescale(u.Root, 96, Dpi.Effective(96, 50));
+            DpiScaler.Rescale(u.Root, Dpi.Effective(96, 50), 96);
+            var back = Snapshot(u);
+            back[4] = back[4].Replace("12Pixel", "9Point");   // the font comes back as the same size in pixel units
+            Same(at96, back, "after 96 -> 48 -> 96");
         }
 
         private static void FontCacheShares()

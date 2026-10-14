@@ -12,15 +12,20 @@ namespace TelegArm.UI.Controls
     /// <summary>
     /// One chat-list row: avatar circle, name, last-message preview, timestamp,
     /// and an optional unread badge. Fully custom-painted.
+    ///
+    /// Redesign step 3.2 (THE EXEMPLAR for the owner-drawn sweep): every length is LOGICAL (96-DPI) and drawn through
+    /// Px at the row's DPI; every font is a shared FontCache font for that DPI (FontHelper.UiAt / ForAt) — NEVER
+    /// disposed, never in a using (a disposed shared font crashes the next paint). The glyph helpers scale from the
+    /// rectangle they are given. At 96 DPI every value is exactly what it was (Px(n, 96) == n; a pixel font at 96 is
+    /// the old point font's size), so the RT's 100% does not move by a pixel. The DPI is the window's (Dpi.Of) once
+    /// parented — rows are built unparented, then added — and IDpiAware SETS the height on a change, never multiplies.
     /// </summary>
-    public class ChatListItemControl : Control
+    public class ChatListItemControl : Control, IDpiAware
     {
-        // Every font used in OnPaint is held in its own field and referenced directly —
-        // never Control.Font (ambient, set by others; MaterialSkin used to overwrite it).
-        // Name/preview/avatar fonts are chosen per-paint by script (Vazirmatn for Persian,
-        // Roboto otherwise). Time/badge are always Latin.
-        private readonly Font _timeFont = FontHelper.Ui(8f);
-        private readonly Font _badgeFont = FontHelper.Ui(8f, FontStyle.Bold);
+        private const int RowH = 64;   // logical px
+
+        private int _dpi;                                          // the DPI this row is laid out at; 0 = not parented yet
+        private int CurDpi { get { return _dpi > 0 ? _dpi : Dpi.Of(this); } }
 
         public ChatEntry Entry { get; }
 
@@ -69,15 +74,35 @@ namespace TelegArm.UI.Controls
         public ChatListItemControl(ChatEntry entry)
         {
             Entry = entry;
-            Height = 64;
+            Height = Dpi.Px(RowH, CurDpi);
             Margin = new Padding(0);
             Cursor = Cursors.Hand;
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer
                      | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
         }
 
+        /// <summary>Rows are built before they are added: the window's DPI is known only once parented.</summary>
+        protected override void OnParentChanged(EventArgs e)
+        {
+            base.OnParentChanged(e);
+            if (Parent == null) return;
+            int d = Dpi.Of(this);
+            if (d != _dpi) { _dpi = d; Height = Dpi.Px(RowH, d); Invalidate(); }
+        }
+
+        void IDpiAware.OnDpiChanged(int oldDpi, int newDpi)
+        {
+            _dpi = newDpi;
+            Height = Dpi.Px(RowH, newDpi);   // SET from the logical value: DpiScaler already ratio-scaled the bounds
+            Invalidate();
+        }
+
         protected override void OnPaint(PaintEventArgs e)
         {
+            int dpi = CurDpi;
+            int P(int v) => Dpi.Px(v, dpi);
+            var timeFont = FontHelper.UiAt(8f, dpi);                     // shared: never dispose
+            var badgeFont = FontHelper.UiAt(8f, dpi, FontStyle.Bold);
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
@@ -89,7 +114,7 @@ namespace TelegArm.UI.Controls
                 bg = ThemeHelper.PaletteFor(IsDark).ListSelected;
             g.Clear(bg);
 
-            const int d = 48, ax = 8, ay = 8;
+            int d = P(48), ax = P(8), ay = P(8);
             var avatarRect = new Rectangle(ax, ay, d, d);
             if (Avatar != null)
             {
@@ -114,10 +139,8 @@ namespace TelegArm.UI.Controls
             {
                 using (var b = new SolidBrush(DrawHelper.AvatarColor(Entry.PeerId)))
                     g.FillEllipse(b, avatarRect);
-                string letter = string.IsNullOrEmpty(Entry.Title) ? "?" : Entry.Title.Substring(0, 1).ToUpper();
-                using (var af = FontHelper.For(Entry.Title ?? "", 15f, FontStyle.Bold))
-                    TextRenderer.DrawText(g, letter, af, avatarRect, Color.White,
-                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                string letter = string.IsNullOrEmpty(Entry.Title) ? "?" : DrawHelper.Initial(Entry.Title);
+                DrawHelper.DrawInitial(g, letter, FontHelper.ForAt(Entry.Title ?? "", 15f, dpi, FontStyle.Bold), avatarRect, Color.White);   // ink-centred (owner report 2026-10-14)
             }
 
             // PRESENCE 2.1: online dot (user peers) — bottom-right of the avatar, green with a 2px
@@ -126,28 +149,27 @@ namespace TelegArm.UI.Controls
             if (Entry.OnlineUntil > DateTime.UtcNow)
             {
                 using (var rim = new SolidBrush(bg))
-                    g.FillEllipse(rim, ax + d - 14, ay + d - 14, 14, 14);
-                g.FillEllipse(OnlineDotBrush, ax + d - 12, ay + d - 12, 10, 10);
+                    g.FillEllipse(rim, ax + d - P(14), ay + d - P(14), P(14), P(14));
+                g.FillEllipse(OnlineDotBrush, ax + d - P(12), ay + d - P(12), P(10), P(10));
             }
 
-            int textLeft = ax + d + 10;
-            const int rightPad = 10, timeWidth = 56;
+            int textLeft = ax + d + P(10);
+            int rightPad = P(10), timeWidth = P(56);
             bool hasBadge = Entry.UnreadCount > 0;
-            int muteW = Entry.Muted ? 18 : 0;
+            int muteW = Entry.Muted ? P(18) : 0;
 
             // NAME (top row): reserve the top-right metadata (timestamp + mute glyph). Taller rect +
             // vertical-center so Persian (Vazirmatn, taller line height than Roboto) isn't clipped.
             int nameRight = Width - timeWidth - rightPad - muteW;
-            var nameRect = new Rectangle(textLeft, 6, Math.Max(0, nameRight - textLeft), 26);
-            using (var nf = FontHelper.For(Entry.Title ?? "", 10f, FontStyle.Bold))
-                DrawRowText(g, Entry.Title ?? "", nf, nameRect, nameColor);
+            var nameRect = new Rectangle(textLeft, P(6), Math.Max(0, nameRight - textLeft), P(26));
+            DrawRowText(g, Entry.Title ?? "", FontHelper.ForAt(Entry.Title ?? "", 10f, dpi, FontStyle.Bold), nameRect, nameColor, dpi);
 
             // Mute glyph sits in the right metadata column (left of the time) — clear of the name rect above.
             if (Entry.Muted)
-                DrawMutedIcon(g, new Rectangle(Width - timeWidth - rightPad - 16, 15, 14, 14), subColor);
+                DrawMutedIcon(g, new Rectangle(Width - timeWidth - rightPad - P(16), P(15), P(14), P(14)), subColor);
 
-            var timeRect = new Rectangle(Width - timeWidth - rightPad, 13, timeWidth, 16);
-            TextRenderer.DrawText(g, DrawHelper.ShortStamp(Entry.Date), _timeFont, timeRect, subColor,
+            var timeRect = new Rectangle(Width - timeWidth - rightPad, P(13), timeWidth, P(16));
+            TextRenderer.DrawText(g, DrawHelper.ShortStamp(Entry.Date), timeFont, timeRect, subColor,
                 TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
 
             // PREVIEW (bottom row) + the trailing indicator CLUSTER (right→left: unread badge, "@" mention, reaction
@@ -155,33 +177,30 @@ namespace TelegArm.UI.Controls
             bool hasMention = Entry.UnreadMentions > 0;
             bool hasReaction = Entry.UnreadReactions > 0;
             string cnt = hasBadge ? (Entry.UnreadCount > 99 ? "99+" : Entry.UnreadCount.ToString()) : null;
-            int unreadW = hasBadge ? Math.Max(20, TextRenderer.MeasureText(cnt, _badgeFont).Width + 10) : 0;
-            const int glyphW = 22, gap = 4, bh = 20;
+            int unreadW = hasBadge ? Math.Max(P(20), TextRenderer.MeasureText(cnt, badgeFont).Width + P(10)) : 0;
+            int glyphW = P(22), gap = P(4), bh = P(20);
             int clusterW = unreadW
                 + (hasMention ? (unreadW > 0 ? gap : 0) + glyphW : 0)
                 + (hasReaction ? ((unreadW > 0 || hasMention) ? gap : 0) + glyphW : 0);
-            int trailing = clusterW > 0 ? clusterW + 6 : (PinnedInView ? 22 : 0);
+            int trailing = clusterW > 0 ? clusterW + P(6) : (PinnedInView ? P(22) : 0);
             int prevRight = Width - rightPad - trailing;
-            var prevRect = new Rectangle(textLeft, 34, Math.Max(0, prevRight - textLeft), 24);
+            var prevRect = new Rectangle(textLeft, P(34), Math.Max(0, prevRight - textLeft), P(24));
             if (Entry.HasDraft)
             {
                 // DRAFTS: "Draft: " in red (Telegram-style), then the draft text in the normal sub color.
                 const string lbl = "Draft: ";
                 Color draftColor = ThemeHelper.PaletteFor(IsDark).ListDraft;
-                using (var pf = FontHelper.For(Entry.DraftText ?? "", 9f))
-                {
-                    var mf = TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix;
-                    int lblW = Math.Min(prevRect.Width, TextRenderer.MeasureText(g, lbl, pf, new Size(int.MaxValue, prevRect.Height), mf).Width);
-                    TextRenderer.DrawText(g, lbl, pf, new Rectangle(prevRect.X, prevRect.Y, lblW, prevRect.Height), draftColor,
-                        mf | TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
-                    var txtRect = new Rectangle(prevRect.X + lblW, prevRect.Y, Math.Max(0, prevRect.Width - lblW), prevRect.Height);
-                    DrawRowText(g, (Entry.DraftText ?? "").Replace("\r", " ").Replace("\n", " "), pf, txtRect, subColor);
-                }
+                var pf = FontHelper.ForAt(Entry.DraftText ?? "", 9f, dpi);   // shared: never dispose
+                var mf = TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix;
+                int lblW = Math.Min(prevRect.Width, TextRenderer.MeasureText(g, lbl, pf, new Size(int.MaxValue, prevRect.Height), mf).Width);
+                TextRenderer.DrawText(g, lbl, pf, new Rectangle(prevRect.X, prevRect.Y, lblW, prevRect.Height), draftColor,
+                    mf | TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+                var txtRect = new Rectangle(prevRect.X + lblW, prevRect.Y, Math.Max(0, prevRect.Width - lblW), prevRect.Height);
+                DrawRowText(g, (Entry.DraftText ?? "").Replace("\r", " ").Replace("\n", " "), pf, txtRect, subColor, dpi);
             }
             else
             {
-                using (var pf = FontHelper.For(Entry.Preview ?? "", 9f))
-                    DrawRowText(g, Entry.Preview ?? "", pf, prevRect, subColor);
+                DrawRowText(g, Entry.Preview ?? "", FontHelper.ForAt(Entry.Preview ?? "", 9f, dpi), prevRect, subColor, dpi);
             }
 
             // Draw the cluster right→left. Unread = accent (GREY if muted); the "@" and heart stay ACCENT even when
@@ -192,36 +211,36 @@ namespace TelegArm.UI.Controls
                 Color mutedGrey = ThemeHelper.PaletteFor(IsDark).ListMuted;
                 if (hasBadge)
                 {
-                    var badge = new Rectangle(rx - unreadW, 36, unreadW, bh);
+                    var badge = new Rectangle(rx - unreadW, P(36), unreadW, bh);
                     using (var b = new SolidBrush(Entry.Muted ? mutedGrey : AccentColor))
                     using (var path = DrawHelper.RoundedRect(badge, bh / 2))
                         g.FillPath(b, path);
-                    TextRenderer.DrawText(g, cnt, _badgeFont, badge, Color.White,
+                    TextRenderer.DrawText(g, cnt, badgeFont, badge, Color.White,
                         TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
                     rx -= unreadW + gap;
                 }
                 if (hasMention)
                 {
-                    var badge = new Rectangle(rx - glyphW, 36, glyphW, bh);
+                    var badge = new Rectangle(rx - glyphW, P(36), glyphW, bh);
                     using (var b = new SolidBrush(AccentColor))
                     using (var path = DrawHelper.RoundedRect(badge, bh / 2))
                         g.FillPath(b, path);
-                    TextRenderer.DrawText(g, "@", _badgeFont, badge, Color.White,
+                    TextRenderer.DrawText(g, "@", badgeFont, badge, Color.White,
                         TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
                     rx -= glyphW + gap;
                 }
                 if (hasReaction)
                 {
-                    var badge = new Rectangle(rx - glyphW, 36, glyphW, bh);
+                    var badge = new Rectangle(rx - glyphW, P(36), glyphW, bh);
                     using (var b = new SolidBrush(AccentColor))
                     using (var path = DrawHelper.RoundedRect(badge, bh / 2))
                         g.FillPath(b, path);
-                    DrawHeart(g, new Rectangle(badge.X + 5, badge.Y + 5, 12, 11), Color.White);
+                    DrawHeart(g, new Rectangle(badge.X + P(5), badge.Y + P(5), P(12), P(11)), Color.White);
                     rx -= glyphW + gap;
                 }
             }
             else if (PinnedInView)
-                DrawPinIcon(g, new Rectangle(Width - rightPad - 16, 38, 14, 14), subColor);
+                DrawPinIcon(g, new Rectangle(Width - rightPad - P(16), P(38), P(14), P(14)), subColor);
 
             using (var p = new Pen(ThemeHelper.PaletteFor(IsDark).ListDivider))
                 g.DrawLine(p, textLeft, Height - 1, Width, Height - 1);
@@ -232,14 +251,14 @@ namespace TelegArm.UI.Controls
         /// TextRenderer (script fallback) single-line, vertically-centered, ellipsized — and right-aligned
         /// RTL (Right | RightToLeft) for Persian/Arabic/Hebrew so it ellipsizes on the left, not hard-clips.
         /// </summary>
-        private static void DrawRowText(Graphics g, string text, Font font, Rectangle rect, Color color)
+        private static void DrawRowText(Graphics g, string text, Font font, Rectangle rect, Color color, int dpi)
         {
             if (rect.Width <= 0 || string.IsNullOrEmpty(text)) return;
             var oldClip = g.Clip;
             g.SetClip(rect);   // no glyph bleeds outside the row's text area
             if (EmojiRenderer.Available && EmojiRenderer.ContainsEmoji(text))
             {
-                DrawInlineRow(g, text, font, rect, color);   // inline emoji, but text via TextRenderer (Persian-safe)
+                DrawInlineRow(g, text, font, rect, color, dpi);   // inline emoji, but text via TextRenderer (Persian-safe)
             }
             else
             {
@@ -263,9 +282,9 @@ namespace TelegArm.UI.Controls
         ///    never collide/overflow.
         /// Mixed-bidi ordering of emoji nested in RTL text stays approximate (acceptable).
         /// </summary>
-        private static void DrawInlineRow(Graphics g, string text, Font font, Rectangle rect, Color color)
+        private static void DrawInlineRow(Graphics g, string text, Font font, Rectangle rect, Color color, int dpi)
         {
-            int es = Math.Max(12, Math.Min(16, rect.Height - 6));   // emoji size that FITS the rect (no top/bottom clip)
+            int es = Math.Max(Dpi.Px(12, dpi), Math.Min(Dpi.Px(16, dpi), rect.Height - Dpi.Px(6, dpi)));   // emoji size that FITS the rect
             int cy = rect.Y + rect.Height / 2;
             var measFlags = TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix;
 
@@ -273,7 +292,7 @@ namespace TelegArm.UI.Controls
             var runs = new List<(Image img, string txt, int w)>();
             foreach (var run in EmojiRenderer.Segment(text))
             {
-                if (run.Emoji != null) runs.Add((run.Emoji, null, es + 2));
+                if (run.Emoji != null) runs.Add((run.Emoji, null, es + Dpi.Px(2, dpi)));
                 else if (!string.IsNullOrEmpty(run.Text))
                     runs.Add((null, run.Text,
                         TextRenderer.MeasureText(g, run.Text, font, new Size(int.MaxValue, rect.Height), measFlags).Width));
@@ -363,15 +382,15 @@ namespace TelegArm.UI.Controls
             return false;
         }
 
-        /// <summary>Clean Telegram-like pin/tack: round head + straight needle.</summary>
+        /// <summary>Clean Telegram-like pin/tack: round head + straight needle. Drawn for a 14 px box; scales with it.</summary>
         private static void DrawPinIcon(Graphics g, Rectangle r, Color color)
         {
-            float cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
+            float k = r.Width / 14f, cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
             using (var b = new SolidBrush(color))
-            using (var pen = new Pen(color, 1.8f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            using (var pen = new Pen(color, 1.8f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round })
             {
-                g.FillEllipse(b, cx - 4f, cy - 6f, 8f, 8f);     // round head
-                g.DrawLine(pen, cx, cy + 1.5f, cx, cy + 6.5f);  // needle
+                g.FillEllipse(b, cx - 4f * k, cy - 6f * k, 8f * k, 8f * k);     // round head
+                g.DrawLine(pen, cx, cy + 1.5f * k, cx, cy + 6.5f * k);          // needle
             }
         }
 
@@ -392,19 +411,20 @@ namespace TelegArm.UI.Controls
             }
         }
 
+        /// <summary>Drawn for a 14 px box; scales with it.</summary>
         private static void DrawMutedIcon(Graphics g, Rectangle r, Color color)
         {
-            float cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
+            float k = r.Width / 14f, cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
             using (var b = new SolidBrush(color))
-            using (var pen = new Pen(color, 1.4f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            using (var pen = new Pen(color, 1.4f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round })
             {
-                g.FillRectangle(b, cx - 5, cy - 2, 3, 4);                 // speaker body
-                g.FillPolygon(b, new[]                                     // cone
+                g.FillRectangle(b, cx - 5 * k, cy - 2 * k, 3 * k, 4 * k);         // speaker body
+                g.FillPolygon(b, new[]                                             // cone
                 {
-                    new PointF(cx - 2, cy - 4), new PointF(cx + 1, cy - 6),
-                    new PointF(cx + 1, cy + 6), new PointF(cx - 2, cy + 4)
+                    new PointF(cx - 2 * k, cy - 4 * k), new PointF(cx + 1 * k, cy - 6 * k),
+                    new PointF(cx + 1 * k, cy + 6 * k), new PointF(cx - 2 * k, cy + 4 * k)
                 });
-                g.DrawLine(pen, cx - 6, cy - 6, cx + 6, cy + 6);          // mute slash
+                g.DrawLine(pen, cx - 6 * k, cy - 6 * k, cx + 6 * k, cy + 6 * k);  // mute slash
             }
         }
 
@@ -412,35 +432,27 @@ namespace TelegArm.UI.Controls
         /// glyph — RT-safe). A hook from the bottom-right up and left to an arrowhead.</summary>
         private static void DrawRepliesGlyph(Graphics g, Rectangle r)
         {
+            float k = r.Width / 48f;   // drawn for the 48 px avatar; scales with it
             float cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
-            float tipX = cx - 8, tipY = cy - 3;
-            using (var pen = new Pen(Color.White, 2.6f)
+            float tipX = cx - 8 * k, tipY = cy - 3 * k;
+            using (var pen = new Pen(Color.White, 2.6f * k)
             { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
             {
                 g.DrawLines(pen, new[]
                 {
-                    new PointF(cx + 9, cy + 6),   // tail (bottom-right)
-                    new PointF(cx + 2, cy + 6),
-                    new PointF(cx + 2, tipY),
-                    new PointF(tipX, tipY)        // left to the arrow tip
+                    new PointF(cx + 9 * k, cy + 6 * k),   // tail (bottom-right)
+                    new PointF(cx + 2 * k, cy + 6 * k),
+                    new PointF(cx + 2 * k, tipY),
+                    new PointF(tipX, tipY)                // left to the arrow tip
                 });
                 g.DrawLines(pen, new[]
                 {
-                    new PointF(tipX + 5, tipY - 5),
+                    new PointF(tipX + 5 * k, tipY - 5 * k),
                     new PointF(tipX, tipY),
-                    new PointF(tipX + 5, tipY + 5)   // arrowhead
+                    new PointF(tipX + 5 * k, tipY + 5 * k)   // arrowhead
                 });
             }
         }
-
-        protected override void Dispose(bool disposing)
-        {
-            if (disposing)
-            {
-                _timeFont.Dispose();
-                _badgeFont.Dispose();
-            }
-            base.Dispose(disposing);
-        }
+        // (No Dispose override: step 3.2 — the fonts are shared FontCache fonts, never disposed.)
     }
 }

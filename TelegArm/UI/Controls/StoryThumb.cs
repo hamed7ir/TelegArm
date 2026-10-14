@@ -13,10 +13,17 @@ namespace TelegArm.UI.Controls
     /// <summary>PROFILE-STORIES: one "posted story" tile — a rounded, cover-cropped thumbnail (placeholder until it
     /// lands); video tiles get a play triangle + duration over a bottom scrim. SELF-loads its thumbnail off the UI
     /// thread (photo → smallest PhotoSize; video → the document thumb). Tap → Clicked. Reused by the profile's
-    /// preview strip AND the full <see cref="StoriesGridForm"/>.</summary>
-    internal sealed class StoryThumb : Control
+    /// preview strip AND the full <see cref="StoriesGridForm"/>.
+    ///
+    /// Redesign step 3.2 (the ChatListItemControl pattern): W/H and every paint length are LOGICAL (96-DPI) px drawn
+    /// through Px at the tile's DPI; the duration font is a shared FontHelper.UiAt font (never disposed). Identity at
+    /// 96. The DPI is the window's once parented; IDpiAware SETS the size from W/H, never multiplies.</summary>
+    internal sealed class StoryThumb : Control, IDpiAware
     {
-        public const int W = 86, H = 112;
+        public const int W = 86, H = 112;   // logical px
+
+        private int _dpi;                                          // the DPI this tile is laid out at; 0 = not parented yet
+        private int CurDpi { get { return _dpi > 0 ? _dpi : Dpi.Of(this); } }
 
         private readonly bool _isVideo;
         private readonly int _durSec;
@@ -34,9 +41,25 @@ namespace TelegArm.UI.Controls
                 if (v != null) { _isVideo = true; _durSec = (int)v.duration; }
             }
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
-            Size = new Size(W, H);
+            Size = new Size(Dpi.Px(W, CurDpi), Dpi.Px(H, CurDpi));
             Cursor = Cursors.Hand;
             var _ = LoadAsync(service, story);
+        }
+
+        /// <summary>Built before it is added: the window's DPI is known only once parented.</summary>
+        protected override void OnParentChanged(EventArgs e)
+        {
+            base.OnParentChanged(e);
+            if (Parent == null) return;
+            int d = Dpi.Of(this);
+            if (d != _dpi) { _dpi = d; Size = new Size(Dpi.Px(W, d), Dpi.Px(H, d)); Invalidate(); }
+        }
+
+        void IDpiAware.OnDpiChanged(int oldDpi, int newDpi)
+        {
+            _dpi = newDpi;
+            Size = new Size(Dpi.Px(W, newDpi), Dpi.Px(H, newDpi));   // SET from the logical value: DpiScaler already ratio-scaled the bounds
+            Invalidate();
         }
 
         private async System.Threading.Tasks.Task LoadAsync(TelegramService service, StoryItem story)
@@ -65,10 +88,12 @@ namespace TelegArm.UI.Controls
 
         protected override void OnPaint(PaintEventArgs e)
         {
+            int dpi = CurDpi;
+            int P(int v) => Dpi.Px(v, dpi);
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             var outer = new Rectangle(0, 0, Width - 1, Height - 1);
-            using (var path = DrawHelper.RoundedRect(outer, 10))
+            using (var path = DrawHelper.RoundedRect(outer, P(10)))
             {
                 var save = g.Save();
                 g.SetClip(path);
@@ -84,19 +109,21 @@ namespace TelegArm.UI.Controls
                 }
                 if (_isVideo)
                 {
-                    using (var scrim = new LinearGradientBrush(new Rectangle(0, Height - 30, Width, 30),
+                    int sh = P(30);
+                    using (var scrim = new LinearGradientBrush(new Rectangle(0, Height - sh, Width, sh),
                                Color.FromArgb(0, 0, 0, 0), Color.FromArgb(160, 0, 0, 0), LinearGradientMode.Vertical))
-                        g.FillRectangle(scrim, 0, Height - 30, Width, 30);
+                        g.FillRectangle(scrim, 0, Height - sh, Width, sh);
                     using (var tb = new SolidBrush(Color.White))
-                        g.FillPolygon(tb, new[] { new PointF(9, Height - 19), new PointF(9, Height - 7), new PointF(19, Height - 13) });
-                    using (var f = FontHelper.Ui(8f, FontStyle.Bold))
-                        TextRenderer.DrawText(g, FormatDur(_durSec), f, new Rectangle(23, Height - 22, Width - 25, 16), Color.White,
-                            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                        g.FillPolygon(tb, new[] { new PointF(P(9), Height - P(19)), new PointF(P(9), Height - P(7)), new PointF(P(19), Height - P(13)) });
+                    TextRenderer.DrawText(g, FormatDur(_durSec), FontHelper.UiAt(8f, dpi, FontStyle.Bold),   // shared: never dispose
+                        new Rectangle(P(23), Height - P(22), Width - P(25), P(16)), Color.White,
+                        TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
                 }
                 g.Restore(save);
             }
+            // the outline stays a 1 px hairline at every DPI (like the dividers of the exemplar row)
             using (var pen = new Pen(_dark ? Color.FromArgb(70, 70, 74) : Color.FromArgb(206, 206, 210), 1f))
-            using (var path2 = DrawHelper.RoundedRect(outer, 10))
+            using (var path2 = DrawHelper.RoundedRect(outer, P(10)))
                 g.DrawPath(pen, path2);
         }
 

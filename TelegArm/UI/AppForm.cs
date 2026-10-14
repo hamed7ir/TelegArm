@@ -77,25 +77,45 @@ namespace TelegArm.UI
         /// profile in MainForm's Info dock): no title bar, no custom chrome, no resize gutter, no hit-testing of our own
         /// (a pane must never answer HTCAPTION — the user would drag it around inside its host). Call in the subclass
         /// constructor, before the handle exists; the caller then sets TopLevel = false.</summary>
-        protected void UseAsPane()
+        /// <para>Step 3.8a: <paramref name="hostDpi"/> is the host window's DPI, so what the subclass builds in its
+        /// constructor (before it is parented) is already at that DPI. From then on the pane READS its host's DPI and never
+        /// rescales itself: the host's rescale walks into the pane, so a second pass of its own (its Resync on the resize
+        /// the host's pass causes) scaled the same controls twice under per-monitor DPI.</para>
+        protected void UseAsPane(int hostDpi = 0)
         {
             CustomChrome = false;
             FormBorderStyle = FormBorderStyle.None;
             if (Bar != null) Bar.Visible = false;
             Padding = Padding.Empty;
             IsPane = true;
+            _windowDpi.Adopt(hostDpi);
+        }
+
+        /// <summary>The DPI this window lays out at. A pane: its host's (see <see cref="UseAsPane"/>).</summary>
+        private int CurrentDpi
+        {
+            get
+            {
+                if (IsPane)
+                {
+                    var host = TopLevelControl as IDpiHost;
+                    if (host != null && !ReferenceEquals(host, this)) return host.Dpi;
+                }
+                return _windowDpi.Dpi;
+            }
         }
 
         /// <summary>True after <see cref="UseAsPane"/>.</summary>
         public bool IsPane { get; private set; }
 
-        int IDpiHost.Dpi { get { return _windowDpi.Dpi; } }
+        int IDpiHost.Dpi { get { return CurrentDpi; } }
 
         /// <summary>After DpiScaler's generic pass, re-derive what this form computes from its DPI itself: the gutter
         /// and the minimum size. Without this the gutter was scaled TWICE (OnResize set Px(6) at the new DPI, then
         /// the generic pass multiplied it again): 9 → 25 px at 240 DPI, and 5 px after moving back (gallery probe).</summary>
         void IDpiAware.OnDpiChanged(int oldDpi, int newDpi)
         {
+            if (IsPane) _windowDpi.Adopt(newDpi);   // keep the stored value in step with the host (it is read through anyway)
             ApplyGutter();
             if (!_logicalMin.IsEmpty) MinimumSize = new Size(Px(_logicalMin.Width), Px(_logicalMin.Height));
             UpdateCompact();
@@ -106,10 +126,13 @@ namespace TelegArm.UI
         protected virtual void OnDpiChanged(int oldDpi, int newDpi) { }
 
         /// <summary>This window's current DPI.</summary>
-        public int WindowDpiValue { get { return _windowDpi.Dpi; } }
+        public int WindowDpiValue { get { return CurrentDpi; } }
+
+        /// <summary>The RAW DPI of this window's monitor (step 3.8a), for what must stay physical.</summary>
+        public int MonitorDpiValue { get { return _windowDpi.MonitorDpi; } }
 
         /// <summary>A logical length at this window's DPI.</summary>
-        protected int Px(int n) { return Dpi.Px(n, _windowDpi.Dpi); }
+        protected int Px(int n) { return Dpi.Px(n, CurrentDpi); }
 
         public override string Text
         {
@@ -237,7 +260,7 @@ namespace TelegArm.UI
             base.OnResize(e);
             if (Bar != null) Bar.SyncWindowState(WindowState);
             ApplyGutter();
-            if (WindowState != FormWindowState.Minimized) _windowDpi.Resync("restore");
+            if (WindowState != FormWindowState.Minimized && !IsPane) _windowDpi.Resync("restore");
             KeepNormalBounds();
             Invalidate();
         }
@@ -325,7 +348,7 @@ namespace TelegArm.UI
         {
             base.OnHandleCreated(e);
             if (CustomChrome) ApplyDwmAttributes();
-            _windowDpi.Resync("handle");
+            if (!IsPane) _windowDpi.Resync("handle");
             UpdateCompact();
         }
 
@@ -335,7 +358,7 @@ namespace TelegArm.UI
             if (CustomChrome && !_selfChecked) { _selfChecked = true; SelfCheck(); }
         }
 
-        protected override void OnActivated(EventArgs e) { base.OnActivated(e); _windowDpi.Resync("activated"); }
+        protected override void OnActivated(EventArgs e) { base.OnActivated(e); if (!IsPane) _windowDpi.Resync("activated"); }
 
         /// <summary>Compact title bar (36 instead of 46) when the work area is at most 800 logical px tall — RT's
         /// 1366×768 always qualifies (plan D11). MainForm also forces it while the keyboard has shrunk the window.</summary>
@@ -344,7 +367,7 @@ namespace TelegArm.UI
             if (Bar == null || !IsHandleCreated) return;
             try
             {
-                int h = Screen.FromHandle(Handle).WorkingArea.Height * Dpi.Logical / Math.Max(1, _windowDpi.Dpi);
+                int h = Screen.FromHandle(Handle).WorkingArea.Height * Dpi.Logical / Math.Max(1, CurrentDpi);
                 Bar.Compact = h <= 800;
             }
             catch { }
@@ -361,7 +384,7 @@ namespace TelegArm.UI
 
         protected override void WndProc(ref Message m)
         {
-            if (_windowDpi.OnMessage(ref m)) return;
+            if (!IsPane && _windowDpi.OnMessage(ref m)) return;
             if (CustomChrome)
             {
                 switch (m.Msg)
@@ -397,7 +420,7 @@ namespace TelegArm.UI
                 case WM_DWMCOLORIZATIONCOLORCHANGED: ThemeHelper.NotifyAccentChanged(); break;
                 case WM_DISPLAYCHANGE:
                 case WM_SETTINGCHANGE:
-                    try { BeginInvoke((Action)(() => { _windowDpi.Resync("display"); UpdateCompact(); })); } catch { }
+                    try { BeginInvoke((Action)(() => { if (!IsPane) _windowDpi.Resync("display"); UpdateCompact(); })); } catch { }
                     break;
                 case WM_ACTIVATE:
                     // DroidFinestra's (originally TelegArm's) WM_ACTIVATE fix: on a NON-click reactivation WinForms

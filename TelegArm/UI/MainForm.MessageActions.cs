@@ -159,7 +159,7 @@ namespace TelegArm.UI
         private void UpdatePinnedBar()
         {
             bool has = _pinnedMessages != null && _pinnedMessages.Count > 0;
-            if (_rightLayout != null) _rightLayout.RowStyles[2].Height = has ? 46 : 0;
+            SetRowPx(_rightLayout, 2, has ? 46 : 0);   // step 3.4: logical px
             if (_pinnedListForm != null && !_pinnedListForm.IsDisposed)
             {
                 if (!has) _pinnedListForm.Close();                       // no pins left → close the popup
@@ -226,8 +226,8 @@ namespace TelegArm.UI
             // Anchor the popup under the pinned bar's right edge (where the list icon is).
             var anchor = _pinnedBar != null && _pinnedBar.Visible
                 ? _pinnedBar.PointToScreen(new Point(_pinnedBar.Width - form.Width, _pinnedBar.Height))
-                : PointToScreen(new Point((Width - form.Width) / 2, 80));
-            var scr = Screen.FromControl(this).WorkingArea;
+                : PointToScreen(new Point((Width - form.Width) / 2, Px(80)));
+            var scr = Screen.FromControl(this).WorkingArea;   // physical screen maths: stays raw
             int fx = Math.Max(scr.Left, Math.Min(anchor.X, scr.Right - form.Width));
             int fy = Math.Max(scr.Top, Math.Min(anchor.Y, scr.Bottom - form.Height));
             form.Location = new Point(fx, fy);
@@ -443,7 +443,7 @@ namespace TelegArm.UI
             if (_selectionBar == null) return;
             int scrollY = _messagePanel != null ? -_messagePanel.AutoScrollPosition.Y : 0;
             _selectionBar.Visible = show;
-            _rightLayout.RowStyles[3].Height = show ? 48 : 0;
+            SetRowPx(_rightLayout, 3, show ? 48 : 0);   // step 3.4: logical px
             if (_messagePanel != null) _messagePanel.AutoScrollPosition = new Point(0, scrollY);
         }
 

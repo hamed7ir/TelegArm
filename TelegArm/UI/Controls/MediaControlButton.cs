@@ -11,12 +11,20 @@ namespace TelegArm.UI.Controls
     /// <summary>
     /// A media control button drawn entirely with GDI+ shapes — no fonts/glyphs —
     /// so it looks identical on Windows 8.1, 10, x86/x64 and ARM32.
+    ///
+    /// Redesign step 3.2: lengths are LOGICAL (96-DPI), drawn at the button's DPI (k = dpi/96, the GlyphButton
+    /// pattern; the window's DPI once parented); IDpiAware SETS the 36x36 from the logical value (every host also
+    /// sizes it Px(36), so the two agree). Identity at 96.
     /// </summary>
-    public class MediaControlButton : Control
+    public class MediaControlButton : Control, IDpiAware
     {
+        private const int Side = 36;   // logical px
+
         private MediaButtonIcon _icon;
         private bool _active;
         private bool _hover;
+        private int _dpi;                                          // the DPI this button is laid out at; 0 = not parented yet
+        private int CurDpi { get { return _dpi > 0 ? _dpi : Dpi.Of(this); } }
 
         public MediaButtonIcon Icon
         {
@@ -35,10 +43,26 @@ namespace TelegArm.UI.Controls
         {
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
                      | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
-            Size = new Size(36, 36);
+            Size = new Size(Dpi.Px(Side, CurDpi), Dpi.Px(Side, CurDpi));
             Cursor = Cursors.Hand;
             BackColor = Color.FromArgb(28, 28, 28); // matches the control bar
             TabStop = false;
+        }
+
+        /// <summary>Built before it is added: the window's DPI is known only once parented.</summary>
+        protected override void OnParentChanged(EventArgs e)
+        {
+            base.OnParentChanged(e);
+            if (Parent == null) return;
+            int d = Dpi.Of(this);
+            if (d != _dpi) { _dpi = d; Size = new Size(Dpi.Px(Side, d), Dpi.Px(Side, d)); Invalidate(); }
+        }
+
+        void IDpiAware.OnDpiChanged(int oldDpi, int newDpi)
+        {
+            _dpi = newDpi;
+            Size = new Size(Dpi.Px(Side, newDpi), Dpi.Px(Side, newDpi));   // SET from the logical value: DpiScaler already ratio-scaled the bounds
+            Invalidate();
         }
 
         protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }
@@ -46,6 +70,9 @@ namespace TelegArm.UI.Controls
 
         protected override void OnPaint(PaintEventArgs e)
         {
+            int dpi = CurDpi;
+            int P(int v) => Dpi.Px(v, dpi);
+            float k = dpi / 96f;   // exactly 1 at 96
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.Clear(BackColor);
@@ -53,81 +80,81 @@ namespace TelegArm.UI.Controls
             Color bg = _hover ? Color.FromArgb(80, 80, 80) : Color.FromArgb(45, 45, 48);
             if (_active) bg = ThemeHelper.GetWindowsAccentColor();
             using (var brush = new SolidBrush(bg))
-                g.FillEllipse(brush, 2, 2, Width - 4, Height - 4);
+                g.FillEllipse(brush, P(2), P(2), Width - P(4), Height - P(4));
 
             float cx = Width / 2f;
             float cy = Height / 2f;
             using (var white = new SolidBrush(Color.White))
-            using (var pen = new Pen(Color.White, 2f))
+            using (var pen = new Pen(Color.White, 2f * k))
             {
                 switch (_icon)
                 {
                     case MediaButtonIcon.Play:
                         g.FillPolygon(white, new[]
                         {
-                            new PointF(cx - 4, cy - 6), new PointF(cx + 7, cy), new PointF(cx - 4, cy + 6)
+                            new PointF(cx - 4 * k, cy - 6 * k), new PointF(cx + 7 * k, cy), new PointF(cx - 4 * k, cy + 6 * k)
                         });
                         break;
 
                     case MediaButtonIcon.Pause:
-                        g.FillRectangle(white, cx - 6, cy - 6, 4, 12);
-                        g.FillRectangle(white, cx + 2, cy - 6, 4, 12);
+                        g.FillRectangle(white, cx - 6 * k, cy - 6 * k, 4 * k, 12 * k);
+                        g.FillRectangle(white, cx + 2 * k, cy - 6 * k, 4 * k, 12 * k);
                         break;
 
                     case MediaButtonIcon.Previous:
                         g.FillPolygon(white, new[]
                         {
-                            new PointF(cx + 4, cy - 6), new PointF(cx - 4, cy), new PointF(cx + 4, cy + 6)
+                            new PointF(cx + 4 * k, cy - 6 * k), new PointF(cx - 4 * k, cy), new PointF(cx + 4 * k, cy + 6 * k)
                         });
-                        g.FillRectangle(white, cx - 7, cy - 6, 3, 12);
+                        g.FillRectangle(white, cx - 7 * k, cy - 6 * k, 3 * k, 12 * k);
                         break;
 
                     case MediaButtonIcon.Next:
                         g.FillPolygon(white, new[]
                         {
-                            new PointF(cx - 4, cy - 6), new PointF(cx + 4, cy), new PointF(cx - 4, cy + 6)
+                            new PointF(cx - 4 * k, cy - 6 * k), new PointF(cx + 4 * k, cy), new PointF(cx - 4 * k, cy + 6 * k)
                         });
-                        g.FillRectangle(white, cx + 4, cy - 6, 3, 12);
+                        g.FillRectangle(white, cx + 4 * k, cy - 6 * k, 3 * k, 12 * k);
                         break;
 
                     case MediaButtonIcon.Volume:
-                        g.FillRectangle(white, cx - 7, cy - 3, 4, 6);
+                        g.FillRectangle(white, cx - 7 * k, cy - 3 * k, 4 * k, 6 * k);
                         g.FillPolygon(white, new[]
                         {
-                            new PointF(cx - 3, cy - 5), new PointF(cx + 2, cy - 8),
-                            new PointF(cx + 2, cy + 8), new PointF(cx - 3, cy + 5)
+                            new PointF(cx - 3 * k, cy - 5 * k), new PointF(cx + 2 * k, cy - 8 * k),
+                            new PointF(cx + 2 * k, cy + 8 * k), new PointF(cx - 3 * k, cy + 5 * k)
                         });
-                        g.DrawArc(pen, cx + 2, cy - 5, 6, 10, -60, 120);
+                        g.DrawArc(pen, cx + 2 * k, cy - 5 * k, 6 * k, 10 * k, -60, 120);
                         break;
 
                     case MediaButtonIcon.VolumeMute:
-                        g.FillRectangle(white, cx - 7, cy - 3, 4, 6);
+                        g.FillRectangle(white, cx - 7 * k, cy - 3 * k, 4 * k, 6 * k);
                         g.FillPolygon(white, new[]
                         {
-                            new PointF(cx - 3, cy - 5), new PointF(cx + 2, cy - 8),
-                            new PointF(cx + 2, cy + 8), new PointF(cx - 3, cy + 5)
+                            new PointF(cx - 3 * k, cy - 5 * k), new PointF(cx + 2 * k, cy - 8 * k),
+                            new PointF(cx + 2 * k, cy + 8 * k), new PointF(cx - 3 * k, cy + 5 * k)
                         });
-                        using (var red = new Pen(Color.Red, 2f))
+                        using (var red = new Pen(Color.Red, 2f * k))
                         {
-                            g.DrawLine(red, cx + 4, cy - 4, cx + 9, cy + 4);
-                            g.DrawLine(red, cx + 9, cy - 4, cx + 4, cy + 4);
+                            g.DrawLine(red, cx + 4 * k, cy - 4 * k, cx + 9 * k, cy + 4 * k);
+                            g.DrawLine(red, cx + 9 * k, cy - 4 * k, cx + 4 * k, cy + 4 * k);
                         }
                         break;
 
                     case MediaButtonIcon.Forward:
                         // Right-pointing arrow (shaft + head).
-                        using (var p2 = new Pen(Color.White, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+                        using (var p2 = new Pen(Color.White, 2f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
                         {
-                            g.DrawLine(p2, cx - 7, cy, cx + 6, cy);
-                            g.DrawLines(p2, new[] { new PointF(cx + 1, cy - 5), new PointF(cx + 6, cy), new PointF(cx + 1, cy + 5) });
+                            g.DrawLine(p2, cx - 7 * k, cy, cx + 6 * k, cy);
+                            g.DrawLines(p2, new[] { new PointF(cx + 1 * k, cy - 5 * k), new PointF(cx + 6 * k, cy), new PointF(cx + 1 * k, cy + 5 * k) });
                         }
                         break;
 
                     case MediaButtonIcon.Close:
-                        using (var p3 = new Pen(Color.White, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                        using (var p3 = new Pen(Color.White, 2f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round })
                         {
-                            g.DrawLine(p3, cx - 5, cy - 5, cx + 5, cy + 5);
-                            g.DrawLine(p3, cx + 5, cy - 5, cx - 5, cy + 5);
+                            g.DrawLine(p3, cx - 5 * k, cy - 5 * k, cx + 5 * k, cy + 5 * k);
+                            g.DrawLine(p3, cx + 5 * k, cy - 5 * k, cx - 5 * k, cy + 5 * k);
                         }
                         break;
                 }

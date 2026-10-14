@@ -70,7 +70,7 @@ namespace TelegArm.UI.Controls
             public int SelEnd;
         }
 
-        private const int QuoteIndent = 12, BarW = 3;
+        private const int QuoteIndent = 12, BarW = 3;   // LOGICAL px, read through L() (step 3.2)
 
         private readonly List<Tok> _toks = new List<Tok>();
         private readonly List<Line> _lines = new List<Line>();
@@ -234,29 +234,41 @@ namespace TelegArm.UI.Controls
         private Font _fReg, _fBold, _fMono, _fMonoBold;
         private string _fKey;
 
+        /// <summary>Step 3.2 — the DPI a PIXEL-unit base font is sized for (FontHelper.UiAt/ForAt, FontCache): it turns
+        /// "one point smaller" (the monospace runs) into pixels. 0 = the system DPI. Point-unit base fonts ignore it.</summary>
+        public int LayoutDpi { get; set; }
+
+        /// <summary>Step 3.2 — a logical length at <see cref="LayoutDpi"/>. 0 (never set) leaves it unscaled, so a caller
+        /// that has not been converted keeps exactly today's pixels; at 96 it is the identity too.</summary>
+        private int L(int v) { return Dpi.Px(v, LayoutDpi); }
+
+        /// <summary>The style fonts keep the base font's UNIT. Before step 3.2 they were always built in points, so a
+        /// pixel-unit base font (every FontCache font) came out 1.33-2.5x too big (ProfileForm worked around it).</summary>
         private void EnsureFonts(Font baseFont)
         {
-            string key = baseFont.FontFamily.Name + "|" + baseFont.Size.ToString("0.0");
+            string key = baseFont.FontFamily.Name + "|" + baseFont.Size.ToString("0.0") + "|" + baseFont.Unit;
             if (key == _fKey) return;
             DisposeFonts();
             _fKey = key;
-            var fam = baseFont.FontFamily; float sz = baseFont.Size;
-            _fReg = new Font(fam, sz, FontStyle.Regular);
-            _fBold = MakeStyled(fam, sz, FontStyle.Bold);
-            float msz = Math.Max(7f, sz - 1f);
-            _fMono = MakeMono(msz, FontStyle.Regular);
-            _fMonoBold = MakeMono(msz, FontStyle.Bold);
+            var fam = baseFont.FontFamily; float sz = baseFont.Size; var unit = baseFont.Unit;
+            _fReg = new Font(fam, sz, FontStyle.Regular, unit);
+            _fBold = MakeStyled(fam, sz, FontStyle.Bold, unit);
+            // One point, in the base font's unit (exactly 1 for every point font: unchanged for them).
+            float onePt = unit == GraphicsUnit.Pixel ? (LayoutDpi > 0 ? LayoutDpi : Dpi.SystemDpi) / 72f : 1f;
+            float msz = Math.Max(7f * onePt, sz - onePt);
+            _fMono = MakeMono(msz, FontStyle.Regular, unit);
+            _fMonoBold = MakeMono(msz, FontStyle.Bold, unit);
         }
 
-        private static Font MakeStyled(FontFamily fam, float sz, FontStyle st)
+        private static Font MakeStyled(FontFamily fam, float sz, FontStyle st, GraphicsUnit unit)
         {
-            try { return new Font(fam, sz, st); } catch { return new Font(fam, sz, FontStyle.Regular); }
+            try { return new Font(fam, sz, st, unit); } catch { return new Font(fam, sz, FontStyle.Regular, unit); }
         }
 
-        private static Font MakeMono(float sz, FontStyle st)
+        private static Font MakeMono(float sz, FontStyle st, GraphicsUnit unit)
         {
-            try { return new Font("Consolas", sz, st); }
-            catch { try { return new Font("Courier New", sz, st); } catch { return new Font(FontFamily.GenericMonospace, sz, st); } }
+            try { return new Font("Consolas", sz, st, unit); }
+            catch { try { return new Font("Courier New", sz, st, unit); } catch { return new Font(FontFamily.GenericMonospace, sz, st, unit); } }
         }
 
         // The face used for measuring + drawing a run (italic is a draw-time shear, not a face).
@@ -270,7 +282,7 @@ namespace TelegArm.UI.Controls
         // ── Layout ───────────────────────────────────────────────────────────
         public int Measure(Graphics g, int maxWidth, Font baseFont)
         {
-            string key = maxWidth + "|" + baseFont.FontFamily.Name + "|" + baseFont.Size.ToString("0.0");
+            string key = maxWidth + "|" + baseFont.FontFamily.Name + "|" + baseFont.Size.ToString("0.0") + "|" + baseFont.Unit;
             if (key == _measureKey) { PerfLog.Inc(PerfLog.P.MeasureRedundant); return _measuredMaxLine; }   // cache hit — layout unchanged, skip recompute
             long __t = PerfLog.T();
             _measureKey = key;
@@ -283,8 +295,8 @@ namespace TelegArm.UI.Controls
         private int MeasureCore(Graphics g, int maxWidth, Font baseFont)
         {
             EnsureFonts(baseFont);
-            _lineH = Math.Max(14, (int)Math.Ceiling(baseFont.GetHeight(g)) + 2);
-            _emojiSz = _lineH - 2;
+            _lineH = Math.Max(L(14), (int)Math.Ceiling(baseFont.GetHeight(g)) + L(2));
+            _emojiSz = _lineH - L(2);
             var flags = TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix;
             int slant = (int)(_lineH * 0.2f);
 
@@ -292,7 +304,7 @@ namespace TelegArm.UI.Controls
             {
                 if (t.Newline) { t.W = 0; continue; }
                 if (t.DocId != 0) t.Image = _resolver != null ? _resolver(t.DocId) : null;
-                if (t.Image != null) { t.W = _emojiSz + 1; continue; }
+                if (t.Image != null) { t.W = _emojiSz + L(1); continue; }
                 if (string.IsNullOrEmpty(t.Text)) { t.W = 0; continue; }
                 t.W = TextRenderer.MeasureText(g, t.Text, FontFor(t.Style), new Size(int.MaxValue, _lineH), flags).Width;
                 if ((t.Style & InlineStyle.Italic) != 0 && !t.Space) t.W += slant;   // reserve the slant overhang
@@ -302,7 +314,8 @@ namespace TelegArm.UI.Controls
             var cur = new Line();
             int x = 0, maxLine = 0, y = 0;
 
-            void BreakLine() { cur.Y = y; Finalize(cur); _lines.Add(cur); y += _lineH; cur = new Line(); x = 0; }
+            int quoteIndent = L(QuoteIndent);
+            void BreakLine() { cur.Y = y; Finalize(cur, quoteIndent); _lines.Add(cur); y += _lineH; cur = new Line(); x = 0; }
 
             // Measured width of s[a..b) in a given face (+ the italic slant overhang).
             int SegW(string s, int a, int b, Font f, bool italic)
@@ -326,7 +339,7 @@ namespace TelegArm.UI.Controls
                 while (start < s.Length)
                 {
                     int remain = avail - x;
-                    if (remain <= 6 && cur.Toks.Count > 0) { BreakLine(); remain = avail; }
+                    if (remain <= L(6) && cur.Toks.Count > 0) { BreakLine(); remain = avail; }
 
                     // Binary-search the longest prefix [start..best) that fits the remaining width.
                     int lo = start + 1, hi = s.Length, best = start, bestW = 0;
@@ -358,9 +371,9 @@ namespace TelegArm.UI.Controls
             foreach (var t in _toks)
             {
                 if (t.Newline) { BreakLine(); continue; }
-                int indent = (t.Style & InlineStyle.Blockquote) != 0 ? QuoteIndent : 0;
+                int indent = (t.Style & InlineStyle.Blockquote) != 0 ? quoteIndent : 0;
                 bool isPre = (t.Style & InlineStyle.Pre) != 0;
-                int avail = Math.Max(8, maxWidth - indent);
+                int avail = Math.Max(L(8), maxWidth - indent);
                 if (cur.Toks.Count == 0 && t.Space && !isPre) continue;       // no leading space (except pre)
 
                 if (!t.Space && t.Image == null && !string.IsNullOrEmpty(t.Text) && t.W > avail)
@@ -375,21 +388,21 @@ namespace TelegArm.UI.Controls
                 cur.Toks.Add(t); x += t.W;
                 maxLine = Math.Max(maxLine, x + indent);
             }
-            if (cur.Toks.Count > 0) { cur.Y = y; Finalize(cur); _lines.Add(cur); y += _lineH; }
+            if (cur.Toks.Count > 0) { cur.Y = y; Finalize(cur, quoteIndent); _lines.Add(cur); y += _lineH; }
 
             Height = y;
             Width = maxLine;
             return maxLine;
         }
 
-        private static void Finalize(Line line)
+        private static void Finalize(Line line, int quoteIndent)   // quoteIndent: QuoteIndent at LayoutDpi
         {
             foreach (var t in line.Toks)
             {
                 if ((t.Style & InlineStyle.Blockquote) != 0) line.Quote = true;
                 if ((t.Style & InlineStyle.Pre) != 0) line.Pre = true;
             }
-            line.Indent = line.Quote ? QuoteIndent : 0;
+            line.Indent = line.Quote ? quoteIndent : 0;
         }
 
         public void Position(int width, bool rtl)
@@ -623,9 +636,9 @@ namespace TelegArm.UI.Controls
             {
                 if (!_lines[i].Pre) { i++; continue; }
                 int j = i; while (j < _lines.Count && _lines[j].Pre) j++;
-                var pr = Rectangle.FromLTRB(ox, _lines[i].Y + oy - 1, ox + Width, _lines[j - 1].Y + _lineH + oy + 1);
+                var pr = Rectangle.FromLTRB(ox, _lines[i].Y + oy - L(1), ox + Width, _lines[j - 1].Y + _lineH + oy + L(1));
                 using (var b = new SolidBrush(preBg))
-                using (var p = DrawHelper.RoundedRect(pr, 6)) g.FillPath(b, p);
+                using (var p = DrawHelper.RoundedRect(pr, L(6))) g.FillPath(b, p);
                 i = j;
             }
             // Pass B — Blockquote bar + faint tint (group consecutive quote lines); bar on the leading edge.
@@ -635,15 +648,16 @@ namespace TelegArm.UI.Controls
                 int j = i; while (j < _lines.Count && _lines[j].Quote) j++;
                 int y0 = _lines[i].Y + oy, y1 = _lines[j - 1].Y + _lineH + oy;
                 using (var bg = new SolidBrush(quoteBg)) g.FillRectangle(bg, ox, y0, Width, y1 - y0);
-                int barX = _rtl ? ox + Width - BarW : ox;
-                using (var bb = new SolidBrush(barColor)) g.FillRectangle(bb, barX, y0, BarW, y1 - y0);
+                int barW = L(BarW);
+                int barX = _rtl ? ox + Width - barW : ox;
+                using (var bb = new SolidBrush(barColor)) g.FillRectangle(bb, barX, y0, barW, y1 - y0);
                 i = j;
             }
             // Pass C — inline code pills (contiguous code tokens per line).
-            foreach (var line in _lines) PaintRunBg(g, line, ox, oy, InlineStyle.Code, codeBg, 5, true);
+            foreach (var line in _lines) PaintRunBg(g, line, ox, oy, InlineStyle.Code, codeBg, L(5), true);
             // Pass D — spoiler covers (hidden until revealed).
             if (!_spoilerRevealed)
-                foreach (var line in _lines) PaintRunBg(g, line, ox, oy, InlineStyle.Spoiler, spoilerBg, 4, false);
+                foreach (var line in _lines) PaintRunBg(g, line, ox, oy, InlineStyle.Spoiler, spoilerBg, L(4), false);
 
             // Pass E — the tokens.
             foreach (var line in _lines)
@@ -661,13 +675,14 @@ namespace TelegArm.UI.Controls
                     else TextRenderer.DrawText(g, t.Text, f, new Point(x, y), c, flags);
 
                     if (link || (t.Style & InlineStyle.Underline) != 0)
-                        using (var p = new Pen(c)) g.DrawLine(p, x, y + _lineH - 2, x + t.W, y + _lineH - 2);
+                        using (var p = new Pen(c, Dpi.F(1f, LayoutDpi))) g.DrawLine(p, x, y + _lineH - L(2), x + t.W, y + _lineH - L(2));
                     if ((t.Style & InlineStyle.Strike) != 0)
-                        using (var p = new Pen(c)) g.DrawLine(p, x, y + _lineH / 2, x + t.W, y + _lineH / 2);
+                        using (var p = new Pen(c, Dpi.F(1f, LayoutDpi))) g.DrawLine(p, x, y + _lineH / 2, x + t.W, y + _lineH / 2);
                 }
         }
 
-        /// <summary>Draws a rounded background behind each contiguous run of tokens carrying <paramref name="style"/>.</summary>
+        /// <summary>Draws a rounded background behind each contiguous run of tokens carrying <paramref name="style"/>.
+        /// <paramref name="radius"/> is in pixels at LayoutDpi (the caller scales it).</summary>
         private void PaintRunBg(Graphics g, Line line, int ox, int oy, InlineStyle style, Color fill, int radius, bool tight)
         {
             int i = 0;
@@ -682,8 +697,8 @@ namespace TelegArm.UI.Controls
                     x1 = Math.Max(x1, toks[j].Rect.X + toks[j].W);
                     j++;
                 }
-                int pad = tight ? 2 : 0;
-                var r = Rectangle.FromLTRB(x0 + ox - pad, line.Y + oy + 1, x1 + ox + pad, line.Y + oy + _lineH - 1);
+                int pad = tight ? L(2) : 0;
+                var r = Rectangle.FromLTRB(x0 + ox - pad, line.Y + oy + L(1), x1 + ox + pad, line.Y + oy + _lineH - L(1));
                 if (r.Width > 0)
                     using (var b = new SolidBrush(fill))
                     using (var p = DrawHelper.RoundedRect(r, radius)) g.FillPath(b, p);

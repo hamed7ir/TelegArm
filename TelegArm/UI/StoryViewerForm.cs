@@ -445,8 +445,9 @@ namespace TelegArm.UI
             else
             {
                 using (var b = new SolidBrush(DrawHelper.AvatarColor(p.PeerId))) g.FillEllipse(b, avr);
-                using (var f = FontHelper.Ui(12f, FontStyle.Bold))
-                    TextRenderer.DrawText(g, Initial(p.Name), f, avr, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                string ini = Initial(p.Name);
+                using (var f = FontHelper.For(ini, 12f, FontStyle.Bold))   // owned point font (3.6 converts this form)
+                    DrawHelper.DrawInitial(g, ini, f, avr, Color.White);   // ink-centred (owner report 2026-10-14)
             }
             string time = _storyIdx >= 0 && _storyIdx < _stories.Count ? RelTime(_stories[_storyIdx].date) : "";
             using (var nf = FontHelper.For(p.Name ?? "", 10.5f, FontStyle.Bold))
@@ -521,7 +522,7 @@ namespace TelegArm.UI
 
         private static string Initial(string name)
         {
-            return !string.IsNullOrEmpty(name) ? name.Substring(0, 1).ToUpper() : "?";
+            return !string.IsNullOrEmpty(name) ? DrawHelper.Initial(name) : "?";
         }
 
         private static string RelTime(DateTime dateUtc)

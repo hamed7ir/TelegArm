@@ -14,11 +14,15 @@ namespace TelegArm.UI.Controls
     /// Telegram-style audio/voice bubble: a circle button (download / play / pause /
     /// spinner) plus two text lines (title + "duration, size" or "elapsed / total").
     /// The waveform/seek/speed live in the persistent MiniPlayerBar, not here.
+    ///
+    /// Redesign step 3.2: every length is logical (96-DPI) through Px at the row's DPI; fonts are shared FontCache fonts
+    /// (never disposed); the glyphs scale from the rectangle they are drawn in. The height is SET from the logical value
+    /// on parenting and on a DPI change, never multiplied.
     /// </summary>
-    public class VoiceBubbleControl : Control, IFlashable
+    public class VoiceBubbleControl : Control, IFlashable, IDpiAware
     {
-        private readonly Font _nameFont = FontHelper.Ui(9f, FontStyle.Bold);
-        private readonly Font _subFont = FontHelper.Ui(8f);
+        private int _dpi;                                          // the DPI this row is laid out at; 0 = not parented yet
+        private int CurDpi { get { return _dpi > 0 ? _dpi : Dpi.Of(this); } }
 
         private readonly long _id;
         private readonly int _durationSec;
@@ -71,7 +75,7 @@ namespace TelegArm.UI.Controls
         /// <summary>Raised when clicked while in selection mode.</summary>
         public event EventHandler SelectionToggled;
 
-        private const int CardW = 250, CardH = 56, VMargin = 4, SideGap = 12, Pad = 10, BtnD = 44;
+        private const int CardW = 250, CardH = 56, VMargin = 4, SideGap = 12, Pad = 10, BtnD = 44;   // logical px
 
         public VoiceBubbleControl(long id, int durationSec, bool isAudio, string fileName, string sizeText,
                                   bool outgoing, string cachedPath, Func<DownloadHandle> startDownload)
@@ -82,13 +86,32 @@ namespace TelegArm.UI.Controls
             _title = isAudio ? StripExt(fileName) : "Voice message";
 
             Margin = new Padding(0);
-            Height = CardH + 2 * VMargin;
+            Height = RowHeight(CurDpi);
             Cursor = Cursors.Hand;
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer
                      | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
             _timer = new System.Windows.Forms.Timer { Interval = 200 };
             _timer.Tick += (s, e) => Tick();
             AudioPlayer.StateChanged += OnAudioState;
+        }
+
+        /// <summary>The card plus its top and bottom margin, rounded per term exactly as OnPaint places them.</summary>
+        private static int RowHeight(int dpi) { return Dpi.Px(CardH, dpi) + 2 * Dpi.Px(VMargin, dpi); }
+
+        /// <summary>Rows are built before they are added: the window's DPI is known only once parented.</summary>
+        protected override void OnParentChanged(EventArgs e)
+        {
+            base.OnParentChanged(e);
+            if (Parent == null) return;
+            int d = Dpi.Of(this);
+            if (d != _dpi) { _dpi = d; Height = RowHeight(d); Invalidate(); }
+        }
+
+        void IDpiAware.OnDpiChanged(int oldDpi, int newDpi)
+        {
+            _dpi = newDpi;
+            Height = RowHeight(newDpi);   // SET from the logical value: DpiScaler already ratio-scaled the bounds
+            Invalidate();
         }
 
         /// <summary>Keeps the elapsed/total line live whenever this clip is the current one,
@@ -140,10 +163,13 @@ namespace TelegArm.UI.Controls
 
         /// <summary>The visible card rectangle (matches OnPaint). The control spans the full row width for
         /// alignment, so only this rect is interactive — taps in the dead space beside it do nothing.</summary>
-        private Rectangle CardRect()
+        private Rectangle CardRect() { return CardRect(CurDpi); }
+
+        private Rectangle CardRect(int dpi)
         {
-            int bx = _outgoing ? Width - CardW - SideGap : SideGap;
-            return new Rectangle(bx, VMargin, CardW, CardH);
+            int cardW = Dpi.Px(CardW, dpi), sideGap = Dpi.Px(SideGap, dpi);
+            int bx = _outgoing ? Width - cardW - sideGap : sideGap;
+            return new Rectangle(bx, Dpi.Px(VMargin, dpi), cardW, Dpi.Px(CardH, dpi));
         }
 
         protected override void OnMouseClick(MouseEventArgs e)
@@ -159,10 +185,12 @@ namespace TelegArm.UI.Controls
         }
 
         /// <summary>The play/download button circle (matches OnPaint) — also the ✕ cancel hit target while downloading.</summary>
-        private Rectangle ButtonRect()
+        private Rectangle ButtonRect() { return ButtonRect(CardRect(CurDpi), CurDpi); }
+
+        private static Rectangle ButtonRect(Rectangle card, int dpi)
         {
-            var card = CardRect();
-            return new Rectangle(card.X + Pad, card.Y + (CardH - BtnD) / 2, BtnD, BtnD);
+            int btnD = Dpi.Px(BtnD, dpi);
+            return new Rectangle(card.X + Dpi.Px(Pad, dpi), card.Y + (card.Height - btnD) / 2, btnD, btnD);
         }
 
         private void HandleCardTap(Point loc)
@@ -231,34 +259,37 @@ namespace TelegArm.UI.Controls
 
         protected override void OnPaint(PaintEventArgs e)
         {
+            int dpi = CurDpi;
+            int P(int v) => Dpi.Px(v, dpi);
+            var nameFont = FontHelper.UiAt(9f, dpi, FontStyle.Bold);   // shared: never dispose
+            var subFont = FontHelper.UiAt(8f, dpi);
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             Color baseBg = ThemeHelper.PaletteFor(IsDark).ChatBg;
             g.Clear((SelectionMode && Selected) ? Blend(AccentColor, baseBg, 0.18f) : baseBg);
 
-            int bx = _outgoing ? Width - CardW - SideGap : SideGap;
-            int by = VMargin;
-            var card = new Rectangle(bx, by, CardW, CardH);
+            var card = CardRect(dpi);
+            int bx = card.X, by = card.Y;
 
             Color bubble = _outgoing ? AccentColor : (ThemeHelper.PaletteFor(IsDark).BubbleIn);
             Color fg = _outgoing ? Color.White : (ThemeHelper.PaletteFor(IsDark).BubbleInText);
             Color sub = _outgoing ? Color.FromArgb(210, 255, 255, 255) : (ThemeHelper.PaletteFor(IsDark).BubbleInSub);
 
             using (var b = new SolidBrush(bubble))
-            using (var path = DrawHelper.RoundedRect(card, 12))
+            using (var path = DrawHelper.RoundedRect(card, P(12)))
                 g.FillPath(b, path);
 
-            var btn = new Rectangle(bx + Pad, by + (CardH - BtnD) / 2, BtnD, BtnD);
+            var btn = ButtonRect(card, dpi);
             if (_cover != null)
                 DrawHelper.DrawAudioCover(g, btn, _cover);   // cover art clipped into the circle (shared with album rows)
             else
                 using (var cb = new SolidBrush(_outgoing ? Color.FromArgb(70, 255, 255, 255) : AccentColor))
                     g.FillEllipse(cb, btn);   // plain circle fallback (voice / no embedded art) — unchanged
-            DrawButtonGlyph(g, btn);
+            DrawButtonGlyph(g, btn, dpi);
 
-            int tx = btn.Right + 12;
-            int tw = bx + CardW - Pad - tx;
-            TextRenderer.DrawText(g, _title, _nameFont, new Rectangle(tx, by + 9, tw, 20), fg,
+            int tx = btn.Right + P(12);
+            int tw = bx + card.Width - P(Pad) - tx;
+            TextRenderer.DrawText(g, _title, nameFont, new Rectangle(tx, by + P(9), tw, P(20)), fg,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
 
             string line2;
@@ -276,34 +307,35 @@ namespace TelegArm.UI.Controls
                 line2 = Fmt(_durationSec);
                 if (_isAudio && !string.IsNullOrEmpty(_sizeText)) line2 += ", " + _sizeText;
             }
-            TextRenderer.DrawText(g, line2, _subFont, new Rectangle(tx, by + 30, tw, 18), sub,
+            TextRenderer.DrawText(g, line2, subFont, new Rectangle(tx, by + P(30), tw, P(18)), sub,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
 
-            DrawSelectionCheck(g);
+            DrawSelectionCheck(g, dpi);
         }
 
-        private void DrawSelectionCheck(Graphics g)
+        private void DrawSelectionCheck(Graphics g, int dpi)
         {
             if (_flashTicks > 0)
                 using (var fb = new SolidBrush(Color.FromArgb(70, AccentColor)))
                     g.FillRectangle(fb, ClientRectangle);   // brief "jump to message" pulse
             if (!SelectionMode) return;
-            const int d = 18;
-            int x = _outgoing ? SideGap + 2 : Width - SideGap - d - 2;
+            int d = Dpi.Px(18, dpi), sideGap = Dpi.Px(SideGap, dpi), two = Dpi.Px(2, dpi);
+            float k = d / 18f;   // the tick is drawn for an 18 px circle; scales with it
+            int x = _outgoing ? sideGap + two : Width - sideGap - d - two;
             int y = (Height - d) / 2;
             var circle = new Rectangle(x, y, d, d);
             if (Selected)
             {
                 using (var b = new SolidBrush(AccentColor)) g.FillEllipse(b, circle);
-                using (var pen = new Pen(Color.White, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                using (var pen = new Pen(Color.White, 2f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round })
                     g.DrawLines(pen, new[]
                     {
-                        new PointF(x + 4.5f, y + 9f), new PointF(x + 7.5f, y + 12f), new PointF(x + 13.5f, y + 6f)
+                        new PointF(x + 4.5f * k, y + 9f * k), new PointF(x + 7.5f * k, y + 12f * k), new PointF(x + 13.5f * k, y + 6f * k)
                     });
             }
             else
             {
-                using (var pen = new Pen(IsDark ? Color.FromArgb(120, 120, 120) : Color.FromArgb(170, 170, 170), 1.6f))
+                using (var pen = new Pen(IsDark ? Color.FromArgb(120, 120, 120) : Color.FromArgb(170, 170, 170), 1.6f * k))
                     g.DrawEllipse(pen, circle);
             }
         }
@@ -316,37 +348,40 @@ namespace TelegArm.UI.Controls
                 (int)(a.B * t + b.B * (1 - t)));
         }
 
-        private void DrawButtonGlyph(Graphics g, Rectangle btn)
+        /// <summary>Drawn for the 44 px button; scales with the rectangle it is given.</summary>
+        private void DrawButtonGlyph(Graphics g, Rectangle btn, int dpi)
         {
-            float cx = btn.X + BtnD / 2f, cy = btn.Y + BtnD / 2f;
+            float k = btn.Width / (float)BtnD;
+            float cx = btn.X + btn.Width / 2f, cy = btn.Y + btn.Height / 2f;
 
             if (_handle != null && _handle.State == DownloadHandle.DState.Downloading)
             {
                 // Real progress ring filling to % + an ✕ in the center (tap = cancel).
-                DrawHelper.DrawProgressRing(g, Rectangle.Inflate(btn, -5, -5), _handle.Fraction,
+                int inset = Dpi.Px(5, dpi);
+                DrawHelper.DrawProgressRing(g, Rectangle.Inflate(btn, -inset, -inset), _handle.Fraction,
                     Color.White, Color.FromArgb(120, 255, 255, 255), cancel: true);
                 return;
             }
 
             using (var wb = new SolidBrush(Color.White))
-            using (var pen = new Pen(Color.White, 2.4f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            using (var pen = new Pen(Color.White, 2.4f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round })
             {
                 if (string.IsNullOrEmpty(_path) || !File.Exists(_path))
                 {
                     // download arrow
-                    g.DrawLine(pen, cx, cy - 8, cx, cy + 5);
-                    g.DrawLine(pen, cx - 6, cy - 1, cx, cy + 5);
-                    g.DrawLine(pen, cx + 6, cy - 1, cx, cy + 5);
-                    g.DrawLine(pen, cx - 7, cy + 9, cx + 7, cy + 9);
+                    g.DrawLine(pen, cx, cy - 8 * k, cx, cy + 5 * k);
+                    g.DrawLine(pen, cx - 6 * k, cy - 1 * k, cx, cy + 5 * k);
+                    g.DrawLine(pen, cx + 6 * k, cy - 1 * k, cx, cy + 5 * k);
+                    g.DrawLine(pen, cx - 7 * k, cy + 9 * k, cx + 7 * k, cy + 9 * k);
                 }
                 else if (AudioPlayer.IsPlayingId(_id))
                 {
-                    g.FillRectangle(wb, cx - 6, cy - 8, 4.5f, 16);
-                    g.FillRectangle(wb, cx + 1.5f, cy - 8, 4.5f, 16);
+                    g.FillRectangle(wb, cx - 6 * k, cy - 8 * k, 4.5f * k, 16 * k);
+                    g.FillRectangle(wb, cx + 1.5f * k, cy - 8 * k, 4.5f * k, 16 * k);
                 }
                 else
                 {
-                    g.FillPolygon(wb, new[] { new PointF(cx - 6, cy - 9), new PointF(cx + 9, cy), new PointF(cx - 6, cy + 9) });
+                    g.FillPolygon(wb, new[] { new PointF(cx - 6 * k, cy - 9 * k), new PointF(cx + 9 * k, cy), new PointF(cx - 6 * k, cy + 9 * k) });
                 }
             }
         }
@@ -367,8 +402,7 @@ namespace TelegArm.UI.Controls
                 _timer?.Stop();
                 _timer?.Dispose();
                 _flashTimer?.Dispose();
-                _nameFont.Dispose();
-                _subFont.Dispose();
+                // (No font disposal: step 3.2 — the fonts are shared FontCache fonts, never disposed.)
             }
             base.Dispose(disposing);
         }

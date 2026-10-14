@@ -202,6 +202,13 @@ namespace TelegArm.UI
 
         private const int RescueRow = 34;
 
+        /// <summary>Step 3.2: the corner pill and the Settings button re-measure themselves on a DPI change; put them back.</summary>
+        protected override void OnDpiChanged(int oldDpi, int newDpi)
+        {
+            base.OnDpiChanged(oldDpi, newDpi);
+            PlaceCorners();
+        }
+
         private void PlaceCorners()
         {
             int m = Px(14), w = Content.ClientSize.Width, h = Content.ClientSize.Height;

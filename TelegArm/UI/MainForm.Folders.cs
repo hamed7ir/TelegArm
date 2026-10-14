@@ -52,7 +52,7 @@ namespace TelegArm.UI
 
         private void AddFolderTab(string text, Func<int> unread, bool active, Action onClick)
         {
-            var it = new FolderTabItem(text, unread(), active, _dark, _accent);
+            var it = new FolderTabItem(text, unread(), active, _dark, _accent, WindowDpiValue);
             it.Clicked += onClick;
             _folderBar.Controls.Add(it);
             _folderBadgeSources.Add(new KeyValuePair<IFolderBadge, Func<int>>(it, unread));
@@ -83,7 +83,7 @@ namespace TelegArm.UI
 
         private void AddTopicChip(string text, int unread, bool active, Action onClick)
         {
-            var it = new FolderTabItem(text, unread, active, _dark, _accent);
+            var it = new FolderTabItem(text, unread, active, _dark, _accent, WindowDpiValue);
             it.Clicked += onClick;
             _forumTopicBar.Controls.Add(it);
         }
@@ -91,7 +91,7 @@ namespace TelegArm.UI
         /// <summary>Show/hide the topic bar row (row 4). Zero height when hidden → takes no space.</summary>
         private void ShowTopicBar(bool show)
         {
-            if (_rightLayout != null) _rightLayout.RowStyles[4].Height = show ? 36 : 0;   // FORUM-TOPICS: 46→36 (no scrollbar row now → tighter)
+            SetRowPx(_rightLayout, 4, show ? 36 : 0);   // FORUM-TOPICS: 46→36 (no scrollbar row now → tighter). Step 3.4: logical px
         }
 
         // ── STORIES-BUILD-1: the story tray ──────────────────────────────────────────────────────────────
@@ -139,7 +139,7 @@ namespace TelegArm.UI
                 {
                     var entry = e;
                     if (entry.PeerInfo != null && _avatars.GetCached(entry.PeerId) == null) _avatars.Request(entry.PeerId, entry.PeerInfo);
-                    var chip = new StoryChip(entry.PeerId, entry.Name, entry.Unseen, _dark, _accent, cid => _avatars.GetCached(cid));
+                    var chip = new StoryChip(entry.PeerId, entry.Name, entry.Unseen, _dark, _accent, cid => _avatars.GetCached(cid), WindowDpiValue);
                     chip.Clicked += () => OpenStoryViewer(entry.PeerId);
                     _storyTrayBar.Controls.Add(chip);
                 }
@@ -149,11 +149,10 @@ namespace TelegArm.UI
         /// <summary>Shows/hides the tray row (its RowStyle height). Zero space when there are no stories.</summary>
         private void ShowStoryTray(bool show)
         {
-            if (_storyTrayLayout != null && _storyTrayLayout.RowStyles.Count > 1)
-                _storyTrayLayout.RowStyles[1].Height = show ? StoryTrayHeight : 0;
+            SetRowPx(_storyTrayLayout, 1, show ? StoryTrayHeight : 0);   // step 3.4: StoryTrayHeight is logical
         }
 
-        private bool IsChatListAtTop() { return _chatListPanel != null && -_chatListPanel.AutoScrollPosition.Y <= 2; }
+        private bool IsChatListAtTop() { return _chatListPanel != null && -_chatListPanel.AutoScrollPosition.Y <= Px(2); }
 
         /// <summary>STORY-TRAY-HIDE: the tray shows ONLY when there are stories AND the chat list is at its very
         /// top. Purely position-based (no direction): scrolled down at all → hidden; back to the top → shown.
@@ -197,31 +196,40 @@ namespace TelegArm.UI
 
         /// <summary>One story-tray tile: a circular avatar (or letter) inside an unseen/seen RING, name below.
         /// Owner-drawn; reads the live cached avatar each paint (letter until it lands). Tap → Clicked.</summary>
-        private sealed class StoryChip : Control
+        private sealed class StoryChip : Control, IDpiAware
         {
+            // Step 3.4: lengths are logical px at _dpi (the window's, given at construction; IDpiAware re-sets them);
+            // fonts are shared FontCache fonts — never disposed, never in a using. Same for FolderTabItem / FolderRailItem.
             private readonly long _peerId; private readonly string _name;
             private bool _unseen; private readonly bool _dark; private readonly Color _accent;
             private readonly Func<long, Image> _avatar;
+            private int _dpi;
             public event Action Clicked;
             public long PeerId => _peerId;
 
-            public StoryChip(long peerId, string name, bool unseen, bool dark, Color accent, Func<long, Image> avatarGetter)
+            private int P(int v) { return Dpi.Px(v, _dpi); }
+
+            public StoryChip(long peerId, string name, bool unseen, bool dark, Color accent, Func<long, Image> avatarGetter, int dpi)
             {
-                _peerId = peerId; _name = name ?? ""; _unseen = unseen; _dark = dark; _accent = accent; _avatar = avatarGetter;
-                Size = new Size(64, 88); Margin = new Padding(4, 2, 4, 2); Cursor = Cursors.Hand;
+                _peerId = peerId; _name = name ?? ""; _unseen = unseen; _dark = dark; _accent = accent; _avatar = avatarGetter; _dpi = dpi;
+                ApplyMetrics(); Cursor = Cursors.Hand;
                 SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true);
                 Click += (s, e) => { var h = Clicked; if (h != null) h(); };
             }
+
+            private void ApplyMetrics() { Size = new Size(P(64), P(88)); Margin = new Padding(P(4), P(2), P(4), P(2)); }
+
+            void IDpiAware.OnDpiChanged(int oldDpi, int newDpi) { _dpi = newDpi; ApplyMetrics(); Invalidate(); }   // SET, never multiply
 
             protected override void OnPaint(PaintEventArgs e)
             {
                 var g = e.Graphics;
                 g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
                 g.Clear(Parent != null ? Parent.BackColor : (_dark ? Color.FromArgb(40, 40, 40) : Color.White));
-                const int D = 50; int cx = (Width - D) / 2, cy = 6;
+                int D = P(50); int cx = (Width - D) / 2, cy = P(6);
                 var avr = new Rectangle(cx, cy, D, D);
-                var ring = Rectangle.Inflate(avr, 3, 3);
-                using (var rp = new Pen(_unseen ? _accent : (_dark ? Color.FromArgb(95, 95, 100) : Color.FromArgb(200, 200, 205)), _unseen ? 2.5f : 1.5f))
+                var ring = Rectangle.Inflate(avr, P(3), P(3));
+                using (var rp = new Pen(_unseen ? _accent : (_dark ? Color.FromArgb(95, 95, 100) : Color.FromArgb(200, 200, 205)), Dpi.F(_unseen ? 2.5f : 1.5f, _dpi)))
                     g.DrawEllipse(rp, ring);
                 var img = _avatar != null ? _avatar(_peerId) : null;
                 if (img != null)
@@ -229,14 +237,12 @@ namespace TelegArm.UI
                 else
                 {
                     using (var b = new SolidBrush(DrawHelper.AvatarColor(_peerId))) g.FillEllipse(b, avr);
-                    string ltr = !string.IsNullOrEmpty(_name) ? _name.Substring(0, 1).ToUpper() : "?";
-                    using (var f = FontHelper.Ui(15f, FontStyle.Bold))
-                        TextRenderer.DrawText(g, ltr, f, avr, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                    string ltr = !string.IsNullOrEmpty(_name) ? DrawHelper.Initial(_name) : "?";
+                    DrawHelper.DrawInitial(g, ltr, FontHelper.ForAt(ltr, 15f, _dpi, FontStyle.Bold), avr, Color.White);   // ink-centred (owner report 2026-10-14)
                 }
                 Color nc = _dark ? Color.FromArgb(210, 210, 215) : Color.FromArgb(50, 50, 55);
-                using (var nf = FontHelper.For(_name, 8f))
-                    TextRenderer.DrawText(g, _name, nf, new Rectangle(0, cy + D + 3, Width, 15), nc,
-                        TextFormatFlags.HorizontalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+                TextRenderer.DrawText(g, _name, FontHelper.ForAt(_name, 8f, _dpi), new Rectangle(0, cy + D + P(3), Width, P(15)), nc,   // shared: never dispose
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
             }
         }
 
@@ -349,7 +355,7 @@ namespace TelegArm.UI
 
         private void AddRailItem(string icon, string label, Func<int> unread, bool active, Action onClick)
         {
-            var it = new FolderRailItem(icon, label, unread(), active, _dark, _accent) { Width = ContentWidth(_folderRail) };
+            var it = new FolderRailItem(icon, label, unread(), active, _dark, _accent, WindowDpiValue) { Width = ContentWidth(_folderRail) };
             it.Clicked += onClick;
             _folderRail.Controls.Add(it);
             _folderBadgeSources.Add(new KeyValuePair<IFolderBadge, Func<int>>(it, unread));
@@ -378,39 +384,50 @@ namespace TelegArm.UI
 
         /// <summary>One folder TAB (tabbed mode): label + unread badge pill, accent when active. Owner-drawn
         /// so it can carry a live badge like the rail (parity). Auto-sizes to text + badge.</summary>
-        private sealed class FolderTabItem : Control, IFolderBadge
+        private sealed class FolderTabItem : Control, IFolderBadge, IDpiAware
         {
             private readonly string _label;
             private int _unread;
             private readonly bool _active, _dark;
             private readonly Color _accent;
+            private int _dpi;   // step 3.4: the window's DPI (see StoryChip)
             public event Action Clicked;
 
             public int Unread { set { if (_unread != value) { _unread = value; RecalcWidth(); Invalidate(); } } }
 
-            public FolderTabItem(string label, int unread, bool active, bool dark, Color accent)
+            private int P(int v) { return Dpi.Px(v, _dpi); }
+
+            public FolderTabItem(string label, int unread, bool active, bool dark, Color accent, int dpi)
             {
-                _label = label; _unread = unread; _active = active; _dark = dark; _accent = accent;
-                Height = 28; Margin = new Padding(2, 3, 2, 3);
+                _label = label; _unread = unread; _active = active; _dark = dark; _accent = accent; _dpi = dpi;
+                Height = P(28); Margin = new Padding(P(2), P(3), P(2), P(3));
                 Cursor = Cursors.Hand;
                 SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true);
                 Click += (s, e) => { var h = Clicked; if (h != null) h(); };
                 RecalcWidth();
             }
 
+            void IDpiAware.OnDpiChanged(int oldDpi, int newDpi)
+            {
+                _dpi = newDpi;
+                Height = P(28); Margin = new Padding(P(2), P(3), P(2), P(3));   // SET from logical, never multiply
+                RecalcWidth();
+                Invalidate();
+            }
+
             private static string BadgeText(int n) => n > 99 ? "99+" : n.ToString();
+
+            // Shared per-DPI fonts (FontCache): never dispose.
+            private Font LabelFont { get { return FontHelper.UiAt(9.5f, _dpi, _active ? FontStyle.Bold : FontStyle.Regular); } }
+            private Font BadgeFont { get { return FontHelper.UiAt(7f, _dpi, FontStyle.Bold); } }
 
             private void RecalcWidth()
             {
-                using (var lf = FontHelper.Ui(9.5f, _active ? FontStyle.Bold : FontStyle.Regular))
-                {
-                    int tw = TextRenderer.MeasureText(_label, lf).Width;
-                    int extra = 0;
-                    if (_unread > 0)
-                        using (var bf = FontHelper.Ui(7f, FontStyle.Bold))
-                            extra = 5 + Math.Max(15, TextRenderer.MeasureText(BadgeText(_unread), bf).Width + 7);
-                    Width = Math.Max(46, 12 + tw + extra);
-                }
+                int tw = TextRenderer.MeasureText(_label, LabelFont).Width;
+                int extra = 0;
+                if (_unread > 0)
+                    extra = P(5) + Math.Max(P(15), TextRenderer.MeasureText(BadgeText(_unread), BadgeFont).Width + P(7));
+                Width = Math.Max(P(46), P(12) + tw + extra);
             }
 
             protected override void OnPaint(PaintEventArgs e)
@@ -421,50 +438,52 @@ namespace TelegArm.UI
                 g.Clear(Parent != null ? Parent.BackColor : (_dark ? Color.FromArgb(40, 40, 40) : Color.White));
 
                 Color fg = _active ? _accent : (_dark ? Color.FromArgb(170, 170, 175) : Color.FromArgb(110, 110, 115));
-                using (var lf = FontHelper.Ui(9.5f, _active ? FontStyle.Bold : FontStyle.Regular))
+                var lf = LabelFont;
+                int tw = TextRenderer.MeasureText(_label, lf).Width;
+                TextRenderer.DrawText(g, _label, lf, new Rectangle(P(6), 0, tw + P(4), Height), fg,
+                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                if (_unread > 0)
                 {
-                    int tw = TextRenderer.MeasureText(_label, lf).Width;
-                    TextRenderer.DrawText(g, _label, lf, new Rectangle(6, 0, tw + 4, Height), fg,
-                        TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
-                    if (_unread > 0)
-                    {
-                        string t = BadgeText(_unread);
-                        using (var bf = FontHelper.Ui(7f, FontStyle.Bold))
-                        {
-                            int bw = Math.Max(15, TextRenderer.MeasureText(t, bf).Width + 7);
-                            var badge = new Rectangle(6 + tw + 5, (Height - 15) / 2, bw, 15);
-                            using (var bb = new SolidBrush(_accent))
-                            using (var pth = DrawHelper.RoundedRect(badge, 7)) g.FillPath(bb, pth);
-                            TextRenderer.DrawText(g, t, bf, badge, Color.White,
-                                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
-                        }
-                    }
+                    string t = BadgeText(_unread);
+                    var bf = BadgeFont;
+                    int bw = Math.Max(P(15), TextRenderer.MeasureText(t, bf).Width + P(7));
+                    var badge = new Rectangle(P(6) + tw + P(5), (Height - P(15)) / 2, bw, P(15));
+                    using (var bb = new SolidBrush(_accent))
+                    using (var pth = DrawHelper.RoundedRect(badge, P(7))) g.FillPath(bb, pth);
+                    TextRenderer.DrawText(g, t, bf, badge, Color.White,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
                 }
             }
         }
 
         /// <summary>One folder tile in the side rail: centered icon, label under it, unread badge on the icon
         /// corner, active = accent tint + left bar. Owner-drawn, touch-sized, no per-tile RPC.</summary>
-        private sealed class FolderRailItem : Control, IFolderBadge
+        private sealed class FolderRailItem : Control, IFolderBadge, IDpiAware
         {
             private readonly string _icon, _label;
             private int _unread;
             private bool _active;
             private readonly bool _dark;
             private readonly Color _accent;
+            private int _dpi;   // step 3.4: the window's DPI (see StoryChip)
             public event Action Clicked;
 
             public int Unread { get { return _unread; } set { if (_unread != value) { _unread = value; Invalidate(); } } }
             public bool Active { get { return _active; } set { if (_active != value) { _active = value; Invalidate(); } } }
 
-            public FolderRailItem(string icon, string label, int unread, bool active, bool dark, Color accent)
+            private int P(int v) { return Dpi.Px(v, _dpi); }
+
+            public FolderRailItem(string icon, string label, int unread, bool active, bool dark, Color accent, int dpi)
             {
-                _icon = icon; _label = label; _unread = unread; _active = active; _dark = dark; _accent = accent;
-                Height = 60; Margin = new Padding(0);
+                _icon = icon; _label = label; _unread = unread; _active = active; _dark = dark; _accent = accent; _dpi = dpi;
+                Height = P(60); Margin = new Padding(0);
                 Cursor = Cursors.Hand;
                 SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true);
                 Click += (s, e) => { var h = Clicked; if (h != null) h(); };
             }
+
+            // The width follows the rail (DpiScaler scales it with the rail column); the height is SET from logical.
+            void IDpiAware.OnDpiChanged(int oldDpi, int newDpi) { _dpi = newDpi; Height = P(60); Invalidate(); }
 
             protected override void OnPaint(PaintEventArgs e)
             {
@@ -475,27 +494,24 @@ namespace TelegArm.UI
                 if (_active)
                 {
                     using (var tint = new SolidBrush(Color.FromArgb(30, _accent))) g.FillRectangle(tint, 0, 0, Width, Height);
-                    using (var bar = new SolidBrush(_accent)) g.FillRectangle(bar, 0, 8, 3, Height - 16);
+                    using (var bar = new SolidBrush(_accent)) g.FillRectangle(bar, 0, P(8), P(3), Height - P(16));
                 }
                 Color fg = _active ? _accent : (_dark ? Color.FromArgb(205, 205, 210) : Color.FromArgb(90, 90, 95));
-                using (var iconFont = new Font("Segoe UI Emoji", 16f))
-                    TextRenderer.DrawText(g, _icon, iconFont, new Rectangle(0, 5, Width, 26), fg,
-                        TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.NoPrefix);
-                using (var lf = FontHelper.Ui(7.25f, _active ? FontStyle.Bold : FontStyle.Regular))
-                    TextRenderer.DrawText(g, _label, lf, new Rectangle(1, 37, Width - 2, 16), fg,
-                        TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+                // Shared per-DPI fonts (FontCache): never dispose.
+                TextRenderer.DrawText(g, _icon, FontCache.Get("Segoe UI Emoji", 16f, FontStyle.Regular, _dpi), new Rectangle(0, P(5), Width, P(26)), fg,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.NoPrefix);
+                TextRenderer.DrawText(g, _label, FontHelper.UiAt(7.25f, _dpi, _active ? FontStyle.Bold : FontStyle.Regular), new Rectangle(P(1), P(37), Width - P(2), P(16)), fg,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
                 if (_unread > 0)
                 {
                     string t = _unread > 99 ? "99+" : _unread.ToString();
-                    using (var bf = FontHelper.Ui(6.75f, FontStyle.Bold))
-                    {
-                        int bw = Math.Max(15, TextRenderer.MeasureText(t, bf).Width + 7);
-                        var badge = new Rectangle(Width / 2 + 5, 3, bw, 15);
-                        using (var bb = new SolidBrush(_accent))
-                        using (var pth = DrawHelper.RoundedRect(badge, 7)) g.FillPath(bb, pth);
-                        TextRenderer.DrawText(g, t, bf, badge, Color.White,
-                            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
-                    }
+                    var bf = FontHelper.UiAt(6.75f, _dpi, FontStyle.Bold);
+                    int bw = Math.Max(P(15), TextRenderer.MeasureText(t, bf).Width + P(7));
+                    var badge = new Rectangle(Width / 2 + P(5), P(3), bw, P(15));
+                    using (var bb = new SolidBrush(_accent))
+                    using (var pth = DrawHelper.RoundedRect(badge, P(7))) g.FillPath(bb, pth);
+                    TextRenderer.DrawText(g, t, bf, badge, Color.White,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
                 }
             }
         }

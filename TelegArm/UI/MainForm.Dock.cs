@@ -34,7 +34,8 @@ namespace TelegArm.UI
             Color bg = _dark ? Color.FromArgb(34, 34, 37) : Color.FromArgb(246, 246, 248);
             Color line = _dark ? Color.FromArgb(58, 58, 62) : Color.FromArgb(222, 222, 228);
 
-            _dock = new Panel { Dock = DockStyle.Right, Width = DockWidth, Visible = false, BackColor = bg };
+            // Step 3.4: every length here is LOGICAL px at the window's DPI (DockWidth stays a logical const).
+            _dock = new Panel { Dock = DockStyle.Right, Width = Px(DockWidth), Visible = false, BackColor = bg };
             _dock.Paint += (s, e) =>
             {
                 using (var p = new Pen(_dark ? Color.FromArgb(58, 58, 62) : Color.FromArgb(222, 222, 228)))
@@ -46,7 +47,7 @@ namespace TelegArm.UI
             _dockBody = new Panel { Dock = DockStyle.Fill, BackColor = bg };
 
 
-            _dockTabs = new Panel { Dock = DockStyle.Top, Height = 38, BackColor = bg };
+            _dockTabs = new Panel { Dock = DockStyle.Top, Height = Px(38), BackColor = bg };
             _dockTabs.Paint += (s, e) =>
             {
                 using (var p = new Pen(line)) e.Graphics.DrawLine(p, 0, _dockTabs.Height - 1, _dockTabs.Width, _dockTabs.Height - 1);
@@ -68,16 +69,17 @@ namespace TelegArm.UI
         {
             var l = new Label
             {
-                Text = text, AutoSize = false, Height = 37, Cursor = Cursors.Hand,
-                TextAlign = ContentAlignment.MiddleCenter, Font = FontHelper.Ui(9.5f),
+                Text = text, AutoSize = false, Height = Px(37), Cursor = Cursors.Hand,
+                TextAlign = ContentAlignment.MiddleCenter, Font = FontHelper.UiAt(9.5f, WindowDpiValue),   // shared: never dispose
                 BackColor = Color.Transparent
             };
             l.Click += (s, e) => SetDockPane(pane);
             l.Paint += (s, e) =>
             {
                 if (_dockPane != pane) return;
-                using (var p = new Pen(_accent, 2f))
-                    e.Graphics.DrawLine(p, 6, l.Height - 2, l.Width - 6, l.Height - 2);   // accent underline
+                int inset = Px(6), y = l.Height - Px(2);
+                using (var p = new Pen(_accent, Dpi.F(2f, WindowDpiValue)))
+                    e.Graphics.DrawLine(p, inset, y, l.Width - inset, y);   // accent underline
             };
             return l;
         }
@@ -169,7 +171,8 @@ namespace TelegArm.UI
             //   Right inside itself, and handing it the full width would overflow the flow by that strip and
             //   arm a horizontal scroll.
             // Step 2.0: the bar's real width (the restyled lane is 12 logical px — 18 at 150%), not 1.x's 11 + 1.
-            var pf = new ProfileForm(_service, entry, GetCachedAvatar(entry.PeerId), DockWidth - ThemedScrollBar.LaneWidth(Dpi.Of(this)) - 1)
+            // Step 3.4: contentWidth is PHYSICAL (the dock's real width at this DPI), so it is baked at this DPI.
+            var pf = new ProfileForm(_service, entry, GetCachedAvatar(entry.PeerId), Px(DockWidth) - ThemedScrollBar.LaneWidth(WindowDpiValue) - 1, Dpi.Of(this))
             {
                 TopLevel = false,
                 FormBorderStyle = FormBorderStyle.None,
@@ -206,7 +209,8 @@ namespace TelegArm.UI
         /// <summary>BATCH-TA-37 — the narrowest FORM width at which the dock may be open.
         /// 340 (dock) + 360 (Panel2MinSize, the conversation) + 240 (chat list) + chrome ≈ 960. Below it
         /// the dock does not merely look tight — it squeezes the conversation under its own minimum and the
-        /// header controls collide, which is the overlap in the report.</summary>
+        /// header controls collide, which is the overlap in the report.
+        /// Step 3.4: LOGICAL — the form's Width is physical, so always compare against Px(DockMinFormWidth).</summary>
         private const int DockMinFormWidth = 960;
 
         /// <summary>⚠ OPENING THE DOCK ON A NARROW WINDOW GROWS THE WINDOW; IT DOES NOT COVER THE CHAT.
@@ -215,23 +219,25 @@ namespace TelegArm.UI
         /// refused rather than opened on top of the chat.</summary>
         private bool EnsureRoomForDock()
         {
-            if (Width >= DockMinFormWidth) return true;
+            int minW = Px(DockMinFormWidth);
+            if (Width >= minW) return true;
             if (WindowState != FormWindowState.Normal) return false;   // maximised: nowhere to grow
 
-            var wa = Screen.FromControl(this).WorkingArea;
-            int want = Math.Min(DockMinFormWidth, wa.Width);
+            var wa = Screen.FromControl(this).WorkingArea;              // raw screen maths
+            int want = Math.Min(minW, wa.Width);
             if (want <= Width) return false;                            // screen itself is too narrow
 
             Width = want;
             if (Left + Width > wa.Right) Left = Math.Max(wa.Left, wa.Right - Width);
-            return Width >= DockMinFormWidth;
+            return Width >= minW;
         }
 
         /// <summary>The window got too narrow to hold the dock — close it rather than let it overlap.
         /// Called from the resize path, so dragging the edge in collapses the dock the way it grew.</summary>
         private void EnforceDockWidth()
         {
-            if (_dock != null && _dock.Visible && Width < DockMinFormWidth) SetDockOpen(false);
+            if (Dpi.Busy) return;   // step 3.4: mid-rescale widths are interim; RelayoutAfterDpi calls this once the rescale is over
+            if (_dock != null && _dock.Visible && Width < Px(DockMinFormWidth)) SetDockOpen(false);
         }
 
         private void ToggleDock()
@@ -239,7 +245,7 @@ namespace TelegArm.UI
             bool want = _dock == null || !_dock.Visible;
             if (want && !EnsureRoomForDock())
             {
-                if (Logger.Enabled) Logger.Diag("[DOCK] refused — window " + Width + "px < " + DockMinFormWidth);
+                if (Logger.Enabled) Logger.Diag("[DOCK] refused — window " + Width + "px < " + Px(DockMinFormWidth));
                 return;
             }
             SetDockOpen(want);

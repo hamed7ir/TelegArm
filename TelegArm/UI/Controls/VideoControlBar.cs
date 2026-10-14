@@ -2,6 +2,7 @@ using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
+using TelegArm.Helpers;
 
 namespace TelegArm.UI.Controls
 {
@@ -12,10 +13,17 @@ namespace TelegArm.UI.Controls
     /// paints the WHOLE control itself (no child controls) and hit-tests by region —
     /// the one owner-painted style that renders in a toolbar row. A periodic
     /// Invalidate() (driven by the host's timer) keeps it visible over VLC repaints.
+    ///
+    /// Redesign step 3.2 (the ChatListItemControl pattern): lengths are LOGICAL (96-DPI) px drawn through Px at the
+    /// bar's DPI; the time font is a shared FontCache font (never disposed — this paints every 200 ms); the glyphs
+    /// scale from their rectangles. Identity at 96. The height is the host's (MediaViewerForm's Px(BarHeight) row).
     /// </summary>
-    public class VideoControlBar : Control
+    public class VideoControlBar : Control, IDpiAware
     {
         private readonly VlcVideoControl _video;
+
+        private int _dpi;                                          // the DPI this bar is laid out at; 0 = not parented yet
+        private int CurDpi { get { return _dpi > 0 ? _dpi : Dpi.Of(this); } }
 
         private Rectangle _prevR, _playR, _nextR, _seekR, _muteR;
         private bool _dragging;
@@ -53,23 +61,40 @@ namespace TelegArm.UI.Controls
                      | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
         }
 
+        /// <summary>Built before it is added: the window's DPI is known only once parented.</summary>
+        protected override void OnParentChanged(EventArgs e)
+        {
+            base.OnParentChanged(e);
+            if (Parent == null) return;
+            int d = Dpi.Of(this);
+            if (d != _dpi) { _dpi = d; Invalidate(); }
+        }
+
+        void IDpiAware.OnDpiChanged(int oldDpi, int newDpi)
+        {
+            _dpi = newDpi;   // no size of its own: DpiScaler scaled the bounds; every length is derived at paint
+            Invalidate();
+        }
+
         protected override void OnPaint(PaintEventArgs e)
         {
+            int dpi = CurDpi;
+            int P(int v) => Dpi.Px(v, dpi);
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.Clear(BarColor);
 
-            int h = Height, cd = 30, cy = h / 2;
-            _prevR = new Rectangle(10, cy - cd / 2, cd, cd);
-            _playR = new Rectangle(10 + cd + 6, cy - cd / 2, cd, cd);
-            _nextR = new Rectangle(10 + 2 * (cd + 6), cy - cd / 2, cd, cd);
+            int h = Height, cd = P(30), cy = h / 2, gap = P(6);
+            _prevR = new Rectangle(P(10), cy - cd / 2, cd, cd);
+            _playR = new Rectangle(P(10) + cd + gap, cy - cd / 2, cd, cd);
+            _nextR = new Rectangle(P(10) + 2 * (cd + gap), cy - cd / 2, cd, cd);
 
-            const int rightPad = 12;
-            _muteR = new Rectangle(Width - rightPad - 28, cy - 12, 28, 24);
-            int totW = 66; var totR = new Rectangle(_muteR.X - 8 - totW, 0, totW, h);
-            int curW = 66; var curR = new Rectangle(_nextR.Right + 10, 0, curW, h);
-            int seekX = curR.Right + 6;
-            _seekR = new Rectangle(seekX, cy - 6, Math.Max(40, (totR.X - 6) - seekX), 12);
+            int rightPad = P(12);
+            _muteR = new Rectangle(Width - rightPad - P(28), cy - P(12), P(28), P(24));
+            int totW = P(66); var totR = new Rectangle(_muteR.X - P(8) - totW, 0, totW, h);
+            int curW = P(66); var curR = new Rectangle(_nextR.Right + P(10), 0, curW, h);
+            int seekX = curR.Right + P(6);
+            _seekR = new Rectangle(seekX, cy - P(6), Math.Max(P(40), (totR.X - P(6)) - seekX), P(12));
 
             // transport circles (dimmed when navigation isn't available)
             DrawCircle(g, _prevR, CanPrev); DrawPrev(g, _prevR);
@@ -81,8 +106,8 @@ namespace TelegArm.UI.Controls
             long lenMs = _video != null ? _video.Length : 0;
 
             // times
+            var f = FontCache.Get("Segoe UI", 8.5f, FontStyle.Regular, dpi);   // shared: never dispose
             using (var gb = new SolidBrush(SubTextColor))
-            using (var f = new Font("Segoe UI", 8.5f))
             using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
             {
                 g.DrawString(Fmt(timeMs), f, gb, curR, sf);
@@ -90,16 +115,16 @@ namespace TelegArm.UI.Controls
             }
 
             // seek
-            int ty = _seekR.Y + (_seekR.Height - 4) / 2;
+            int th = P(4), ty = _seekR.Y + (_seekR.Height - th) / 2;
             using (var tb = new SolidBrush(TrackColor))
-                g.FillRectangle(tb, _seekR.X, ty, _seekR.Width, 4);
+                g.FillRectangle(tb, _seekR.X, ty, _seekR.Width, th);
             float pos = _video != null ? _video.Position : 0f;
             if (pos < 0) pos = 0; else if (pos > 1) pos = 1;
             int fillW = (int)(pos * _seekR.Width);
             using (var fb = new SolidBrush(AccentColor))
-                g.FillRectangle(fb, _seekR.X, ty, fillW, 4);
+                g.FillRectangle(fb, _seekR.X, ty, fillW, th);
             using (var hb = new SolidBrush(AccentColor))
-                g.FillEllipse(hb, _seekR.X + fillW - 5, _seekR.Y + _seekR.Height / 2 - 5, 10, 10);
+                g.FillEllipse(hb, _seekR.X + fillW - P(5), _seekR.Y + _seekR.Height / 2 - P(5), P(10), P(10));
 
             DrawMute(g, _muteR, _muted, TextColor);
         }
@@ -110,53 +135,55 @@ namespace TelegArm.UI.Controls
                 g.FillEllipse(b, r);
         }
 
+        // The transport glyphs are drawn for the 30 px circle; they scale with it (k == 1 at 96).
         private static void DrawPlay(Graphics g, Rectangle r)
         {
-            float cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
+            float k = r.Width / 30f, cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
             using (var w = new SolidBrush(Color.White))
-                g.FillPolygon(w, new[] { new PointF(cx - 5, cy - 7), new PointF(cx + 7, cy), new PointF(cx - 5, cy + 7) });
+                g.FillPolygon(w, new[] { new PointF(cx - 5 * k, cy - 7 * k), new PointF(cx + 7 * k, cy), new PointF(cx - 5 * k, cy + 7 * k) });
         }
 
         private static void DrawPause(Graphics g, Rectangle r)
         {
-            float cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
+            float k = r.Width / 30f, cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
             using (var w = new SolidBrush(Color.White))
-            { g.FillRectangle(w, cx - 5, cy - 7, 3.5f, 14); g.FillRectangle(w, cx + 1.5f, cy - 7, 3.5f, 14); }
+            { g.FillRectangle(w, cx - 5 * k, cy - 7 * k, 3.5f * k, 14 * k); g.FillRectangle(w, cx + 1.5f * k, cy - 7 * k, 3.5f * k, 14 * k); }
         }
 
         private static void DrawPrev(Graphics g, Rectangle r)
         {
-            float cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
+            float k = r.Width / 30f, cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
             using (var w = new SolidBrush(Color.White))
             {
-                g.FillRectangle(w, cx - 8, cy - 6, 2.5f, 12);
-                g.FillPolygon(w, new[] { new PointF(cx + 6, cy - 6), new PointF(cx - 3, cy), new PointF(cx + 6, cy + 6) });
+                g.FillRectangle(w, cx - 8 * k, cy - 6 * k, 2.5f * k, 12 * k);
+                g.FillPolygon(w, new[] { new PointF(cx + 6 * k, cy - 6 * k), new PointF(cx - 3 * k, cy), new PointF(cx + 6 * k, cy + 6 * k) });
             }
         }
 
         private static void DrawNext(Graphics g, Rectangle r)
         {
-            float cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
+            float k = r.Width / 30f, cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
             using (var w = new SolidBrush(Color.White))
             {
-                g.FillPolygon(w, new[] { new PointF(cx - 6, cy - 6), new PointF(cx + 3, cy), new PointF(cx - 6, cy + 6) });
-                g.FillRectangle(w, cx + 5.5f, cy - 6, 2.5f, 12);
+                g.FillPolygon(w, new[] { new PointF(cx - 6 * k, cy - 6 * k), new PointF(cx + 3 * k, cy), new PointF(cx - 6 * k, cy + 6 * k) });
+                g.FillRectangle(w, cx + 5.5f * k, cy - 6 * k, 2.5f * k, 12 * k);
             }
         }
 
+        /// <summary>Drawn for the 28 px-wide mute box; scales with it.</summary>
         private static void DrawMute(Graphics g, Rectangle r, bool muted, Color color)
         {
-            float cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
+            float k = r.Width / 28f, cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
             using (var w = new SolidBrush(color))
             {
-                g.FillRectangle(w, cx - 8, cy - 3, 4, 6);
-                g.FillPolygon(w, new[] { new PointF(cx - 4, cy - 5), new PointF(cx + 1, cy - 8), new PointF(cx + 1, cy + 8), new PointF(cx - 4, cy + 5) });
+                g.FillRectangle(w, cx - 8 * k, cy - 3 * k, 4 * k, 6 * k);
+                g.FillPolygon(w, new[] { new PointF(cx - 4 * k, cy - 5 * k), new PointF(cx + 1 * k, cy - 8 * k), new PointF(cx + 1 * k, cy + 8 * k), new PointF(cx - 4 * k, cy + 5 * k) });
                 if (muted)
-                    using (var rp = new Pen(Color.Red, 2f))
-                    { g.DrawLine(rp, cx + 4, cy - 4, cx + 9, cy + 4); g.DrawLine(rp, cx + 9, cy - 4, cx + 4, cy + 4); }
+                    using (var rp = new Pen(Color.Red, 2f * k))
+                    { g.DrawLine(rp, cx + 4 * k, cy - 4 * k, cx + 9 * k, cy + 4 * k); g.DrawLine(rp, cx + 9 * k, cy - 4 * k, cx + 4 * k, cy + 4 * k); }
                 else
-                    using (var p = new Pen(color, 1.6f))
-                        g.DrawArc(p, cx + 2, cy - 6, 8, 12, -55, 110);
+                    using (var p = new Pen(color, 1.6f * k))
+                        g.DrawArc(p, cx + 2 * k, cy - 6 * k, 8 * k, 12 * k, -55, 110);
             }
         }
 

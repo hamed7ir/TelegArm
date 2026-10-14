@@ -10,9 +10,18 @@ namespace TelegArm.UI.Controls
     /// Floating "scroll to bottom" button (owner-painted, RT-safe) shown over the message panel when the
     /// user is scrolled up: a round chevron-down button with an optional unread-count badge. Click to
     /// jump to the latest message. Themed via <see cref="AccentColor"/> / <see cref="IsDark"/>.
+    ///
+    /// Redesign step 3.2: lengths are LOGICAL (96-DPI), drawn at the button's DPI (the window's once parented); the
+    /// badge font is a shared FontCache font (never disposed). IDpiAware SETS the 44x44 from the logical value and
+    /// rebuilds the Region (its badge metrics are DPI-dependent; the self-heal key includes the DPI). Identity at 96.
     /// </summary>
-    public sealed class JumpToBottomButton : Control
+    public sealed class JumpToBottomButton : Control, IDpiAware
     {
+        private const int Side = 44;   // logical px
+
+        private int _dpi;                                          // the DPI this button is laid out at; 0 = not parented yet
+        private int CurDpi { get { return _dpi > 0 ? _dpi : Dpi.Of(this); } }
+
         public Color AccentColor { get; set; } = Color.DodgerBlue;
         public bool IsDark { get; set; }
 
@@ -26,7 +35,7 @@ namespace TelegArm.UI.Controls
 
         public JumpToBottomButton()
         {
-            Size = new Size(44, 44);
+            Size = new Size(Dpi.Px(Side, CurDpi), Dpi.Px(Side, CurDpi));
             Cursor = Cursors.Hand;
             TabStop = false;
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
@@ -34,6 +43,23 @@ namespace TelegArm.UI.Controls
                      | ControlStyles.SupportsTransparentBackColor, true);
             BackColor = Color.Transparent;
             RebuildRegion();   // cached pre-handle; applied when the handle is created
+        }
+
+        /// <summary>Built before it is added: the window's DPI is known only once parented.</summary>
+        protected override void OnParentChanged(EventArgs e)
+        {
+            base.OnParentChanged(e);
+            if (Parent == null) return;
+            int d = Dpi.Of(this);
+            if (d != _dpi) { _dpi = d; Size = new Size(Dpi.Px(Side, d), Dpi.Px(Side, d)); RebuildRegion(); Invalidate(); }
+        }
+
+        void IDpiAware.OnDpiChanged(int oldDpi, int newDpi)
+        {
+            _dpi = newDpi;
+            Size = new Size(Dpi.Px(Side, newDpi), Dpi.Px(Side, newDpi));   // SET from the logical value: DpiScaler already ratio-scaled the bounds
+            RebuildRegion();   // DpiScaler's resize rebuilt it at the OLD DPI (the callback comes after the bounds)
+            Invalidate();
         }
 
         protected override void OnSizeChanged(EventArgs e)
@@ -44,10 +70,10 @@ namespace TelegArm.UI.Controls
 
         /// <summary>Badge bounds for the given text — shared by paint and region so they can never drift.
         /// The badge overlaps OUTSIDE the circle (top-right corner), so the region must union it.</summary>
-        private Rectangle BadgeRect(string t, Font bf)
+        private Rectangle BadgeRect(string t, Font bf, int dpi)
         {
-            int bw = Math.Max(16, TextRenderer.MeasureText(t, bf).Width + 8);
-            return new Rectangle(Width - bw, 0, bw, 16);
+            int bw = Math.Max(Dpi.Px(16, dpi), TextRenderer.MeasureText(t, bf).Width + Dpi.Px(8, dpi));
+            return new Rectangle(Width - bw, 0, bw, Dpi.Px(16, dpi));
         }
 
         /// <summary>SCROLLBTN-REGION: the hwnd is square, and WinForms "transparency" only copies the
@@ -58,26 +84,27 @@ namespace TelegArm.UI.Controls
         /// halo. The Region is also the CLICK boundary: Ø38px circle + badge — the square's corners were
         /// visually dead but tappable before; Ø38 still meets the ~40px touch-target bar.</summary>
         private int _regionForCount = -1;   // the count the current Region was built for (self-heal key)
+        private int _regionForDpi;          // ...and the DPI (step 3.2: the badge metrics are DPI-dependent)
 
         private void RebuildRegion()
         {
+            int dpi = CurDpi;
+            int P(int v) => Dpi.Px(v, dpi);
             // WINDING is load-bearing: the default (Alternate/even-odd) XORs overlapping figures, which
             // punched a HOLE in the region exactly where the badge pill overlaps the circle — the chat
             // background showed through the bite (field screenshot: badge visible only outside the rim).
             var path = new GraphicsPath { FillMode = FillMode.Winding };
-            int d = Math.Min(Width, Height) - 6;   // painted circle is -8: region rim rides 1px outside it
+            int d = Math.Min(Width, Height) - P(6);   // painted circle is -8: region rim rides 1px outside it
             path.AddEllipse((Width - d) / 2f, (Height - d) / 2f, d, d);
             if (_count > 0)
             {
                 string t = _count > 99 ? "99+" : _count.ToString();
-                using (var bf = FontHelper.Ui(7.5f, FontStyle.Bold))
-                {
-                    var badge = BadgeRect(t, bf);
-                    badge.Inflate(2, 2);   // keep the badge's own AA edge safely inside the region
-                    using (var bp = DrawHelper.RoundedRect(badge, 10)) path.AddPath(bp, false);
-                }
+                var badge = BadgeRect(t, FontHelper.UiAt(7.5f, dpi, FontStyle.Bold), dpi);   // shared font: never dispose
+                badge.Inflate(P(2), P(2));   // keep the badge's own AA edge safely inside the region
+                using (var bp = DrawHelper.RoundedRect(badge, P(10))) path.AddPath(bp, false);
             }
             _regionForCount = _count;
+            _regionForDpi = dpi;
             var old = Region;
             Region = new Region(path);   // Region(GraphicsPath) copies — safe to dispose the path
             path.Dispose();
@@ -89,12 +116,15 @@ namespace TelegArm.UI.Controls
             // Self-heal: if the badge state changed without the Region following (field evidence:
             // a badge painted as a clipped crescent = badge ∩ ellipse-only region), rebuild NOW —
             // whatever path went stale, paint and region can never disagree for more than one frame.
-            if (_regionForCount != _count) RebuildRegion();
+            int dpi = CurDpi;
+            int P(int v) => Dpi.Px(v, dpi);
+            float k = dpi / 96f;   // exactly 1 at 96
+            if (_regionForCount != _count || _regionForDpi != dpi) RebuildRegion();
 
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
 
-            int d = Math.Min(Width, Height) - 8;
+            int d = Math.Min(Width, Height) - P(8);
             var circle = new Rectangle((Width - d) / 2, (Height - d) / 2, d, d);
 
             Color fill = IsDark ? Color.FromArgb(54, 54, 58) : Color.White;
@@ -106,20 +136,18 @@ namespace TelegArm.UI.Controls
                 g.DrawEllipse(p, circle);
 
             float cx = circle.X + d / 2f, cy = circle.Y + d / 2f;
-            using (var pen = new Pen(AccentColor, 2.2f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
-                g.DrawLines(pen, new[] { new PointF(cx - 6, cy - 3), new PointF(cx, cy + 4), new PointF(cx + 6, cy - 3) });
+            using (var pen = new Pen(AccentColor, 2.2f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                g.DrawLines(pen, new[] { new PointF(cx - 6 * k, cy - 3 * k), new PointF(cx, cy + 4 * k), new PointF(cx + 6 * k, cy - 3 * k) });
 
             if (_count > 0)
             {
                 string t = _count > 99 ? "99+" : _count.ToString();
-                using (var bf = FontHelper.Ui(7.5f, FontStyle.Bold))
-                {
-                    var badge = BadgeRect(t, bf);
-                    using (var bb = new SolidBrush(AccentColor))
-                    using (var pth = DrawHelper.RoundedRect(badge, 8)) g.FillPath(bb, pth);
-                    TextRenderer.DrawText(g, t, bf, badge, Color.White,
-                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-                }
+                var bf = FontHelper.UiAt(7.5f, dpi, FontStyle.Bold);   // shared: never dispose
+                var badge = BadgeRect(t, bf, dpi);
+                using (var bb = new SolidBrush(AccentColor))
+                using (var pth = DrawHelper.RoundedRect(badge, P(8))) g.FillPath(bb, pth);
+                TextRenderer.DrawText(g, t, bf, badge, Color.White,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             }
         }
     }

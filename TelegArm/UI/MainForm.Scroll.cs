@@ -24,8 +24,10 @@ namespace TelegArm.UI
         private void PositionJumpButton()
         {
             if (_jumpBtn == null || _msgHost == null) return;
-            int x = _msgHost.ClientSize.Width - _jumpBtn.Width - 14 - 6;   // clear of the themed scrollbar
-            int y = _msgHost.ClientSize.Height - _jumpBtn.Height - 10;
+            // Clear of the themed scrollbar's lane at THIS DPI (step 3.4 review: a fixed 20 px let the button cover the lane
+            // at 192+ DPI). 12 + 8 = the old 14 + 6 at 96.
+            int x = _msgHost.ClientSize.Width - _jumpBtn.Width - ThemedScrollBar.LaneWidth(WindowDpiValue) - Px(8);
+            int y = _msgHost.ClientSize.Height - _jumpBtn.Height - Px(10);
             _jumpBtn.Location = new Point(Math.Max(0, x), Math.Max(0, y));
         }
 
@@ -86,10 +88,10 @@ namespace TelegArm.UI
             {
                 _dateFlyout.Text = label;
                 var sz = TextRenderer.MeasureText(label, _dateFlyout.Font);
-                _dateFlyout.Size = new Size(sz.Width + 24, 24);
+                _dateFlyout.Size = new Size(sz.Width + Px(24), Math.Max(Px(24), sz.Height + Px(6)));   // 24 x 24 at 96, as before
             }
             _dateFlyout.Left = Math.Max(0, (_msgHost.ClientSize.Width - _dateFlyout.Width) / 2);
-            _dateFlyout.Top = DateFlyoutTopOffset + 8;   // DATE-FLYOUT-TUNE: offset-able so a future top TOPIC bar can push it below itself
+            _dateFlyout.Top = DateFlyoutTopOffset + Px(8);   // DATE-FLYOUT-TUNE: offset-able so a future top TOPIC bar can push it below itself
             _dateFlyout.Alpha = 255;
             if (!_dateFlyout.Visible) { _dateFlyout.Visible = true; _dateFlyout.BringToFront(); }
             else _dateFlyout.Invalidate();
@@ -106,7 +108,10 @@ namespace TelegArm.UI
         }
 
         /// <summary>BUBBLE-DATETIME (C): the floating day pill — a rounded translucent chip with centered text and a
-        /// settable Alpha for the fade. Owner-drawn; a host child, never a scroll child.</summary>
+        /// settable Alpha for the fade. Owner-drawn; a host child, never a scroll child.
+        /// Redesign step 3.2: DPI-neutral by construction — it paints in its own bounds (radius = Height / 2) with its
+        /// explicit Control.Font, and DpiScaler rescales both; its size, offset and font are set by the host
+        /// (UpdateDateFlyout, BuildRightPanel), which step 3.4 converts.</summary>
         private sealed class DateFlyoutPill : Control
         {
             public bool IsDark { get; set; }

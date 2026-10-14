@@ -150,9 +150,8 @@ namespace TelegArm.UI
             {
                 using (var ab = new SolidBrush(DrawHelper.AvatarColor(e.PeerId))) g.FillEllipse(ab, avatarRect);
                 string nm = e.Title ?? "";
-                string initial = nm.Length > 0 ? nm.Substring(0, 1).ToUpperInvariant() : "?";
-                TextRenderer.DrawText(g, initial, FontHelper.UiAt(14f, dpi, FontStyle.Bold), avatarRect, Color.White,
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                string initial = nm.Length > 0 ? DrawHelper.Initial(nm) : "?";
+                DrawHelper.DrawInitial(g, initial, FontHelper.ForAt(initial, 14f, dpi, FontStyle.Bold), avatarRect, Color.White);   // ink-centred (owner report 2026-10-14)
                 EnsureAvatar(e);
             }
 

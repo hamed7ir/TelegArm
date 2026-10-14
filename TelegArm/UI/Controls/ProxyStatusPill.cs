@@ -30,6 +30,10 @@ namespace TelegArm.UI.Controls
     /// On the login screen the parent background is a flat colour, so strictly the Region is
     /// belt-and-braces THERE — but the same control over the chat list would be the original bug
     /// verbatim, so it is built correct once.
+    ///
+    /// Redesign step 3.2: the floating variant is per-window too — every length is logical (Px / F at the pill's DPI)
+    /// and the caption font is the shared UiAt font (never disposed). Both variants re-measure on a DPI change and
+    /// when parented, SETTING the size from the logical metrics; at 96 DPI every value is exactly what it was.
     /// </summary>
     public sealed class ProxyStatusPill : Control, IDpiAware
     {
@@ -39,6 +43,8 @@ namespace TelegArm.UI.Controls
         private bool _hover, _pressed;
         private Size _sizeForText = Size.Empty;
         private readonly ToolTip _tip = new ToolTip();
+        private int _dpi;                                          // the DPI the floating pill is laid out at; 0 = not parented yet
+        private int CurDpi { get { return _dpi > 0 ? _dpi : Dpi.Of(this); } }
 
         /// <summary>Accent for the "connected" dot and the focus ring. Set from ApplyTheme (the ThemeHelper
         /// accent).</summary>
@@ -56,12 +62,17 @@ namespace TelegArm.UI.Controls
             set { if (_onAccent == value) return; _onAccent = value; _sizeForText = Size.Empty; AutoSizeToText(); Invalidate(); }
         }
 
-        void IDpiAware.OnDpiChanged(int oldDpi, int newDpi) { if (_onAccent) { _sizeForText = Size.Empty; AutoSizeToText(); Invalidate(); } }
+        void IDpiAware.OnDpiChanged(int oldDpi, int newDpi)
+        {
+            _dpi = newDpi;
+            _sizeForText = Size.Empty; AutoSizeToText(); Invalidate();   // SET from the logical metrics: DpiScaler already ratio-scaled the bounds
+        }
 
         protected override void OnParentChanged(EventArgs e)
         {
             base.OnParentChanged(e);
-            if (_onAccent) { _sizeForText = Size.Empty; AutoSizeToText(); }   // the window's DPI is known once parented
+            if (Parent != null) _dpi = Dpi.Of(this);
+            _sizeForText = Size.Empty; AutoSizeToText();   // the window's DPI is known once parented (both variants)
         }
 
         public ProxyStatusPill()
@@ -147,19 +158,17 @@ namespace TelegArm.UI.Controls
         private void AutoSizeToText()
         {
             if (_onAccent) { AutoSizeOnAccent(); return; }
-            using (var f = FontHelper.Ui(9f, FontStyle.Bold))
-            {
-                var t = TextRenderer.MeasureText(Caption(), f);
-                int h = Math.Max(34, t.Height + 16);
-                // CONNECTED collapses to a CIRCLE with a shield — the steady state needs an at-a-glance
-                // "you are protected" mark, not a sentence taking up the corner. Every transient state
-                // (connecting / failed / off) keeps the wide pill, because those have something to SAY.
-                // Still one figure, so the Region's FillMode rule is unaffected: a square fed to
-                // RoundedRect with radius = h/2 IS a circle.
-                int w = _state == ProxyConnectState.Connected ? h : t.Width + h + 22;
-                var want = new Size(w, h);
-                if (want != _sizeForText) { _sizeForText = want; Size = want; }
-            }
+            int dpi = CurDpi;
+            var t = TextRenderer.MeasureText(Caption(), FontHelper.UiAt(9f, dpi, FontStyle.Bold));   // shared font: never dispose
+            int h = Math.Max(Dpi.Px(34, dpi), t.Height + Dpi.Px(16, dpi));
+            // CONNECTED collapses to a CIRCLE with a shield — the steady state needs an at-a-glance
+            // "you are protected" mark, not a sentence taking up the corner. Every transient state
+            // (connecting / failed / off) keeps the wide pill, because those have something to SAY.
+            // Still one figure, so the Region's FillMode rule is unaffected: a square fed to
+            // RoundedRect with radius = h/2 IS a circle.
+            int w = _state == ProxyConnectState.Connected ? h : t.Width + h + Dpi.Px(22, dpi);
+            var want = new Size(w, h);
+            if (want != _sizeForText) { _sizeForText = want; Size = want; }
             RebuildRegion();
         }
 
@@ -219,6 +228,8 @@ namespace TelegArm.UI.Controls
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             if (_onAccent) { PaintOnAccent(g); return; }
+            int dpi = CurDpi;
+            int P(int v) => Dpi.Px(v, dpi);
 
             // BATCH-TA-16d/D5 — CONTRAST IS LOAD-BEARING HERE, and the first version failed it.
             // These colours were chosen against LoginForm's flat background (248,248,250 light /
@@ -237,14 +248,14 @@ namespace TelegArm.UI.Controls
             // control, so the parent background must never be painted anywhere (the X1 rule).
             g.Clear(fill);
 
-            var body = new Rectangle(1, 1, Width - 3, Height - 3);   // 1px inside the region rim
+            var body = new Rectangle(P(1), P(1), Width - P(3), Height - P(3));   // 1px (logical) inside the region rim
             using (var b = new SolidBrush(fill))
             using (var path = DrawHelper.RoundedRect(body, body.Height / 2))
             {
                 g.FillPath(b, path);
                 // Border does the separating (see the D5 note above): dark enough to read against a WHITE
                 // chat list as well as LoginForm's near-white panel.
-                using (var p = new Pen(IsDark ? Color.FromArgb(92, 92, 98) : Color.FromArgb(186, 186, 194), 1.2f))
+                using (var p = new Pen(IsDark ? Color.FromArgb(92, 92, 98) : Color.FromArgb(186, 186, 194), Dpi.F(1.2f, dpi)))
                     g.DrawPath(p, path);
             }
 
@@ -257,7 +268,7 @@ namespace TelegArm.UI.Controls
                 using (var sb = new SolidBrush(AccentColor))
                     g.FillPath(sb, sp);
                 // A tick inside the shield, in the pill's own fill so it reads on any accent.
-                using (var pen = new Pen(fill, Math.Max(1.6f, s * 0.13f)) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+                using (var pen = new Pen(fill, Math.Max(Dpi.F(1.6f, dpi), s * 0.13f)) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
                     g.DrawLines(pen, new[]
                     {
                         new PointF(sr.X + s * 0.30f, sr.Y + s * 0.50f),
@@ -267,22 +278,26 @@ namespace TelegArm.UI.Controls
             }
             else
             {
-                int dot = Math.Max(8, Height / 3);
+                int dot = Math.Max(P(8), Height / 3);
                 var dotRect = new Rectangle(body.X + (Height - dot) / 2, body.Y + (body.Height - dot) / 2, dot, dot);
                 using (var db = new SolidBrush(DotColor())) g.FillEllipse(db, dotRect);
 
-                var textRect = new Rectangle(dotRect.Right + 8, body.Y, body.Right - dotRect.Right - 14, body.Height);
-                using (var f = FontHelper.Ui(9f, FontStyle.Bold))
-                    TextRenderer.DrawText(g, Caption(), f, textRect,
-                        IsDark ? Color.FromArgb(232, 232, 236) : Color.FromArgb(38, 38, 42),
-                        TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis
-                        | TextFormatFlags.NoPrefix);
+                var textRect = new Rectangle(dotRect.Right + P(8), body.Y, body.Right - dotRect.Right - P(14), body.Height);
+                TextRenderer.DrawText(g, Caption(), FontHelper.UiAt(9f, dpi, FontStyle.Bold), textRect,   // shared font: never dispose
+                    IsDark ? Color.FromArgb(232, 232, 236) : Color.FromArgb(38, 38, 42),
+                    TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis
+                    | TextFormatFlags.NoPrefix);
             }
 
             if (Focused)
-                using (var fp = new Pen(AccentColor, 1.4f) { DashStyle = DashStyle.Dot })
-                using (var fr = DrawHelper.RoundedRect(Rectangle.Inflate(body, -3, -3), Math.Max(1, (body.Height - 6) / 2)))
+            {
+                // The ring's radius is half the INSET rect's own height (== (body.Height - 6) / 2 at 96): Px(6) can round
+                // past 2 × Px(3), and RoundedRect turns a too-large radius into a square.
+                var ring = Rectangle.Inflate(body, -P(3), -P(3));
+                using (var fp = new Pen(AccentColor, Dpi.F(1.4f, dpi)) { DashStyle = DashStyle.Dot })
+                using (var fr = DrawHelper.RoundedRect(ring, Math.Max(1, ring.Height / 2)))
                     g.DrawPath(fp, fr);
+            }
         }
 
         /// <summary>2.7b: the title-bar look. The fill is the bar's colour lifted toward its ink (Palette.OnAccent), so it

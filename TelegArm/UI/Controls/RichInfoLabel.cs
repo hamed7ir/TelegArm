@@ -1,6 +1,7 @@
 using System;
 using System.Drawing;
 using System.Windows.Forms;
+using TelegArm.Helpers;
 using TL;
 
 namespace TelegArm.UI.Controls
@@ -12,15 +13,24 @@ namespace TelegArm.UI.Controls
     /// profile's existing scroll host. SELECTABLE + COPYABLE via the shared <see cref="InlineTextSelection"/>
     /// engine (mouse drag-select; right-click / long-press → "Copy Selected Text" / "Select All"). Raises
     /// link/mention/hashtag events the host routes to the existing in-app resolvers.
+    ///
+    /// Redesign step 3.2: the inner pad is logical (Px at the label's DPI); the base font is a shared pixel-unit font
+    /// (the host's, or a FontCache fallback — never disposed here), and InlineText is told its DPI (LayoutDpi). A DPI
+    /// change re-measures: DpiScaler has already moved the explicit Font to the new DPI when the callback runs.
     /// </summary>
-    public sealed class RichInfoLabel : Control
+    public sealed class RichInfoLabel : Control, IDpiAware
     {
         private InlineText _rich;
         private bool _rtl;
         private int _lastW = -1;
         private readonly bool _dark;
         private readonly Color _accent, _fg, _link;
-        private const int Pad = 2;
+        private const int Pad = 2;   // logical px
+        private readonly bool _ownFont;   // true = the Segoe UI fallback below (re-fetched per DPI), not the host's font
+
+        private int _dpi;                                          // the DPI this label is laid out at; 0 = not parented yet
+        private int CurDpi { get { return _dpi > 0 ? _dpi : Dpi.Of(this); } }
+        private int PadPx { get { return Dpi.Px(Pad, CurDpi); } }
 
         private InlineTextSelection _sel;
         private bool _suppressClick;
@@ -30,22 +40,47 @@ namespace TelegArm.UI.Controls
         public event Action<string, long> MentionClicked;
         public event Action<string> HashtagClicked;
 
+        /// <param name="font">The base font, normally a shared pixel-unit font at the host window's DPI. Never disposed here.</param>
         public RichInfoLabel(bool dark, Color accent, Font font)
         {
             _dark = dark; _accent = accent;
             _fg = dark ? Color.FromArgb(225, 225, 228) : Color.FromArgb(30, 30, 32);
             _link = accent;
-            Font = font ?? new Font("Segoe UI", 9.75f);
+            _ownFont = font == null;
+            Font = font ?? FontCache.Get("Segoe UI", 9.75f, FontStyle.Regular, CurDpi);   // shared: never dispose
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
                      | ControlStyles.OptimizedDoubleBuffer | ControlStyles.SupportsTransparentBackColor, true);
             BackColor = Color.Transparent;
             _sel = new InlineTextSelection(this);
         }
 
+        /// <summary>Built before it is added: the window's DPI is known only once parented.</summary>
+        protected override void OnParentChanged(EventArgs e)
+        {
+            base.OnParentChanged(e);
+            if (Parent == null) return;
+            int d = Dpi.Of(this);
+            if (d != _dpi) AdoptDpi(d);
+        }
+
+        void IDpiAware.OnDpiChanged(int oldDpi, int newDpi) { AdoptDpi(newDpi); }
+
+        /// <summary>Re-measures at <paramref name="dpi"/>: the pad, InlineText's DPI and (the fallback only) the font.
+        /// The host's font is not touched — DpiScaler rescales an explicit Font before the callback.</summary>
+        private void AdoptDpi(int dpi)
+        {
+            _dpi = dpi;
+            if (_ownFont) Font = FontCache.Get("Segoe UI", 9.75f, FontStyle.Regular, dpi);
+            if (_rich != null) _rich.LayoutDpi = dpi;
+            _lastW = -1;
+            Relayout();
+        }
+
         public void SetText(string text, MessageEntity[] entities, Func<long, Image> customEmojiResolver)
         {
             if (_rich != null) _rich.Dispose();
             _rich = string.IsNullOrEmpty(text) ? null : new InlineText(text, entities, customEmojiResolver);
+            if (_rich != null) _rich.LayoutDpi = CurDpi;   // the DPI of the pixel-unit base font (its one-point step)
             _sel.Attach(_rich);
             _rtl = IsRtl(text);
             _lastW = -1;
@@ -54,10 +89,11 @@ namespace TelegArm.UI.Controls
 
         private void Relayout()
         {
-            if (_rich == null || Width <= Pad * 2) { if (Height != 0) Height = 0; Invalidate(); return; }
-            int w = Width - Pad * 2;
+            int pad = PadPx;
+            if (_rich == null || Width <= pad * 2) { if (Height != 0) Height = 0; Invalidate(); return; }
+            int w = Width - pad * 2;
             using (var g = CreateGraphics()) { _rich.Measure(g, w, Font); _rich.Position(w, _rtl); }
-            int h = _rich.Height + Pad * 2;
+            int h = _rich.Height + pad * 2;
             if (Height != h) Height = h;   // FlowLayoutPanel re-lays out → the profile scroll grows
             Invalidate();
         }
@@ -71,11 +107,12 @@ namespace TelegArm.UI.Controls
         protected override void OnPaint(PaintEventArgs e)
         {
             if (_rich == null) return;
-            if (_sel != null) _sel.Paint(e.Graphics, Pad, Pad, SelColor);
-            _rich.Paint(e.Graphics, Pad, Pad, _fg, _link, Font, _dark, _accent, false);
+            int pad = PadPx;
+            if (_sel != null) _sel.Paint(e.Graphics, pad, pad, SelColor);
+            _rich.Paint(e.Graphics, pad, pad, _fg, _link, Font, _dark, _accent, false);
         }
 
-        private Point Local(Point p) { return new Point(p.X - Pad, p.Y - Pad); }
+        private Point Local(Point p) { int pad = PadPx; return new Point(p.X - pad, p.Y - pad); }
 
         protected override void OnMouseDown(MouseEventArgs e)
         {

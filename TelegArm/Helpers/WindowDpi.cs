@@ -22,13 +22,21 @@ namespace TelegArm.Helpers
         private int _pending;
         private bool _busy;
 
+        /// <summary>The EFFECTIVE DPI the window lays out at: its monitor's DPI × the user's interface scale (step 3.8a).</summary>
         public int Dpi { get; private set; }
+
+        /// <summary>The RAW DPI of the window's monitor (for what must stay physical: slop, the keyboard rectangle).</summary>
+        public int MonitorDpi { get; private set; }
 
         public WindowDpi(Form form)
         {
             _form = form;
-            Dpi = Helpers.Dpi.SystemDpi;
+            MonitorDpi = Helpers.Dpi.SystemDpi;
+            Dpi = Helpers.Dpi.Effective(MonitorDpi);
         }
+
+        /// <summary>Step 3.8a — an embedded pane (AppForm.UseAsPane) takes its host's DPI without a rescale of its own.</summary>
+        internal void Adopt(int effectiveDpi) { if (effectiveDpi > 0) Dpi = effectiveDpi; }
 
         /// <summary>Handles WM_DPICHANGED; true when the message was consumed (it returns 0 WITHOUT the base
         /// handler: WinForms 4.7's own handling must not rescale a second time).</summary>
@@ -36,14 +44,15 @@ namespace TelegArm.Helpers
         {
             if (m.Msg != WM_DPICHANGED) return false;
             m.Result = IntPtr.Zero;
-            int nw = (int)(m.WParam.ToInt64() & 0xFFFF);
-            if (nw <= 0) return true;
+            int raw = (int)(m.WParam.ToInt64() & 0xFFFF);
+            if (raw <= 0) return true;
             // Back to the DPI the window already has: any change stored while minimised/hidden is void (review 1.3 — it
-            // used to survive and be applied on restore, at a DPI the window was no longer on).
-            if (nw == Dpi) { _pending = 0; return true; }
+            // used to survive and be applied on restore, at a DPI the window was no longer on). Compared EFFECTIVE to
+            // effective (step 3.8a: Dpi holds the scaled value, the message the raw one).
+            if (Helpers.Dpi.Effective(raw) == Dpi) { MonitorDpi = raw; _pending = 0; return true; }
             var rc = (RECT)Marshal.PtrToStructure(m.LParam, typeof(RECT));
-            if (_form.WindowState == FormWindowState.Minimized || !_form.Visible) { _pending = nw; return true; }   // applied on restore
-            Apply(nw, Rectangle.FromLTRB(rc.Left, rc.Top, rc.Right, rc.Bottom), "WM_DPICHANGED");
+            if (_form.WindowState == FormWindowState.Minimized || !_form.Visible) { _pending = raw; return true; }   // applied on restore
+            Apply(raw, Rectangle.FromLTRB(rc.Left, rc.Top, rc.Right, rc.Bottom), "WM_DPICHANGED");
             return true;
         }
 
@@ -52,17 +61,20 @@ namespace TelegArm.Helpers
         {
             if (!_form.IsHandleCreated || _form.IsDisposed || _form.WindowState == FormWindowState.Minimized) return;
             // The window's real DPI now is the truth; a value stored while minimised is only the fallback.
-            int nw = Helpers.Dpi.ForWindow(_form.Handle);
-            if (nw <= 0) nw = _pending;
+            int raw = Helpers.Dpi.ForWindow(_form.Handle);
+            if (raw <= 0) raw = _pending;
             _pending = 0;
-            if (nw > 0 && nw != Dpi) Apply(nw, null, why);
+            if (raw <= 0) return;
+            if (Helpers.Dpi.Effective(raw) != Dpi) Apply(raw, null, why);
+            else MonitorDpi = raw;
         }
 
-        private void Apply(int nw, Rectangle? suggested, string source)
+        /// <summary>Rescales to the effective DPI of the RAW monitor DPI <paramref name="raw"/>.</summary>
+        private void Apply(int raw, Rectangle? suggested, string source)
         {
-            if (_busy) { _pending = nw; return; }   // re-entrancy guard: a rescale that moves the window can trigger another
+            if (_busy) { _pending = raw; return; }   // re-entrancy guard: a rescale that moves the window can trigger another
             _busy = true;
-            int old = Dpi;
+            int old = Dpi, nw = Helpers.Dpi.Effective(raw);
             var sw = Stopwatch.StartNew();
             // Maximised: Windows sizes it. Normal with no rectangle from Windows (Resync — created, restored or activated on
             // another-DPI monitor): the FORM must still be resized — DpiScaler never ratio-scales a Form root — or the
@@ -72,14 +84,16 @@ namespace TelegArm.Helpers
             if (_form.WindowState == FormWindowState.Normal) bounds = suggested ?? ScaledInPlace(old, nw);
             try
             {
+                MonitorDpi = raw;
                 Dpi = nw;   // first: OnDpiChanged handlers and Px(n, control) must already see the new DPI
                 DpiScaler.Rescale(_form, old, nw, bounds);
             }
             finally { _busy = false; }
-            Logger.Diag("[DPI] win=" + _form.GetType().Name + " old=" + old + " new=" + nw + " src=" + source
+            Logger.Diag("[DPI] win=" + _form.GetType().Name + " old=" + old + " new=" + nw + " mon=" + raw
+                        + " scale=" + Helpers.Dpi.UserScalePercent + "% src=" + source
                         + " sugg=" + (suggested.HasValue ? suggested.Value.ToString() : "-") + " applied=" + _form.Bounds
                         + " rescale=" + sw.ElapsedMilliseconds + "ms");
-            if (_pending > 0 && _pending != Dpi) { int p = _pending; _pending = 0; Apply(p, null, "pending"); }
+            if (_pending > 0 && Helpers.Dpi.Effective(_pending) != Dpi) { int p = _pending; _pending = 0; Apply(p, null, "pending"); }
             else _pending = 0;
         }
 

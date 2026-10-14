@@ -235,7 +235,7 @@ namespace TelegArm.UI
             var p = (Panel)sender;
             g.Clear(p.BackColor);   // blend with the header's theme background
             if (_headerAvatarPeerId == 0) return;   // empty state (no chat) → just the background
-            const int d = 40;
+            int d = Px(40);   // step 3.4: logical diameter at the window's DPI
             var rect = new Rectangle((p.Width - d) / 2, (p.Height - d) / 2, d, d);
             var img = _headerAvatarImg;   // snapshot: another path can null it between the check and the draw
             if (img != null)
@@ -262,10 +262,9 @@ namespace TelegArm.UI
             }
             using (var b = new SolidBrush(DrawHelper.AvatarColor(_headerAvatarPeerId)))
                 g.FillEllipse(b, rect);
-            string letter = string.IsNullOrEmpty(_headerAvatarTitle) ? "?" : _headerAvatarTitle.Substring(0, 1).ToUpper();
-            using (var af = FontHelper.For(_headerAvatarTitle ?? "", 15f, FontStyle.Bold))
-                TextRenderer.DrawText(g, letter, af, rect, Color.White,
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            string letter = string.IsNullOrEmpty(_headerAvatarTitle) ? "?" : DrawHelper.Initial(_headerAvatarTitle);
+            var af = FontHelper.ForAt(_headerAvatarTitle ?? "", 15f, WindowDpiValue, FontStyle.Bold);   // SHARED: never dispose
+            DrawHelper.DrawInitial(g, letter, af, rect, Color.White);   // ink-centred (owner report 2026-10-14)
         }
 
         /// <summary>Points the header avatar at <paramref name="entry"/>'s peer (cache hit paints immediately;

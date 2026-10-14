@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 
@@ -7,6 +8,74 @@ namespace TelegArm.Helpers
     /// <summary>Shared GDI+ drawing utilities for the custom-painted controls.</summary>
     public static class DrawHelper
     {
+        // ── Letter avatars (owner report, 2026-10-14: "the first letter in the profile photo is not centered") ──────
+
+        /// <summary>The initial for a letter avatar: the first letter or digit of <paramref name="name"/>, upper-cased; "?" if
+        /// there is none. Never half a surrogate pair (Substring(0, 1) of a name that starts with an emoji was one), and never
+        /// an emoji or a symbol drawn through a font (RT 8.1 draws those as an empty box).</summary>
+        public static string Initial(string name)
+        {
+            if (!string.IsNullOrEmpty(name))
+                foreach (char c in name)
+                    if (!char.IsSurrogate(c) && char.IsLetterOrDigit(c)) return char.ToUpperInvariant(c).ToString();
+            return "?";
+        }
+
+        private static readonly Dictionary<string, RectangleF?> _initialInk = new Dictionary<string, RectangleF?>();
+
+        /// <summary>Draws an avatar's initial with its INK centred in <paramref name="box"/>. TextRenderer's VerticalCenter
+        /// centres the font's LINE box (ascent + descent), which set a capital a few pixels high and a Persian letter low.
+        /// The letter is still DRAWN by TextRenderer — the same crisp GDI text as before, the real bold face — only placed
+        /// differently: its ink bounds are measured once per (text, font, size) from the glyph outline (cached), and the
+        /// text is drawn at the point that puts that ink in the middle. (Filling the outline itself was tried and dropped:
+        /// GDI+ lost the bold face and punched holes where the bundled Roboto's contours overlap.)</summary>
+        public static void DrawInitial(Graphics g, string text, Font font, Rectangle box, Color color)
+        {
+            if (g == null || string.IsNullOrEmpty(text) || font == null || box.Width <= 0 || box.Height <= 0) return;
+            var ink = InkBounds(g, text, font);
+            if (ink == null)
+            {
+                System.Windows.Forms.TextRenderer.DrawText(g, text, font, box, color,
+                    System.Windows.Forms.TextFormatFlags.HorizontalCenter | System.Windows.Forms.TextFormatFlags.VerticalCenter
+                    | System.Windows.Forms.TextFormatFlags.NoPrefix);
+                return;
+            }
+            var r = ink.Value;
+            int x = (int)Math.Round(box.X + (box.Width - r.Width) / 2f - r.X, MidpointRounding.AwayFromZero);
+            int y = (int)Math.Round(box.Y + (box.Height - r.Height) / 2f - r.Y, MidpointRounding.AwayFromZero);
+            System.Windows.Forms.TextRenderer.DrawText(g, text, font, new Point(x, y), color,
+                System.Windows.Forms.TextFormatFlags.NoPadding | System.Windows.Forms.TextFormatFlags.NoPrefix
+                | System.Windows.Forms.TextFormatFlags.SingleLine);
+        }
+
+        /// <summary>The ink bounds of <paramref name="text"/> relative to where TextRenderer starts drawing it (NoPadding):
+        /// the glyph outline laid out at the origin, whose top is the cell's top like GDI's. Null if no outline can be made.</summary>
+        private static RectangleF? InkBounds(Graphics g, string text, Font font)
+        {
+            float em = font.Unit == GraphicsUnit.Pixel ? font.Size : font.SizeInPoints * g.DpiY / 72f;
+            string key = text + "|" + font.FontFamily.Name + "|" + (int)font.Style + "|" + em.ToString("0.00");
+            lock (_initialInk)
+            {
+                RectangleF? ink;
+                if (_initialInk.TryGetValue(key, out ink)) return ink;
+                if (_initialInk.Count > 1024) _initialInk.Clear();
+                ink = null;
+                try
+                {
+                    using (var path = new GraphicsPath())
+                    using (var sf = (StringFormat)StringFormat.GenericTypographic.Clone())
+                    {
+                        path.AddString(text, font.FontFamily, (int)font.Style, em, PointF.Empty, sf);
+                        var b = path.GetBounds();
+                        if (b.Width > 0 && b.Height > 0) ink = b;
+                    }
+                }
+                catch { ink = null; }
+                _initialInk[key] = ink;   // a failure is remembered too: no retry per paint
+                return ink;
+            }
+        }
+
         /// <summary>Draws a circular download progress ring inside <paramref name="circle"/>: a faint track,
         /// a foreground arc filling clockwise from 12 o'clock to <paramref name="fraction"/> (0..1), and — when
         /// <paramref name="cancel"/> — an ✕ in the center (the cancel hit target). Pure GDI+ (honors transforms).</summary>

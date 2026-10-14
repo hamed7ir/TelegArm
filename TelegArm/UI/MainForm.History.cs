@@ -171,6 +171,7 @@ namespace TelegArm.UI
             var card = new SponsoredCardControl(recommended ? "Recommended" : "Sponsored", sm.title, sm.message,
                 sm.entities, sm.button_text, hasMedia, ResolveCustomEmoji)
             {
+                LayoutDpi = Dpi.Of(_messagePanel),   // step 3.2: measured below, BEFORE it is added — at the window's DPI
                 AccentColor = SponsoredAccent(sm),
                 IsDark = _dark,
                 Width = ContentWidth(_messagePanel)

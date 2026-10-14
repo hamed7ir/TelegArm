@@ -2,6 +2,7 @@ using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
+using TelegArm.Helpers;
 
 namespace TelegArm.UI.Controls
 {
@@ -9,8 +10,11 @@ namespace TelegArm.UI.Controls
     /// Displays an image centered and scaled-to-fit, with mouse-wheel zoom
     /// (50%–300%), click-drag panning, and double-click to reset. The image is
     /// referenced, not owned — the caller disposes it.
+    ///
+    /// Redesign step 3.2: no logical lengths here (fit, zoom and drag are all relative to the panel), so the only
+    /// DPI state is the pan offset, in device px: a DPI change scales it with the panel, like a scroll position.
     /// </summary>
-    public class ZoomableImagePanel : Control
+    public class ZoomableImagePanel : Control, IDpiAware
     {
         private const float MinZoom = 0.5f, MaxZoom = 3.0f, ZoomStep = 1.15f;
 
@@ -39,6 +43,18 @@ namespace TelegArm.UI.Controls
         {
             _zoom = 1f;
             _offset = PointF.Empty;
+            Invalidate();
+        }
+
+        void IDpiAware.OnDpiChanged(int oldDpi, int newDpi)
+        {
+            // DpiScaler ratio-scaled the bounds, so the fit scale follows; the user's pan is the one thing it cannot see.
+            // Scaled once by the same ratio (DpiScaler does the same to an AutoScroll position) so the view holds still.
+            if (oldDpi > 0 && newDpi > 0)
+            {
+                float r = newDpi / (float)oldDpi;
+                _offset = new PointF(_offset.X * r, _offset.Y * r);
+            }
             Invalidate();
         }
 

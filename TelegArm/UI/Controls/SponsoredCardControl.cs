@@ -14,9 +14,25 @@ namespace TelegArm.UI.Controls
     /// photo, bold title, the ad text (via the inline engine: entities + char-wrap + RTL), optional media
     /// thumbnail, and a call-to-action button. Raises events for the click matrix; the owner sends the
     /// mandatory view/click telemetry.
+    ///
+    /// Redesign step 3.2 (the ChatListItemControl pattern): every length is LOGICAL and read through P() at the card's
+    /// DPI (the metrics are properties over P()); every font is a shared FontCache font for that DPI — never disposed,
+    /// never in a using. At 96 DPI every value is exactly what it was. Like a bubble, the card is measured before it is
+    /// added, so the host sets LayoutDpi at creation; OnParentChanged re-measures only if the window's DPI differs.
     /// </summary>
-    public sealed class SponsoredCardControl : Control
+    public sealed class SponsoredCardControl : Control, IDpiAware
     {
+        private int _dpi;                                          // the DPI this card is laid out at; 0 = not known yet
+        private int CurDpi { get { return _dpi > 0 ? _dpi : Dpi.Of(this); } }
+        private int P(int v) { return Dpi.Px(v, CurDpi); }        // a logical length at the card's DPI
+
+        /// <summary>The DPI to lay out (and measure) at before the card is parented; the window's DPI wins once it is.</summary>
+        public int LayoutDpi
+        {
+            get { return CurDpi; }
+            set { if (value > 0 && value != _dpi) { _dpi = value; SyncRichDpi(); } }
+        }
+
         public Color AccentColor { get; set; } = Color.DodgerBlue;
         public bool IsDark { get; set; }
 
@@ -40,8 +56,15 @@ namespace TelegArm.UI.Controls
         private int _bodyH;
         private int _textTop, _textBottom;   // y-range of label+title+body (for the view trigger)
 
-        private const int SideGap = 12, VMargin = 6, Pad = 12, LabelH = 15, TitleH = 19,
-                          ButtonH = 36, MediaH = 160, PhotoD = 40, WM_CONTEXTMENU = 0x007B;
+        private int SideGap => P(12);
+        private int VMargin => P(6);
+        private int Pad => P(12);
+        private int LabelH => P(15);
+        private int TitleH => P(19);
+        private int ButtonH => P(36);
+        private int MediaH => P(160);
+        private int PhotoD => P(40);
+        private const int WM_CONTEXTMENU = 0x007B;
 
         public SponsoredCardControl(string label, string title, string body, MessageEntity[] entities,
                                     string buttonText, bool hasMedia, Func<long, Image> emojiResolver)
@@ -53,7 +76,7 @@ namespace TelegArm.UI.Controls
             string text = body ?? "";
             _rtl = FontHelper.IsPersian(text) || FontHelper.IsPersian(_title);
             if (_rtl) RightToLeft = RightToLeft.Yes;
-            if (!string.IsNullOrEmpty(text)) _rich = new InlineText(text, entities, emojiResolver);
+            if (!string.IsNullOrEmpty(text)) _rich = new InlineText(text, entities, emojiResolver) { LayoutDpi = CurDpi };
 
             Margin = new Padding(0);
             Cursor = Cursors.Hand;
@@ -68,13 +91,46 @@ namespace TelegArm.UI.Controls
         public void SetPhoto(Image img) { _photo = img; if (!IsDisposed) { Measure(); Invalidate(); } }
         public void SetMediaThumb(Image img) { _mediaThumb = img; if (!IsDisposed) Invalidate(); }
 
-        private Font BodyFont() => _rtl ? FontHelper.Persian(11f) : FontHelper.Ui(9.75f);
+        /// <summary>Step 3.2 — the card is built (and measured) before it is added: adopt the window's DPI once parented,
+        /// re-measuring only if it differs from the DPI the card was measured at.</summary>
+        protected override void OnParentChanged(EventArgs e)
+        {
+            base.OnParentChanged(e);
+            if (Parent == null) return;
+            int d = Dpi.Of(this);
+            if (d == _dpi) return;
+            int was = CurDpi;   // what the fonts + metrics used so far (the default DPI while _dpi was 0)
+            _dpi = d;
+            SyncRichDpi();
+            if (d != was) { Measure(); Invalidate(); }
+        }
+
+        void IDpiAware.OnDpiChanged(int oldDpi, int newDpi)
+        {
+            _dpi = newDpi;
+            SyncRichDpi();
+            // One card, so it re-measures itself (SET from the logical metrics, never a multiple of the scaled Height):
+            // the panel's width handler re-measures only MessageBubbleControls, never this card.
+            Measure();
+            Invalidate();
+        }
+
+        /// <summary>Hands the inline engine the card's DPI and drops its cached layout + bitmap.</summary>
+        private void SyncRichDpi()
+        {
+            if (_rich == null) return;
+            int d = CurDpi;
+            if (_rich.LayoutDpi != d) { _rich.LayoutDpi = d; _rich.InvalidateLayout(); }
+        }
+
+        /// <summary>Shared per-DPI font (step 3.2): never dispose it, never wrap it in a using.</summary>
+        private Font BodyFont() => _rtl ? FontHelper.PersianAt(11f, CurDpi) : FontHelper.UiAt(9.75f, CurDpi);
 
         /// <summary>Recomputes Height for the current Width.</summary>
         public void Measure()
         {
-            int innerW = Math.Max(40, Width - 2 * SideGap - 2 * Pad);
-            int headW = innerW - (_photo != null ? PhotoD + 10 : 0);   // label/title wrap beside the photo
+            int innerW = Math.Max(P(40), Width - 2 * SideGap - 2 * Pad);
+            int headW = innerW - (_photo != null ? PhotoD + P(10) : 0);   // label/title wrap beside the photo
 
             int h = Pad;
             _textTop = Pad;   // label starts here (relative to the card top); used by the view trigger
@@ -86,21 +142,20 @@ namespace TelegArm.UI.Controls
             _bodyH = 0;
             if (_rich != null)
             {
-                using (var g = Graphics.FromHwnd(IntPtr.Zero))
-                using (var f = BodyFont())
+                using (var g = Graphics.FromHwnd(IntPtr.Zero))   // pixel-unit fonts measure the same on any DC
                 {
-                    _rich.Measure(g, innerW, f);
+                    _rich.Measure(g, innerW, BodyFont());
                     _rich.Position(innerW, _rtl);
                     _bodyH = _rich.Height;
                 }
-                h += 4 + _bodyH;
+                h += P(4) + _bodyH;
             }
             _textBottom = h;                       // end of the ad TEXT (label+title+body) → view trigger
             // keep the head block at least as tall as the photo
             if (_photo != null) h = Math.Max(h, Pad + PhotoD);
 
-            if (_hasMedia) h += 8 + MediaH;
-            h += 8 + ButtonH;                      // CTA button
+            if (_hasMedia) h += P(8) + MediaH;
+            h += P(8) + ButtonH;                   // CTA button
             h += Pad;
 
             Height = h + 2 * VMargin;
@@ -146,9 +201,10 @@ namespace TelegArm.UI.Controls
             _cardRect = new Rectangle(SideGap, VMargin, Width - 2 * SideGap, Height - 2 * VMargin);
             Color cardBg = IsDark ? Color.FromArgb(48, 48, 52) : Color.FromArgb(255, 255, 255);
             using (var b = new SolidBrush(cardBg))
-            using (var p = DrawHelper.RoundedRect(_cardRect, 12)) g.FillPath(b, p);
+            using (var p = DrawHelper.RoundedRect(_cardRect, P(12))) g.FillPath(b, p);
+            int barW = P(3);
             using (var ab = new SolidBrush(AccentColor))
-                g.FillRectangle(ab, _rtl ? _cardRect.Right - 3 : _cardRect.X, _cardRect.Y + 6, 3, _cardRect.Height - 12);
+                g.FillRectangle(ab, _rtl ? _cardRect.Right - barW : _cardRect.X, _cardRect.Y + P(6), barW, _cardRect.Height - P(12));
 
             int left = _cardRect.X + Pad, right = _cardRect.Right - Pad;
             int innerW = right - left;
@@ -168,8 +224,8 @@ namespace TelegArm.UI.Controls
                     tp.TranslateTransform(_photoRect.X, _photoRect.Y);
                     using (var pe = DrawHelper.RoundedRect(_photoRect, PhotoD / 2)) g.FillPath(tp, pe);
                 }
-                if (rtl) { headW -= PhotoD + 10; right -= PhotoD + 10; }
-                else { headLeft += PhotoD + 10; left += PhotoD + 10; }
+                if (rtl) { headW -= PhotoD + P(10); right -= PhotoD + P(10); }
+                else { headLeft += PhotoD + P(10); left += PhotoD + P(10); }
                 innerW = headW;
             }
 
@@ -178,16 +234,15 @@ namespace TelegArm.UI.Controls
 
             // LABEL ("Sponsored"/"Recommended")
             _labelRect = new Rectangle(headLeft, y, headW, LabelH);
-            using (var lf = FontHelper.Ui(7.75f, FontStyle.Bold))
-                TextRenderer.DrawText(g, _label.ToUpperInvariant(), lf, _labelRect, AccentColor, leftFlags);
+            TextRenderer.DrawText(g, _label.ToUpperInvariant(), FontHelper.UiAt(7.75f, CurDpi, FontStyle.Bold), _labelRect, AccentColor, leftFlags);
             y += LabelH;
 
             // TITLE
             if (!string.IsNullOrEmpty(_title))
             {
                 Color tc = IsDark ? Color.FromArgb(236, 236, 238) : Color.FromArgb(20, 20, 22);
-                using (var tf = FontHelper.For(_title, rtl ? 11f : 10f, FontStyle.Bold))
-                    TextRenderer.DrawText(g, _title, tf, new Rectangle(headLeft, y, headW, TitleH), tc, leftFlags);
+                TextRenderer.DrawText(g, _title, FontHelper.ForAt(_title, rtl ? 11f : 10f, CurDpi, FontStyle.Bold),
+                    new Rectangle(headLeft, y, headW, TitleH), tc, leftFlags);   // shared font: never dispose
                 y += TitleH;
             }
 
@@ -200,18 +255,17 @@ namespace TelegArm.UI.Controls
             {
                 Color body = IsDark ? Color.FromArgb(220, 220, 224) : Color.FromArgb(40, 40, 44);
                 _rich.Position(innerW, rtl);
-                _bodyOrigin = new Point(left, y + 4);
-                using (var f = BodyFont())
-                    _rich.Paint(g, left, y + 4, body, AccentColor, f, IsDark, AccentColor, false);
-                y += 4 + _bodyH;
+                _bodyOrigin = new Point(left, y + P(4));
+                _rich.Paint(g, left, y + P(4), body, AccentColor, BodyFont(), IsDark, AccentColor, false);
+                y += P(4) + _bodyH;
             }
             _textBottom = y - _cardRect.Y;
 
             // MEDIA thumbnail
             if (_hasMedia)
             {
-                _mediaRect = new Rectangle(left, y + 8, innerW, MediaH);
-                using (var p = DrawHelper.RoundedRect(_mediaRect, 8))
+                _mediaRect = new Rectangle(left, y + P(8), innerW, MediaH);
+                using (var p = DrawHelper.RoundedRect(_mediaRect, P(8)))
                 {
                     if (_mediaThumb != null)
                     {
@@ -225,22 +279,20 @@ namespace TelegArm.UI.Controls
                     {
                         using (var mb = new SolidBrush(IsDark ? Color.FromArgb(60, 60, 64) : Color.FromArgb(225, 225, 230)))
                             g.FillPath(mb, p);
-                        using (var mf = FontHelper.Ui(9f))
-                            TextRenderer.DrawText(g, "Media", mf, _mediaRect,
-                                IsDark ? Color.FromArgb(170, 170, 175) : Color.FromArgb(120, 120, 125),
-                                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                        TextRenderer.DrawText(g, "Media", FontHelper.UiAt(9f, CurDpi), _mediaRect,
+                            IsDark ? Color.FromArgb(170, 170, 175) : Color.FromArgb(120, 120, 125),
+                            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
                     }
                 }
-                y += 8 + MediaH;
+                y += P(8) + MediaH;
             }
 
             // BUTTON
-            _buttonRect = new Rectangle(left, y + 8, innerW, ButtonH);
+            _buttonRect = new Rectangle(left, y + P(8), innerW, ButtonH);
             using (var bb = new SolidBrush(AccentColor))
-            using (var bp = DrawHelper.RoundedRect(_buttonRect, 8)) g.FillPath(bb, bp);
-            using (var bf = FontHelper.For(_buttonText, 9.5f, FontStyle.Bold))
-                TextRenderer.DrawText(g, _buttonText, bf, _buttonRect, Color.White,
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+            using (var bp = DrawHelper.RoundedRect(_buttonRect, P(8))) g.FillPath(bb, bp);
+            TextRenderer.DrawText(g, _buttonText, FontHelper.ForAt(_buttonText, 9.5f, CurDpi, FontStyle.Bold), _buttonRect, Color.White,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         }
 
         private static Bitmap FitSquare(Image src, int d)

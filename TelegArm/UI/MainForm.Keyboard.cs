@@ -192,8 +192,9 @@ namespace TelegArm.UI
                     if (WindowState == FormWindowState.Maximized) { WindowState = FormWindowState.Normal; left = wa.Left; width = wa.Width; }
                     // FIX 2: the keyboard covers below kbTop; fill from the screen top to just above it. The ctor's
                     // MinimumSize.Height (480) would clamp the shrink (kbTop can leave <480 above), so drop it.
-                    int h = Math.Max(160, kbTop - wa.Top - 4);
-                    MinimumSize = new Size(MinimumSize.Width, 120);
+                    // Step 3.4: kbTop / wa are raw screen pixels; the 160 floor, 4 gap and 120 clamp are logical.
+                    int h = Math.Max(Px(160), kbTop - wa.Top - Px(4));
+                    MinimumSize = new Size(MinimumSize.Width, Px(120));
                     SetBounds(left, wa.Top, width, h);
                     if (LogOn) Logger.Diag("[KBD] resize→ top=" + wa.Top + " h=" + h + " bottom=" + (wa.Top + h) + " (above kbTop=" + kbTop + ")");
                 }
@@ -257,7 +258,11 @@ namespace TelegArm.UI
             _kbActive = false;
             try
             {
-                if (_savedMinH > 0) MinimumSize = new Size(MinimumSize.Width, _savedMinH);   // restore the clamp
+                // Restore the clamp. Step 3.4: from the LOGICAL minimum at the current DPI, not a pixel value captured
+                // at shrink time (stale if the DPI changed while shrunk); the captured height is only the fallback.
+                var lm = LogicalMinimumSize;
+                if (!lm.IsEmpty) MinimumSize = new Size(Px(lm.Width), Px(lm.Height));
+                else if (_savedMinH > 0) MinimumSize = new Size(MinimumSize.Width, _savedMinH);
                 bool wasMax = _savedState == FormWindowState.Maximized;
                 // 1.2: wasMax → hand the geometry back to Windows (NO SetBounds — the OS owns maximized).
                 if (wasMax) WindowState = FormWindowState.Maximized;
@@ -281,9 +286,11 @@ namespace TelegArm.UI
                 if (!GetWindowRect(h, out NativeRect r)) return false;
                 var screen = Screen.FromControl(this).Bounds;
                 int height = r.Bottom - r.Top;
-                if (height < 150) return false;                    // too small to be the OSK
-                if (r.Top >= screen.Bottom - 80) return false;     // dismissed / moved off the bottom
-                if (r.Bottom < screen.Bottom - 80) return false;   // not bottom-docked → not the case we handle
+                // Step 3.4: tolerances on an OS window sized by the MONITOR's DPI → raw monitor DPI, never the user scale.
+                int minH = Dpi.Px(150, MonitorDpiValue), edge = Dpi.Px(80, MonitorDpiValue);
+                if (height < minH) return false;                     // too small to be the OSK
+                if (r.Top >= screen.Bottom - edge) return false;     // dismissed / moved off the bottom
+                if (r.Bottom < screen.Bottom - edge) return false;   // not bottom-docked → not the case we handle
                 kbTop = r.Top;
                 return true;
             }
@@ -305,7 +312,9 @@ namespace TelegArm.UI
                     // OccludedRect is window-relative (custom-chrome AppForm → client = window): its top (oy)
                     // is where the keyboard starts within the window → screen kbTop = winTop + oy. RAW logged so
                     // the coordinate space can be confirmed from the RT run.
-                    kbTop = Top + (int)Math.Round(oy);
+                    // Step 3.4: OccludedRect is in DIPs → physical with the RAW monitor DPI (never the user scale);
+                    // _lastOcc above keeps the raw DIP values for the log. Identity at 96.
+                    kbTop = Top + (int)Math.Round(oy * MonitorDpiValue / 96.0);
                     return true;
                 }
             }
@@ -348,7 +357,8 @@ namespace TelegArm.UI
                 {
                     var scr = Screen.FromControl(this).Bounds;
                     top = r.Top; bot = r.Bottom; ht = r.Bottom - r.Top;
-                    onScr = ht >= 150 && r.Top < scr.Bottom - 80 && r.Bottom > scr.Bottom - 80;
+                    int edge = Dpi.Px(80, MonitorDpiValue);   // step 3.4: same raw-monitor tolerances as KeyboardShowing
+                    onScr = ht >= Dpi.Px(150, MonitorDpiValue) && r.Top < scr.Bottom - edge && r.Bottom > scr.Bottom - edge;
                 }
                 double occH = 0;
                 try { if (WinRtKeyboard.TryOccludedRect(out double _, out double _, out double _, out double oh)) occH = oh; } catch { }

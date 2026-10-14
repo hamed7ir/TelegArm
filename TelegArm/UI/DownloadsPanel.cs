@@ -13,17 +13,29 @@ namespace TelegArm.UI
     /// DOWNLOAD-UX Part 4: the header transfers indicator — a small circular aggregate-progress button with a
     /// badge count, visible only while the session has tracked transfers. Theme-aware (ThemeChanged), 40px
     /// touch target. Tap → the DownloadsPanel popup. A consumer of TelegramService roster state only.
+    ///
+    /// Redesign step 3.2: every length is logical (Px / F at the indicator's DPI), the badge font is the shared UiAt
+    /// font (never disposed), and the 40 px size is SET from the logical value when parented and on a DPI change.
+    /// At 96 DPI every value is exactly what it was.
+    ///
+    /// ALIGNED WITH THE HEADER BUTTONS (owner report, 2026-10-14): it is docked Right in the chat header like the ⋮, the
+    /// magnifier and the dock toggle, so docking stretches it to the header's full height — but it drew its ring at a
+    /// fixed (7, 7) of a 40 x 40 box, ~8 px above the others' glyph centre, and was 40 wide against their 44. It is now
+    /// 44 wide like them and paints the ring CENTRED in whatever box it is given (the badge keeps its place on the ring).
     /// </summary>
-    public sealed class DownloadIndicator : Control
+    public sealed class DownloadIndicator : Control, IDpiAware
     {
+        private const int Side = 44;   // logical px — the header buttons' width (MainForm.Layout: Width = Px(44))
         private readonly TelegramService _service;
         private readonly Timer _tick;         // smooth ring while transfers run (paint-only; state via events)
         private bool _dark;
+        private int _dpi;                     // the DPI this indicator is laid out at; 0 = not parented yet
+        private int CurDpi { get { return _dpi > 0 ? _dpi : Dpi.Of(this); } }
 
         public DownloadIndicator(TelegramService service)
         {
             _service = service;
-            Size = new Size(40, 40);
+            Size = new Size(Dpi.Px(Side, CurDpi), Dpi.Px(Side, CurDpi));
             Cursor = Cursors.Hand;
             Visible = false;
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer
@@ -43,6 +55,22 @@ namespace TelegArm.UI
         }
 
         private void OnTheme() { _dark = ThemeHelper.IsDark; if (!IsDisposed) Invalidate(); }
+
+        /// <summary>Built before it is added: the window's DPI is known only once parented.</summary>
+        protected override void OnParentChanged(EventArgs e)
+        {
+            base.OnParentChanged(e);
+            if (Parent == null) return;
+            int d = Dpi.Of(this);
+            if (d != _dpi) { _dpi = d; Size = new Size(Dpi.Px(Side, d), Dpi.Px(Side, d)); Invalidate(); }
+        }
+
+        void IDpiAware.OnDpiChanged(int oldDpi, int newDpi)
+        {
+            _dpi = newDpi;
+            Size = new Size(Dpi.Px(Side, newDpi), Dpi.Px(Side, newDpi));   // SET from the logical value: DpiScaler already ratio-scaled the bounds
+            Invalidate();
+        }
 
         private void OnTransfers()
         {
@@ -64,6 +92,9 @@ namespace TelegArm.UI
 
         protected override void OnPaint(PaintEventArgs e)
         {
+            int dpi = CurDpi;
+            int P(int v) => Dpi.Px(v, dpi);
+            float F(float v) => Dpi.F(v, dpi);
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.Clear(Parent != null ? Parent.BackColor : (_dark ? Color.FromArgb(38, 38, 42) : Color.White));
@@ -78,28 +109,29 @@ namespace TelegArm.UI
             float frac = total > 0 ? Math.Min(1f, (float)got / total) : (all.Length > 0 && activeOrPaused == 0 ? 1f : 0f);
             var accent = ThemeHelper.GetWindowsAccentColor();
             var track = _dark ? Color.FromArgb(80, 80, 86) : Color.FromArgb(205, 205, 210);
-            var rect = new Rectangle(7, 7, 26, 26);
-            using (var pen = new Pen(track, 3f)) g.DrawEllipse(pen, rect);
+            int ring = P(26);   // centred in the control: docked, it is as tall as the header (see the class notes)
+            var rect = new Rectangle((Width - ring) / 2, (Height - ring) / 2, ring, ring);
+            using (var pen = new Pen(track, F(3f))) g.DrawEllipse(pen, rect);
             if (frac > 0)
-                using (var pen = new Pen(accent, 3f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                using (var pen = new Pen(accent, F(3f)) { StartCap = LineCap.Round, EndCap = LineCap.Round })
                     g.DrawArc(pen, rect, -90, frac * 360f);
             // down-arrow glyph
             var fg = _dark ? Color.FromArgb(225, 225, 230) : Color.FromArgb(60, 60, 66);
-            using (var pen = new Pen(fg, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            using (var pen = new Pen(fg, F(2f)) { StartCap = LineCap.Round, EndCap = LineCap.Round })
             {
-                float cx = 20, cy = 20;
-                g.DrawLine(pen, cx, cy - 5, cx, cy + 3);
-                g.DrawLine(pen, cx - 3.5f, cy - 0.5f, cx, cy + 3);
-                g.DrawLine(pen, cx + 3.5f, cy - 0.5f, cx, cy + 3);
+                float cx = rect.X + rect.Width / 2f, cy = rect.Y + rect.Height / 2f;   // the ring's centre
+                g.DrawLine(pen, cx, cy - F(5), cx, cy + F(3));
+                g.DrawLine(pen, cx - F(3.5f), cy - F(0.5f), cx, cy + F(3));
+                g.DrawLine(pen, cx + F(3.5f), cy - F(0.5f), cx, cy + F(3));
             }
             if (activeOrPaused > 0)   // badge count
             {
                 string n = activeOrPaused.ToString();
+                var badge = new Rectangle(rect.Right - P(9), rect.Top - P(7), P(15), P(15));   // top-right of the ring, as before
                 using (var bb = new SolidBrush(accent))
-                    g.FillEllipse(bb, Width - 16, 0, 15, 15);
-                using (var f = FontHelper.Ui(7f, FontStyle.Bold))
-                    TextRenderer.DrawText(g, n, f, new Rectangle(Width - 16, 0, 15, 15), Color.White,
-                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                    g.FillEllipse(bb, badge);
+                TextRenderer.DrawText(g, n, FontHelper.UiAt(7f, dpi, FontStyle.Bold), badge, Color.White,   // shared font: never dispose
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
             }
         }
     }

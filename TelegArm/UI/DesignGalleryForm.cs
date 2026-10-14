@@ -7,6 +7,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Forms;
+using TelegArm.Core;
 using TelegArm.Helpers;
 using TelegArm.UI.Controls;
 
@@ -17,7 +18,8 @@ namespace TelegArm.UI
     ///   TelegArm.exe --gallery                 open it (storage isolated, like --shoot: no account is touched)
     ///   TelegArm.exe --gallery-probe out.txt   open it, run the chrome checks on a REAL window, write PASS/FAIL, exit
     /// Combine with TELEGARM_DPI=pmv1 to exercise per-monitor DPI, TELEGARM_ACCENT=#RRGGBB for accents, and
-    /// TELEGARM_CHROME=native for the escape hatch. The --shoot rig also renders it.</summary>
+    /// TELEGARM_CHROME=native for the escape hatch. The --shoot rig also renders it.
+    /// Step 3.2: a "Chat rows" section (the owner-drawn chat controls), which the probe measures across a DPI move.</summary>
     public sealed class DesignGalleryForm : AppForm
     {
         private readonly Label _info;
@@ -29,6 +31,7 @@ namespace TelegArm.UI
         private readonly List<ThemedScrollBar> _demoBars = new List<ThemedScrollBar>();
         private readonly List<GlyphButton> _onAccent = new List<GlyphButton>();
         private readonly List<GlyphButton> _onCard = new List<GlyphButton>();
+        private readonly List<ChatKitRow> _chatKit = new List<ChatKitRow>();
 
         public DesignGalleryForm()
         {
@@ -164,7 +167,130 @@ namespace TelegArm.UI
             AddLauncher(ref bx, y, "1.x menu", null).Click += (s, e) => ShowDemoMenu((Control)s, false);
             AddLauncher(ref bx, y, "Restyled menu", null).Click += (s, e) => ShowDemoMenu((Control)s, true);
             y += Px(38) + Px(18);
+            return AddChatRows(x, y);
+        }
+
+        // ── step 3.2: chat rows — the owner-drawn chat controls, for the per-window-DPI probe ─────────────────────
+
+        /// <summary>Step 3.2 — one control of the "Chat rows" section. <c>Make</c> builds it ON THE PAGE at a location and a
+        /// pixel width (ignored by a control that owns its size), at the window's current DPI; the probe calls it again for
+        /// a fresh twin. <c>LogicalH</c>: the height it owns at 96 DPI, 0 when it is measured from its text. <c>Theme</c>:
+        /// the palette it was built in (RichInfoLabel bakes its colours).</summary>
+        private sealed class ChatKitRow
+        {
+            public string Name; public int LogicalH; public Func<Point, int, Control> Make; public Control Ctl; public string Theme;
+        }
+
+        /// <summary>Step 3.2 — the owner-drawn chat controls, built the way MainForm builds them (RenderChatList, CreateBubble,
+        /// MakeServiceLine, the composer row, the reply-keyboard row), so the probe can measure them at every DPI.
+        /// Returns the next free y.</summary>
+        private int AddChatRows(int x, int y)
+        {
+            _page.Controls.Add(Header("Chat rows (owner-drawn, at the window's DPI)", x, y)); y += Px(30);
+
+            // Fixed dates: the row's stamp (dd/MM/yy) and the bubbles' (HH:mm) are the same on every run of the rig.
+            var date = new DateTime(2026, 3, 14, 9, 41, 0, DateTimeKind.Utc);
+            var entry = new ChatEntry { PeerId = 7, Title = "Ada Lovelace", Preview = "The engine weaves algebraic patterns, as the loom weaves flowers", Date = date, UnreadCount = 3 };
+            y += AddChatKit("chat row", 64, x, y, Px(360), (at, w) => OnPage(new ChatListItemControl(entry)
+                { AccentColor = ThemeHelper.Palette.Accent, IsDark = ThemeHelper.Palette.Dark, Location = at, Width = w })).Height + Px(10);
+            y += AddChatKit("bubble (Latin, incoming)", 0, x, y, Px(616), (at, w) => Bubble(
+                "An incoming message long enough to wrap onto a second line, so the bubble's height comes from the text layout at the window's DPI.",
+                "Ada Lovelace", false, date, at, w)).Height + Px(6);
+            y += AddChatKit("bubble (Persian, outgoing)", 0, x, y, Px(616), (at, w) => Bubble(
+                "سلام! این یک پیام فارسی است؛ اندازه‌اش باید در هر DPI درست بماند.", null, true, date, at, w)).Height + Px(6);
+            y += AddChatKit("service line", 30, x, y, Px(616), (at, w) => OnPage(new ServiceLineControl("Ada Lovelace joined the group")
+                { IsDark = ThemeHelper.Palette.Dark, Location = at, Width = w })).Height + Px(10);
+
+            // The composer's 40 px cells, and the floating proxy pill: Max(34, caption + 16) high — the floor wins at 9 pt.
+            int rowH = AddChatKit("attach button", 40, x, y, 0, (at, w) => OnPage(new AttachButton { Location = at })).Height;
+            rowH = Math.Max(rowH, AddChatKit("mic button", 40, x + Px(48), y, 0, (at, w) => OnPage(new MicButton { Location = at })).Height);
+            rowH = Math.Max(rowH, AddChatKit("send button", 40, x + Px(96), y, 0, (at, w) => OnPage(new SendButton { Location = at })).Height);
+            rowH = Math.Max(rowH, AddChatKit("proxy pill (floating)", 34, x + Px(160), y, 0, (at, w) => OnPage(new ProxyStatusPill
+                { IsDark = ThemeHelper.Palette.Dark, AccentColor = ThemeHelper.Palette.Accent, Location = at })).Height);
+            y += rowH + Px(10);
+
+            y += AddChatKit("reply keyboard", 74, x, y, Px(400), ReplyKeyboard).Height + Px(10);   // 74 = 6 + 22 + one row of (40 + 6)
+            y += AddChatKit("rich info label", 0, x, y, Px(400), RichLabel).Height + Px(18);
             return y;
+        }
+
+        private Control AddChatKit(string name, int logicalH, int x, int y, int w, Func<Point, int, Control> make)
+        {
+            var k = new ChatKitRow { Name = name, LogicalH = logicalH, Make = make, Ctl = make(new Point(x, y), w), Theme = ThemeKey(ThemeHelper.Palette) };
+            _chatKit.Add(k);
+            return k.Ctl;
+        }
+
+        private T OnPage<T>(T c) where T : Control { _page.Controls.Add(c); return c; }
+
+        private static string ThemeKey(Palette p) { return (p.Dark ? "dark|" : "light|") + p.Accent.ToArgb(); }
+
+        /// <summary>As MainForm.CreateBubble, but measured AFTER it is added: the window's DPI is known only once parented.</summary>
+        private Control Bubble(string text, string sender, bool outgoing, DateTime date, Point at, int w)
+        {
+            var p = ThemeHelper.Palette;
+            var b = new MessageBubbleControl(text, sender, outgoing, date) { AccentColor = p.Accent, IsDark = p.Dark, Location = at, Width = w, Read = outgoing };
+            b.SetEntities(null);   // unconditionally, as CreateBubble does (the bubble decides on the inline engine itself)
+            OnPage(b);
+            b.Measure();
+            return b;
+        }
+
+        /// <summary>One row of two buttons. The gallery is its host: it SETS the height from DesiredHeight (as MainForm's
+        /// SyncReplyKeyboardHeight sets its row) — here, after a collapse toggle, and after a DPI change (OnDpiChanged).</summary>
+        private Control ReplyKeyboard(Point at, int w)
+        {
+            var p = ThemeHelper.Palette;
+            var kb = new ReplyKeyboardControl { IsDark = p.Dark, AccentColor = p.Accent, Location = at, Width = w };
+            kb.SetButtons(new List<List<ReplyKeyboardControl.RKButton>>
+            {
+                new List<ReplyKeyboardControl.RKButton>
+                {
+                    new ReplyKeyboardControl.RKButton { Label = "Yes, continue", Kind = ReplyKeyboardControl.RKKind.Text },
+                    new ReplyKeyboardControl.RKButton { Label = "Not now", Kind = ReplyKeyboardControl.RKKind.Text }
+                }
+            });
+            OnPage(kb);
+            kb.Height = kb.DesiredHeight;
+            kb.ToggleChanged += (s, e) => kb.Height = kb.DesiredHeight;
+            return kb;
+        }
+
+        /// <summary>A profile description (ProfileForm.NewDetails): a link, a mention and a hashtag, wrapping to a second line.
+        /// Its font is the SHARED one for the window's DPI — never disposed (DpiScaler swaps it on a DPI change).</summary>
+        private Control RichLabel(Point at, int w)
+        {
+            var p = ThemeHelper.Palette;
+            const string text = "TelegArm, a Telegram client for Windows RT 8.1: https://github.com/hamed7ir/TelegArm #telegarm @example. Long enough to wrap, so its height follows the font at the window's DPI.";
+            var r = new RichInfoLabel(p.Dark, p.Accent, FontHelper.UiAt(9.75f, WindowDpiValue)) { Location = at, Width = w };
+            OnPage(r);
+            r.SetText(text, TextEntities.Detect(text), null);
+            return r;
+        }
+
+        /// <summary>Step 3.2 — the chat-rows kit at <paramref name="dpi"/>: each control is as tall as a TWIN built fresh at that DPI
+        /// with the same width (a moved control must equal a new one: ctor + OnParentChanged against OnDpiChanged + the host's
+        /// relayout) and, when it owns a fixed height, Px(logical, dpi). Both within 1 px. One check per control.</summary>
+        private void CheckChatKitAt(int dpi, string where, Action<bool, string, string> check, Action<string> info)
+        {
+            var seen = new StringBuilder();
+            foreach (var k in _chatKit)
+            {
+                var c = k.Ctl;
+                int th;
+                try
+                {
+                    var twin = k.Make(c.Location, c.Width);
+                    th = twin.Height;
+                    _page.Controls.Remove(twin); twin.Dispose();
+                }
+                catch (Exception ex) { check(false, where + ": " + k.Name + " built fresh", ex.GetType().Name + ": " + ex.Message); continue; }   // a throwing ctor is the v1.9.0 crash
+                int want = k.LogicalH > 0 ? Dpi.Px(k.LogicalH, dpi) : th;
+                check(Math.Abs(c.Height - th) <= 1 && Math.Abs(c.Height - want) <= 1, where + ": " + k.Name + " height",
+                      c.Height + " px; built fresh " + th + (k.LogicalH > 0 ? "; Px(" + k.LogicalH + ") " + want : ""));
+                seen.Append(seen.Length > 0 ? ", " : "").Append(k.Name).Append(' ').Append(c.Width).Append('x').Append(c.Height);
+            }
+            info(where + ": " + seen);
         }
 
         /// <summary>The rig: scroll the page to its n-th screen (0 = top). False when that screen is past the end.</summary>
@@ -224,18 +350,57 @@ namespace TelegArm.UI
 
         protected override void OnThemeChanged() { Recolor(); }
 
+        /// <summary>Step 3.2: as the chat-rows kit's HOST the gallery does what MainForm's relayout does after a DPI change —
+        /// measures the bubbles again (MessageBubbleControl leaves that to its host) and SETS the reply keyboard's height from
+        /// DesiredHeight. Never a ratio of what is there: DpiScaler has already scaled the bounds.</summary>
+        protected override void OnDpiChanged(int oldDpi, int newDpi)
+        {
+            base.OnDpiChanged(oldDpi, newDpi);
+            foreach (var k in _chatKit)
+            {
+                if (k.Ctl is MessageBubbleControl b) b.Measure();
+                else if (k.Ctl is ReplyKeyboardControl kb && kb.HasButtons) kb.Height = kb.DesiredHeight;
+            }
+        }
+
         private void Recolor()
         {
             var p = ThemeHelper.Palette;
             foreach (var b in _onAccent) { b.BarColor = p.TitleBar; b.Invalidate(); }
             foreach (var b in _onCard) { b.BarColor = p.Card; b.GlyphColor = p.Text; b.Invalidate(); }
             RecolorTree(Content, p);
+            RecolorChatKit(p);
             foreach (var b in new[] { _pageBar }.Concat(_demoBars)) if (b != null) { b.IsDark = p.Dark; b.AccentColor = p.Accent; b.Invalidate(); }
             _anchored.BackColor = p.Card; _anchored.ForeColor = p.Text;
             _info.Text = "DPI " + WindowDpiValue + " (" + Dpi.Mode + ", system " + Dpi.SystemDpi + ")   chrome: "
                          + (CustomChrome ? "custom" : "native") + " (" + ChromeReason + ")   accent " + ColorMath.Hex(p.Accent)
                          + (ThemeHelper.AccentOverride.HasValue ? " (fixed)" : " (Windows)");
             _swatches.Invalidate();
+        }
+
+        /// <summary>Step 3.2: the chat-rows kit takes the palette the way MainForm hands it (IsDark / AccentColor); the composer
+        /// buttons follow ThemeHelper by themselves. RichInfoLabel bakes its colours when built, so it is rebuilt in place, as
+        /// ProfileForm rebuilds its description.</summary>
+        private void RecolorChatKit(Palette p)
+        {
+            string theme = ThemeKey(p);
+            foreach (var k in _chatKit)
+            {
+                var c = k.Ctl;
+                if (c is RichInfoLabel)
+                {
+                    if (k.Theme == theme) continue;
+                    k.Ctl = k.Make(c.Location, c.Width); k.Theme = theme;
+                    _page.Controls.Remove(c); c.Dispose();
+                    continue;
+                }
+                if (c is ChatListItemControl row) { row.IsDark = p.Dark; row.AccentColor = p.Accent; }
+                else if (c is MessageBubbleControl b) { b.IsDark = p.Dark; b.AccentColor = p.Accent; }
+                else if (c is ServiceLineControl sl) sl.IsDark = p.Dark;
+                else if (c is ProxyStatusPill pill) { pill.IsDark = p.Dark; pill.AccentColor = p.Accent; }
+                else if (c is ReplyKeyboardControl kb) { kb.IsDark = p.Dark; kb.AccentColor = p.Accent; }
+                c.Invalidate();
+            }
         }
 
         /// <summary>Headers in AccentFg, plain labels in Text, containers in Window — the kit controls colour themselves.</summary>
@@ -348,7 +513,8 @@ namespace TelegArm.UI
                     ThemeHelper.SetAccent(null); Pump(100);
                     log.AppendLine("INFO  after maximise/restore: " + where());
 
-                    ProbeDpiMove(f, check, s => log.AppendLine("INFO  " + s + ": " + where()));
+                    f.CheckChatKitAt(f.WindowDpiValue, "chat rows at " + f.WindowDpiValue + " DPI", check, s => log.AppendLine("INFO  " + s));   // step 3.2, every mode
+                    ProbeDpiMove(f, check, s => log.AppendLine("INFO  " + s + ": " + where()), s => log.AppendLine("INFO  " + s));
                     ProbeCreateOnOtherDpi(check, s => log.AppendLine("INFO  " + s));
                     DialogProbe.Run(f, check, s => log.AppendLine("INFO  " + s));   // step 1.4: the dialogs' keyboard tests
                     TextBoxProbe.Run(check, s => log.AppendLine("INFO  " + s));      // step 1.5: ThemedTextBox's contract
@@ -367,8 +533,11 @@ namespace TelegArm.UI
 
         /// <summary>Per-monitor only: move the window to a monitor with another DPI and back. Checks WM_DPICHANGED
         /// arrives, the window rescales (title bar height, the anchored button's gap), and the round trip lands on
-        /// the original pixels — DpiScaler on REAL windows (step 1.1 could only test handle-less controls).</summary>
-        private static void ProbeDpiMove(DesignGalleryForm f, Action<bool, string, string> check, Action<string> info)
+        /// the original pixels — DpiScaler on REAL windows (step 1.1 could only test handle-less controls).
+        /// Step 3.2: the chat-rows kit too — on the other monitor each control is as tall as one built fresh there (and
+        /// Px(logical) when it owns a fixed height); back home, every one is on its exact pixels.
+        /// <paramref name="note"/> is a plain INFO line (<paramref name="info"/> appends the anchored button's place).</summary>
+        private static void ProbeDpiMove(DesignGalleryForm f, Action<bool, string, string> check, Action<string> info, Action<string> note)
         {
             if (!Dpi.Mode.StartsWith("per-monitor")) { check(true, "DPI move skipped (process is " + Dpi.Mode + "; run with TELEGARM_DPI=pmv1)", null); return; }
             int home = f.WindowDpiValue;
@@ -381,6 +550,7 @@ namespace TelegArm.UI
             if (other == null) { check(true, "DPI move skipped (every monitor is at " + home + " DPI)", null); return; }
 
             var homeBounds = f.Bounds; var anchoredHome = f._anchored.Bounds; int barHome = f.Bar.Height;
+            var kitHome = f._chatKit.Select(k => k.Ctl.Bounds).ToArray();   // step 3.2: bounds (so the bubbles' measured heights too)
             int gapR = f.Content.ClientSize.Width - f._anchored.Right, gapB = f.Content.ClientSize.Height - f._anchored.Bottom;
             var wa = other.WorkingArea;
             SetWindowPos(f.Handle, IntPtr.Zero, wa.Left + 60, wa.Top + 60, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
@@ -392,6 +562,7 @@ namespace TelegArm.UI
             double r = otherDpi / (double)home;
             check(Math.Abs(ngR - gapR * r) <= 2 && Math.Abs(ngB - gapB * r) <= 2, "anchored Right|Bottom gaps rescaled",
                   gapR + "," + gapB + " -> " + ngR + "," + ngB + " (want x" + r.ToString("0.00") + ")");
+            f.CheckChatKitAt(otherDpi, "chat rows on the " + otherDpi + "-DPI monitor", check, note);
             SetWindowPos(f.Handle, IntPtr.Zero, homeBounds.Left, homeBounds.Top, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
             Pump(800);
             info("back home");
@@ -399,6 +570,9 @@ namespace TelegArm.UI
             check(f.Bar.Height == barHome, "title bar height back exactly", f.Bar.Height + " vs " + barHome);
             check(f._anchored.Bounds == anchoredHome, "anchored button back on the same pixels", f._anchored.Bounds + " vs " + anchoredHome);
             check(f.Size == homeBounds.Size, "window size back exactly (Windows' suggested rectangles)", f.Size + " vs " + homeBounds.Size);
+            for (int i = 0; i < kitHome.Length && i < f._chatKit.Count; i++)
+                check(f._chatKit[i].Ctl.Bounds == kitHome[i], "chat rows back home: " + f._chatKit[i].Name + " on the same pixels",
+                      f._chatKit[i].Ctl.Bounds + " vs " + kitHome[i]);
         }
 
         /// <summary>The review-1.3 defects, each on the real window: the gutter as the DEEPEST window sees it, restore keeping
@@ -474,6 +648,7 @@ namespace TelegArm.UI
                 int gapR = g.Content.ClientSize.Width - g._anchored.Right, gapB = g.Content.ClientSize.Height - g._anchored.Bottom;
                 check(Math.Abs(gapR - Dpi.Px(AnchoredGapX, d)) <= 2 && Math.Abs(gapB - Dpi.Px(AnchoredGapY, d)) <= 2, "…with the anchored button at its logical gaps (content not clipped)",
                       gapR + "," + gapB + " vs " + Dpi.Px(AnchoredGapX, d) + "," + Dpi.Px(AnchoredGapY, d));
+                g.CheckChatKitAt(d, "chat rows in a window created at " + d + " DPI", check, info);   // step 3.2: the Resync path
                 info("created on the other monitor: " + g.Bounds + " dpi " + d);
                 g.Close();
             }

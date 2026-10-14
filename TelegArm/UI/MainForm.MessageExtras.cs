@@ -362,11 +362,12 @@ namespace TelegArm.UI
                     FormBorderStyle = FormBorderStyle.None, StartPosition = FormStartPosition.Manual,
                     ShowInTaskbar = false, BackColor = _dark ? Color.FromArgb(52, 52, 56) : Color.FromArgb(55, 55, 58)
                 };
-                var lbl = new Label { Dock = DockStyle.Fill, ForeColor = Color.White, TextAlign = ContentAlignment.MiddleCenter, Text = text, Font = FontHelper.Ui(9f) };
+                // Step 3.4: sized and placed in LOGICAL px at this window's DPI; the font is shared (never dispose).
+                var lbl = new Label { Dock = DockStyle.Fill, ForeColor = Color.White, TextAlign = ContentAlignment.MiddleCenter, Text = text, Font = FontHelper.UiAt(9f, WindowDpiValue) };
                 f.Controls.Add(lbl);
-                var sz = TextRenderer.MeasureText(text, lbl.Font, new Size(360, 0), TextFormatFlags.WordBreak);
-                f.Size = new Size(Math.Min(400, Math.Max(120, sz.Width + 40)), Math.Max(40, sz.Height + 24));
-                f.Location = PointToScreen(new Point((ClientSize.Width - f.Width) / 2, ClientSize.Height - f.Height - 90));
+                var sz = TextRenderer.MeasureText(text, lbl.Font, new Size(Px(360), 0), TextFormatFlags.WordBreak);
+                f.Size = new Size(Math.Min(Px(400), Math.Max(Px(120), sz.Width + Px(40))), Math.Max(Px(40), sz.Height + Px(24)));
+                f.Location = PointToScreen(new Point((ClientSize.Width - f.Width) / 2, ClientSize.Height - f.Height - Px(90)));
                 var t = new System.Windows.Forms.Timer { Interval = 2600 };
                 t.Tick += (s, e) => { t.Stop(); t.Dispose(); if (!f.IsDisposed) f.Close(); };
                 f.Shown += (s, e) => t.Start();

@@ -57,8 +57,8 @@ namespace TelegArm.UI
         private ThemedLabel _nameLbl, _statusLbl;
         private TextBox _idBox;
         private RichInfoLabel _details;
-        // The description's base font is POINT-unit on purpose: InlineText derives its run fonts from Font.Size read as
-        // points, so a shared pixel-unit font would draw 33% too big. Owned here, disposed with the form.
+        // The description's base font: the SHARED pixel-unit font at this window's DPI (step 3.2 — InlineText keeps the
+        // base font's unit now, so the old point-font workaround is gone). NEVER disposed; refreshed in OnDpiChanged.
         private Font _detailsFont;
         private string _detailsText = "";
         private bool _detailsShown;
@@ -130,11 +130,11 @@ namespace TelegArm.UI
         ///     bar, no custom chrome, no resize gutter, no hit-testing of its own — so there is nothing to clear.
         /// The caller does: `new ProfileForm(svc, entry, avatar, width) { TopLevel = false, Dock = Fill }`,
         /// adds it, calls Show(), and handles <see cref="EmbeddedRoute"/> instead of a DialogResult.</summary>
-        public ProfileForm(TelegramService service, ChatEntry entry, Image avatar, int contentWidth)
-            : this(service, entry, avatar, false, contentWidth) { }
+        public ProfileForm(TelegramService service, ChatEntry entry, Image avatar, int contentWidth, int hostDpi)
+            : this(service, entry, avatar, false, contentWidth, hostDpi) { }
 
         private ProfileForm(TelegramService service, ChatEntry entry, Image avatar, bool editable,
-                            int contentWidth = 0)
+                            int contentWidth = 0, int hostDpi = 0)
             : base(false)
         {
             _service = service;
@@ -144,7 +144,7 @@ namespace TelegArm.UI
             _ownsAvatar = editable;
             _muted = entry?.Muted ?? false;
             _embedded = contentWidth > 0;
-            if (_embedded) UseAsPane();   // before any handle: replaces the 1.x "embed hack" (Padding = 0 / Sizable = false)
+            if (_embedded) UseAsPane(hostDpi);   // before any handle: replaces the 1.x "embed hack"; built at the host's DPI (3.8a)
 
             Text = editable ? "My Profile" : "Profile";
             if (!_embedded)
@@ -193,17 +193,13 @@ namespace TelegArm.UI
             tb.ForeColor = ink;
         }
 
-        /// <summary>DpiScaler's generic pass rescales an explicit Font into a shared PIXEL-unit one; the description's
-        /// InlineText needs a point-unit base font (see <c>_detailsFont</c>), so put one back.</summary>
+        /// <summary>Step 3.2: DpiScaler's generic pass has already moved the description's explicit Font to the shared pixel
+        /// font at the new DPI (InlineText keeps that unit now, so no point font is put back), and the label re-measured
+        /// itself in its own IDpiAware callback (children first). Only the stored reference is refreshed.</summary>
         protected override void OnDpiChanged(int oldDpi, int newDpi)
         {
             base.OnDpiChanged(oldDpi, newDpi);
-            if (_details == null || _details.IsDisposed) return;
-            var fresh = FontHelper.Ui(9.75f);
-            var prev = _detailsFont;
-            _details.Font = fresh;
-            _detailsFont = fresh;
-            if (prev != null) prev.Dispose();
+            _detailsFont = FontHelper.UiAt(9.75f, newDpi);   // shared: never dispose
         }
 
         /// <summary>Esc closes a modal profile (1.x: KeyPreview + KeyDown). An EMBEDDED pane ignores it: closing a
@@ -224,7 +220,7 @@ namespace TelegArm.UI
         private string DisplayLetter()
         {
             string t = _editable ? (SelfUser?.first_name ?? "?") : (_entry?.Title ?? "?");
-            return string.IsNullOrEmpty(t) ? "?" : t.Substring(0, 1).ToUpper();
+            return string.IsNullOrEmpty(t) ? "?" : DrawHelper.Initial(t);
         }
 
         private long AvatarColorKey => _editable ? (SelfUser?.id ?? 0) : (_entry?.PeerId ?? 0);
@@ -484,12 +480,12 @@ namespace TelegArm.UI
 
         // ── The description (rich text) ──────────────────────────────────────
         /// <summary>A description label in the CURRENT palette. RichInfoLabel bakes its colours when it is built, so a theme
-        /// change builds a fresh one (<see cref="RebuildDetails"/>). Each label owns its own point-unit font.</summary>
+        /// change builds a fresh one (<see cref="RebuildDetails"/>). The font is the shared one for this DPI (never disposed).</summary>
         private RichInfoLabel NewDetails()
         {
             var pal = Pal;
-            _detailsFont = FontHelper.Ui(9.75f);
-            int left = Px(OuterPad + SettingRow.PadX) - 2;   // 2 = RichInfoLabel's own inner pad, so the TEXT lines up
+            _detailsFont = FontHelper.UiAt(9.75f, WindowDpiValue);   // shared: never dispose
+            int left = Px(OuterPad + SettingRow.PadX) - Px(2);   // 2 = RichInfoLabel's own inner pad, so the TEXT lines up
             var rich = new RichInfoLabel(pal.Dark, pal.Accent, _detailsFont);
             rich.Width = ContentW + Px(OuterPad) - left;
             rich.Margin = new Padding(left, Px(2), Px(OuterPad), 0);
@@ -510,14 +506,12 @@ namespace TelegArm.UI
         {
             if (_details == null || _flow == null || _details.IsDisposed) return;
             var old = _details;
-            var oldFont = _detailsFont;
             int index = _flow.Controls.GetChildIndex(old);
-            _details = NewDetails();   // also replaces _detailsFont
+            _details = NewDetails();   // also refreshes _detailsFont (shared: the old label's font is never disposed)
             _flow.Controls.Add(_details);
             _flow.Controls.SetChildIndex(_details, index);
             _flow.Controls.Remove(old);
             old.Dispose();
-            if (oldFont != null) oldFont.Dispose();
             ShowDetailsText();
         }
 
@@ -601,13 +595,6 @@ namespace TelegArm.UI
                 Margin = Edge(OuterPad, 2, OuterPad, 0)
             };
             int shown = Math.Min(items.Count, StoryPreviewMax);   // one preview row; the rest live behind "Show all"
-            for (int i = 0; i < shown; i++)
-            {
-                int idx = i;   // capture → the viewer deep-links to this story
-                var thumb = new StoryThumb(_service, items[i], Pal.Dark) { Margin = Edge(0, 0, 6, 6) };
-                thumb.Clicked += () => OpenProfileStoryViewer(idx);
-                grid.Controls.Add(thumb);
-            }
 
             SettingGroup showAll = null;
             if (items.Count > StoryPreviewMax)
@@ -622,6 +609,15 @@ namespace TelegArm.UI
             // order the async sections finished in — same technique as the personal-channel card.
             _flow.Controls.Add(label);
             _flow.Controls.Add(grid);
+            // Step 3.2 (review): the tiles are added AFTER the grid is in the form — a tile adopts its window's DPI when it is
+            // parented, and inside a not-yet-attached grid it could only see the system default.
+            for (int i = 0; i < shown; i++)
+            {
+                int idx = i;   // capture → the viewer deep-links to this story
+                var thumb = new StoryThumb(_service, items[i], Pal.Dark) { Margin = Edge(0, 0, 6, 6) };
+                thumb.Clicked += () => OpenProfileStoryViewer(idx);
+                grid.Controls.Add(thumb);
+            }
             int anchor = _flow.Controls.GetChildIndex(_idBox);
             if (anchor >= 0)
             {
@@ -690,9 +686,8 @@ namespace TelegArm.UI
                 else
                 {
                     using (var b = new SolidBrush(pal.Accent)) g.FillEllipse(b, ar);
-                    string letter = string.IsNullOrEmpty(_title) ? "#" : _title.Substring(0, 1).ToUpper();
-                    TextRenderer.DrawText(g, letter, FontHelper.ForAt(_title, 15f, dpi, FontStyle.Bold), ar, pal.OnAccent,
-                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                    string letter = string.IsNullOrEmpty(_title) ? "#" : DrawHelper.Initial(_title);
+                    DrawHelper.DrawInitial(g, letter, FontHelper.ForAt(_title, 15f, dpi, FontStyle.Bold), ar, pal.OnAccent);   // ink-centred (owner report 2026-10-14)
                 }
                 int tx = ax + d + Dpi.Px(12, dpi), tw = Width - tx - Dpi.Px(14, dpi);
                 DrawLine(g, _title, tx, Dpi.Px(10, dpi), tw, pal.Text, 10.5f, FontStyle.Bold, dpi);
@@ -1294,9 +1289,8 @@ namespace TelegArm.UI
                 {
                     using (var b = new SolidBrush(DrawHelper.AvatarColor(_u.id))) g.FillEllipse(b, circle);
                     string name0 = ((_u.first_name ?? "") + (_u.username ?? "?"));
-                    string initial = name0.Length > 0 ? name0.Substring(0, 1).ToUpperInvariant() : "?";
-                    TextRenderer.DrawText(g, initial, FontHelper.UiAt(13f, dpi, FontStyle.Bold), circle,
-                        Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                    string initial = name0.Length > 0 ? DrawHelper.Initial(name0) : "?";
+                    DrawHelper.DrawInitial(g, initial, FontHelper.ForAt(initial, 13f, dpi, FontStyle.Bold), circle, Color.White);   // ink-centred (owner report 2026-10-14)
                 }
 
                 int tx = ax + d + Dpi.Px(12, dpi), right = Width - Dpi.Px(PadX, dpi);
@@ -1370,8 +1364,8 @@ namespace TelegArm.UI
             {
                 using (var b = new SolidBrush(DrawHelper.AvatarColor(AvatarColorKey)))
                     g.FillEllipse(b, rect);
-                TextRenderer.DrawText(g, DisplayLetter(), FontHelper.UiAt(fontSize, WindowDpiValue, FontStyle.Bold), rect, Color.White,
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                string letter = DisplayLetter();
+                DrawHelper.DrawInitial(g, letter, FontHelper.ForAt(letter, fontSize, WindowDpiValue, FontStyle.Bold), rect, Color.White);   // ink-centred (owner report 2026-10-14)
             }
         }
 
@@ -1570,7 +1564,7 @@ namespace TelegArm.UI
                 if (_ownsAvatar && _avatar != null) { _avatar.Dispose(); _avatar = null; }
             }
             base.Dispose(disposing);
-            if (disposing && _detailsFont != null) { _detailsFont.Dispose(); _detailsFont = null; }   // after the label that used it
+            // (No _detailsFont disposal: step 3.2 — it is a shared FontCache font, never disposed.)
         }
 
         // ══ Icons: DRAWN with GDI+ lines/shapes, never font symbols (tofu boxes on RT 8.1) ══════════════════════════════

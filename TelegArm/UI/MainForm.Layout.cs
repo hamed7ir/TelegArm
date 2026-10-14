@@ -30,9 +30,10 @@ namespace TelegArm.UI
             // splitter distance — setting SplitterDistance while the control is still
             // at its default 150px width throws (distance outside the valid range).
             Content.Controls.Add(_split);   // 2.7a: under AppForm's title bar
-            _split.Panel1MinSize = 240;
-            _split.Panel2MinSize = 360;
-            try { _split.SplitterDistance = 300; } catch { /* width too small yet */ }
+            // Step 3.4: logical px at the window's DPI (the splitter stays a 1 px hairline).
+            _split.Panel1MinSize = Px(240);
+            _split.Panel2MinSize = Px(360);
+            try { _split.SplitterDistance = Px(300); } catch { /* width too small yet */ }
             PerfLog.Boot("  BuildUi: SplitContainer ready");
 
             BuildLeftPanel();
@@ -55,7 +56,7 @@ namespace TelegArm.UI
             {
                 Hint = "Search",
                 Dock = DockStyle.Fill,
-                Margin = new Padding(2, 12, 10, 6),
+                Margin = new Padding(Px(2), Px(12), Px(10), Px(6)),
                 FontPoints = 10.5f
             });
             _searchBox.TextChanged += (s, e) => OnSearchTextChanged();
@@ -66,7 +67,7 @@ namespace TelegArm.UI
 
             _hamburger = new Button
             {
-                Size = new Size(38, 38),
+                Size = new Size(Px(38), Px(38)),
                 Anchor = AnchorStyles.None,            // centered in its cell
                 FlatStyle = FlatStyle.Flat,
                 ForeColor = _accent,
@@ -90,7 +91,7 @@ namespace TelegArm.UI
                 ColumnCount = 2,
                 RowCount = 1
             };
-            searchRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 52));
+            searchRow.ColumnStyles.Add(ColPx(52));
             searchRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             searchRow.Controls.Add(_hamburger, 0, 0);
             searchRow.Controls.Add(_searchBox.Control, 1, 0);
@@ -108,6 +109,7 @@ namespace TelegArm.UI
             ScrollbarTheme.Apply(_chatListPanel, _dark);
             _chatListPanel.SizeChanged += (s, e) =>
             {
+                if (Dpi.Busy || _dpiRelayoutPending) return;   // step 3.4: the deferred DPI relayout does it once, at the final width
                 int w = ContentWidth(_chatListPanel);
                 foreach (Control c in _chatListPanel.Controls) c.Width = w;
             };
@@ -140,8 +142,8 @@ namespace TelegArm.UI
                 RebuildFolderRail();
 
                 var right = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
-                right.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));
-                right.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));      // STORIES: tray row 1 (hidden until stories load)
+                right.RowStyles.Add(RowPx(60));
+                right.RowStyles.Add(RowPx(0));      // STORIES: tray row 1 (hidden until stories load)
                 right.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
                 right.Controls.Add(searchRow, 0, 0);
                 right.Controls.Add(_storyTrayBar, 0, 1);
@@ -150,7 +152,7 @@ namespace TelegArm.UI
                 _storyTrayLayout = right;
 
                 var outer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = new Padding(0) };
-                outer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 72));   // rail width
+                outer.ColumnStyles.Add(ColPx(72));   // rail width
                 outer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
                 outer.Controls.Add(_folderRail, 0, 0);
                 outer.Controls.Add(right, 1, 0);
@@ -162,15 +164,15 @@ namespace TelegArm.UI
             {
                 // TABBED (default): today's exact 3-row layout — search / horizontal folder bar / chat list.
                 var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4 };
-                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));
-                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));     // STORIES: tray row 1 (hidden until stories load)
-                layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
+                layout.RowStyles.Add(RowPx(60));
+                layout.RowStyles.Add(RowPx(0));     // STORIES: tray row 1 (hidden until stories load)
+                layout.RowStyles.Add(RowPx(46));
                 layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
                 _folderBar = new NoNativeScrollFlowPanel
                 {
                     Dock = DockStyle.Fill,
-                    Margin = new Padding(0, 1, 8, 1),   // flush left: "All" now aligns with the chat-row avatars below
+                    Margin = new Padding(0, Px(1), Px(8), Px(1)),   // flush left: "All" now aligns with the chat-row avatars below
                     WrapContents = false,
                     AutoScroll = true,
                     BackColor = _dark ? Color.FromArgb(40, 40, 40) : Color.White
@@ -248,7 +250,196 @@ namespace TelegArm.UI
             TextRenderer.DrawText(g, EmptyStateText, font, r, pal.ServicePillText,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
         }
-        private int _composerRowMin = -1, _composerMargins = -1;
+        private const int ComposerRowH = 64;   // logical: the input row's built height (plan E3 grows it from there)
+
+        // ── Step 3.4: after a DPI change (plan §6.1) ─────────────────────────────────────────────────────────────────────
+        // DpiScaler has ratio-scaled every bound, padding, explicit font and Absolute table style, and the IDpiAware controls
+        // re-set what they own. Left for MainForm: what it derives from state (rows toggled open are re-set from their
+        // LOGICAL size, so one opened before the change and one opened after match to the pixel), hairlines, the keyboard
+        // shrink, things built at a DPI (drawer, dock profile), and the bubbles' measured heights. Those are DEFERRED: the
+        // panel's final width exists only after the scaler's last layout. Tegra 3 (§6.1 cost control): the bubbles within
+        // a page of the viewport are measured at once, the rest in batches of 12 on a 15 ms timer, nearest first, keeping the
+        // reader's place (the first visible bubble's offset, or the bottom).
+        private int _dpiRelayoutGen;
+        private bool _dpiRelayoutPending;
+        private Timer _remeasureTimer;
+        private readonly List<Control> _remeasureQueue = new List<Control>();
+        private MessageBubbleControl _remeasureAnchor;
+        private int _remeasureAnchorTop;
+        private bool _remeasureAtBottom;
+
+        protected override void OnDpiChanged(int oldDpi, int newDpi)
+        {
+            base.OnDpiChanged(oldDpi, newDpi);
+            if (_split != null) _split.SplitterWidth = 1;                  // hairlines (the scaler rounds 1 up to 2)
+            if (_headerDivider != null) _headerDivider.Height = 1;
+            if (_rightLayout != null)
+            {
+                ResetOpenRow(_rightLayout, 1, 48);   // mini player
+                ResetOpenRow(_rightLayout, 2, 46);   // pinned bar
+                ResetOpenRow(_rightLayout, 3, 48);   // selection bar
+                ResetOpenRow(_rightLayout, 4, 36);   // forum topics
+                ResetOpenRow(_rightLayout, 6, 40);   // reply strip
+                ResetOpenRow(_rightLayout, 8, 48);   // thread join bar
+                SetRowPx(_rightLayout, 0, 56);       // header
+                SetRowPx(_rightLayout, 9, ComposerRowH);   // the composer grows from here in the deferred pass
+            }
+            if (_storyTrayLayout != null)
+            {
+                SetRowPx(_storyTrayLayout, 0, 60);
+                ResetOpenRow(_storyTrayLayout, 1, StoryTrayHeight);
+                if (_storyTrayLayout.RowCount == 4) SetRowPx(_storyTrayLayout, 2, 46);   // tabbed: the folder bar
+            }
+            if (_composerColumns != null && _composerColumns.ColumnStyles.Count > 0 && _composerColumns.ColumnStyles[0].Width > 0)
+                SetColPx(_composerColumns, 0, 48);   // bot menu
+            try { SyncReplyKeyboardHeight(); } catch { }
+            if (_kbActive) MinimumSize = new Size(MinimumSize.Width, Px(120));   // AppForm just reset it to the full minimum
+            if (_drawer != null) CloseDrawer();   // built at the old DPI; the next open builds it at the new one
+            if (_dock != null) _dock.Width = Px(DockWidth);   // EnforceDockWidth runs in RelayoutAfterDpi (it skips while Dpi.Busy)
+            _dpiRelayoutPending = true;
+            int gen = ++_dpiRelayoutGen;
+            try { BeginInvoke((Action)(() => RelayoutAfterDpi(gen))); } catch { _dpiRelayoutPending = false; }
+        }
+
+        private void ResetOpenRow(TableLayoutPanel t, int index, int logical)
+        {
+            if (t != null && index >= 0 && index < t.RowStyles.Count && t.RowStyles[index].Height > 0) SetRowPx(t, index, logical);
+        }
+
+        private void RelayoutAfterDpi(int gen)
+        {
+            if (gen != _dpiRelayoutGen) return;
+            _dpiRelayoutPending = false;
+            if (IsDisposed) return;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            int rows = 0, sync = 0;
+            if (_dockProfile != null)
+            {
+                // ProfileForm's content width is fixed at construction: rebuild it at the new one (here, not inside the
+                // scaler's pass: it is a whole form and starts a details load).
+                DropDockProfile();
+                if (_dock != null && _dock.Visible && _dockPane == DockPane.Info) EnsureDockProfile();
+            }
+            if (_chatListPanel != null)
+            {
+                int w = ContentWidth(_chatListPanel);
+                foreach (Control c in _chatListPanel.Controls) { c.Width = w; rows++; }
+            }
+            StopRemeasure();
+            if (_messagePanel != null && _messagePanel.Controls.Count > 0)
+            {
+                _remeasureAtBottom = AtBottom(AtBottomThreshold);
+                _remeasureAnchor = TopVisibleBubble();
+                _remeasureAnchorTop = _remeasureAnchor != null ? _remeasureAnchor.Top : 0;
+                int w = ContentWidth(_messagePanel), page = Math.Max(1, _messagePanel.ClientSize.Height);
+                _bubbleLayoutWidth = w;
+                var later = new List<KeyValuePair<int, Control>>();
+                _messagePanel.SuspendLayout();
+                try
+                {
+                    foreach (Control c in _messagePanel.Controls)
+                    {
+                        c.Width = w;
+                        (c as SponsoredCardControl)?.Measure();
+                        var bubble = c as MessageBubbleControl;
+                        if (bubble == null) continue;
+                        int dist = c.Bottom < 0 ? -c.Bottom : c.Top > page ? c.Top - page : 0;   // from the viewport
+                        if (dist <= page) { bubble.Measure(); sync++; }
+                        else later.Add(new KeyValuePair<int, Control>(dist, c));
+                    }
+                }
+                finally { _messagePanel.ResumeLayout(true); }
+                RestoreReadingPlace();
+                later.Sort((a, c) => a.Key.CompareTo(c.Key));   // nearest first
+                foreach (var kv in later) _remeasureQueue.Add(kv.Value);
+                if (_remeasureQueue.Count > 0)
+                {
+                    if (_remeasureTimer == null)
+                    {
+                        _remeasureTimer = new Timer { Interval = 15 };
+                        _remeasureTimer.Tick += (s, e) => RemeasureBatch();
+                    }
+                    _remeasureTimer.Start();
+                }
+            }
+            GrowComposerRow();
+            CenterConnectingPanel();
+            LayoutConnectingButtons();
+            PositionJumpButton();
+            PositionProxyPill();
+            EnforceDockWidth();                                   // after the rescale: a clamped window may be too narrow for the dock
+            if (_dateFlyout != null) _dateFlyout.Text = "";       // re-measured at the new DPI on its next update
+            Logger.Diag("[DPI] relayout dpi=" + WindowDpiValue + " chatRows=" + rows + " bubbles now=" + sync
+                        + " queued=" + _remeasureQueue.Count + " " + sw.ElapsedMilliseconds + "ms");
+        }
+
+        /// <summary>The deferred DPI re-measure: up to 12 bubbles per tick, nearest the viewport first. Re-baselined PER BATCH
+        /// (review): it compensates only this batch's own layout shift, so a scroll the reader makes between ticks is kept,
+        /// and it keeps the view pinned to the bottom only if the reader is there now.</summary>
+        private void RemeasureBatch()
+        {
+            if (IsDisposed || _messagePanel == null || _remeasureQueue.Count == 0) { StopRemeasure(); return; }
+            bool atBottom = DistanceFromBottom() <= Px(2);
+            var anchor = atBottom ? null : TopVisibleBubble();
+            int before = anchor != null ? anchor.Top : 0;
+            int n = 0;
+            _messagePanel.SuspendLayout();
+            try
+            {
+                while (_remeasureQueue.Count > 0 && n < 12)
+                {
+                    var c = _remeasureQueue[0];
+                    _remeasureQueue.RemoveAt(0);
+                    // A chat switch cleared the panel (or the row was removed): skip what is gone.
+                    if (c.IsDisposed || !ReferenceEquals(c.Parent, _messagePanel)) continue;
+                    (c as MessageBubbleControl)?.Measure();
+                    n++;
+                }
+            }
+            finally { _messagePanel.ResumeLayout(true); }
+            if (atBottom) ScrollMessagesToBottom();
+            else if (anchor != null && !anchor.IsDisposed && ReferenceEquals(anchor.Parent, _messagePanel))
+            {
+                int delta = anchor.Top - before;
+                if (delta != 0) _messagePanel.AutoScrollPosition = new Point(0, Math.Max(0, -_messagePanel.AutoScrollPosition.Y + delta));
+            }
+            if (_remeasureQueue.Count == 0) StopRemeasure();
+        }
+
+        private void StopRemeasure()
+        {
+            if (_remeasureTimer != null) _remeasureTimer.Stop();
+            _remeasureQueue.Clear();
+        }
+
+        /// <summary>Back to the bottom, or the anchor bubble back at its offset in the viewport.</summary>
+        private void RestoreReadingPlace()
+        {
+            if (_messagePanel == null) return;
+            if (_remeasureAtBottom) { ScrollMessagesToBottom(); return; }
+            var a = _remeasureAnchor;
+            if (a == null || a.IsDisposed || !ReferenceEquals(a.Parent, _messagePanel)) return;
+            int delta = a.Top - _remeasureAnchorTop;
+            if (delta == 0) return;
+            int y = Math.Max(0, -_messagePanel.AutoScrollPosition.Y + delta);
+            _messagePanel.AutoScrollPosition = new Point(0, y);
+        }
+
+        // ── Step 3.4: the shell in LOGICAL px. Rows and columns are created at the window's DPI (identity at 96) and every
+        //    run-time write goes through SetRowPx / SetColPx: DpiScaler rescales what exists during a DPI change, but a row
+        //    shown AFTER it (mini player, pinned bar, reply strip...) used to come back at its 96-DPI size.
+        private RowStyle RowPx(int logical) { return new RowStyle(SizeType.Absolute, logical <= 0 ? 0 : Px(logical)); }
+        private ColumnStyle ColPx(int logical) { return new ColumnStyle(SizeType.Absolute, logical <= 0 ? 0 : Px(logical)); }
+
+        private void SetRowPx(TableLayoutPanel t, int index, int logical)
+        {
+            if (t != null && index >= 0 && index < t.RowStyles.Count) t.RowStyles[index].Height = logical <= 0 ? 0 : Px(logical);
+        }
+
+        private void SetColPx(TableLayoutPanel t, int index, int logical)
+        {
+            if (t != null && index >= 0 && index < t.ColumnStyles.Count) t.ColumnStyles[index].Width = logical <= 0 ? 0 : Px(logical);
+        }
 
         /// <summary>Plan E3: the input row (row 9 of the right panel) follows the colour-emoji composer's content height, from
         /// its built height up to 13 lines and never more than 45% of the pane. A reader at the bottom of the chat stays there.</summary>
@@ -259,13 +450,11 @@ namespace TelegArm.UI
                 var rich = _messageInput != null ? _messageInput.Rich : null;
                 if (rich == null || _rightLayout == null || _rightLayout.RowStyles.Count < 10) return;
                 var row = _rightLayout.RowStyles[9];
-                if (_composerRowMin < 0)
-                {
-                    _composerRowMin = (int)row.Height;
-                    _composerMargins = Math.Max(0, _composerRowMin - rich.Height);
-                }
-                int cap = Math.Min(rich.HeightForLines(13) + _composerMargins, (int)(_rightLayout.Height * 0.45));
-                int want = Math.Max(_composerRowMin, Math.Min(Math.Max(_composerRowMin, cap), rich.ContentHeight + _composerMargins));
+                // Step 3.4: from the logical minimum and the composer's own margins, every time — a cached pixel value went
+                // stale on a DPI change.
+                int rowMin = Px(ComposerRowH), margins = rich.Margin.Vertical;
+                int cap = Math.Min(rich.HeightForLines(13) + margins, (int)(_rightLayout.Height * 0.45));
+                int want = Math.Max(rowMin, Math.Min(Math.Max(rowMin, cap), rich.ContentHeight + margins));
                 if ((int)row.Height == want) return;
                 bool atBottom = _messagePanel != null && AtBottom(AtBottomThreshold);
                 row.Height = want;
@@ -284,16 +473,16 @@ namespace TelegArm.UI
                 RowCount = 10
             };
             _rightLayout = layout;
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 56));  // 0 header
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));   // 1 mini player (toggled)
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));   // 2 pinned bar (toggled)
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));   // 3 selection bar (toggled)
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));   // 4 FORUM topic bar (toggled) — FORUM-TOPICS
+            layout.RowStyles.Add(RowPx(56));  // 0 header
+            layout.RowStyles.Add(RowPx(0));   // 1 mini player (toggled)
+            layout.RowStyles.Add(RowPx(0));   // 2 pinned bar (toggled)
+            layout.RowStyles.Add(RowPx(0));   // 3 selection bar (toggled)
+            layout.RowStyles.Add(RowPx(0));   // 4 FORUM topic bar (toggled) — FORUM-TOPICS
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));  // 5 messages
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));   // 6 reply strip (toggled)
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));   // 7 reply keyboard (toggled)
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));   // 8 thread join bar (toggled) — COMMENTS-JOIN-FLYOUT
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 64));  // 9 input
+            layout.RowStyles.Add(RowPx(0));   // 6 reply strip (toggled)
+            layout.RowStyles.Add(RowPx(0));   // 7 reply keyboard (toggled)
+            layout.RowStyles.Add(RowPx(0));   // 8 thread join bar (toggled) — COMMENTS-JOIN-FLYOUT
+            layout.RowStyles.Add(RowPx(ComposerRowH));  // 9 input
 
             var topBar = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0), Cursor = Cursors.Hand };
             _headerBar = topBar;   // 2.7b: its surface comes from the Header token (ApplyPanelColors)
@@ -310,7 +499,7 @@ namespace TelegArm.UI
                 Style = FontStyle.Bold,
                 Role = LabelRole.Body,
                 Ellipsis = true,
-                Padding = new Padding(10, 0, 0, 0),
+                Padding = new Padding(Px(10), 0, 0, 0),
                 Cursor = Cursors.Hand
             };
             _chatStatus = new ThemedLabel
@@ -320,7 +509,7 @@ namespace TelegArm.UI
                 PointSize = 9f,
                 Role = LabelRole.Dim,
                 Ellipsis = true,
-                Padding = new Padding(10, 0, 0, 0),
+                Padding = new Padding(Px(10), 0, 0, 0),
                 Cursor = Cursors.Hand
             };
             titleStack.Controls.Add(_chatTitle, 0, 0);
@@ -345,7 +534,7 @@ namespace TelegArm.UI
             // ⚠ ACCENT COMES FROM ThemeHelper VIA _accent (the palette) — never a hard-coded colour.
             _chatMenuBtn = new Button
             {
-                Dock = DockStyle.Right, Width = 44, FlatStyle = FlatStyle.Flat, Text = "",
+                Dock = DockStyle.Right, Width = Px(44), FlatStyle = FlatStyle.Flat, Text = "",
                 BackColor = Color.Transparent, Cursor = Cursors.Hand, TabStop = false,
                 Visible = false   // shown only while a chat is open — toggled beside _chatSearchBtn
             };
@@ -358,7 +547,7 @@ namespace TelegArm.UI
             // results for the open chat). Drawn (GDI), not a font glyph, for crisp/consistent rendering on RT.
             _chatSearchBtn = new Button
             {
-                Dock = DockStyle.Right, Width = 44, FlatStyle = FlatStyle.Flat, Text = "",
+                Dock = DockStyle.Right, Width = Px(44), FlatStyle = FlatStyle.Flat, Text = "",
                 BackColor = Color.Transparent, Cursor = Cursors.Hand, TabStop = false,
                 Visible = false   // shown only while a chat is open (toggled in OpenChat / on leaving a chat)
             };
@@ -376,7 +565,7 @@ namespace TelegArm.UI
             //   hidden until a chat is open.
             _dockBtn = new Button
             {
-                Dock = DockStyle.Right, Width = 44, FlatStyle = FlatStyle.Flat, Text = "",
+                Dock = DockStyle.Right, Width = Px(44), FlatStyle = FlatStyle.Flat, Text = "",
                 BackColor = Color.Transparent, Cursor = Cursors.Hand, TabStop = false,
                 Visible = false
             };
@@ -388,7 +577,7 @@ namespace TelegArm.UI
             topBar.Controls.Add(_dockBtn);
             // Peer avatar before the name. Added LAST so its Dock.Left resolves outermost-left; titleStack (Fill,
             // added first) then occupies the space between the avatar and the right-docked transfers indicator.
-            _headerAvatar = new Panel { Dock = DockStyle.Left, Width = 54, Margin = new Padding(0), Cursor = Cursors.Hand };
+            _headerAvatar = new Panel { Dock = DockStyle.Left, Width = Px(54), Margin = new Padding(0), Cursor = Cursors.Hand };
             _headerAvatar.Paint += HeaderAvatar_Paint;
             _headerAvatar.Click += (s, e) => OnHeaderClick();
             topBar.Controls.Add(_headerAvatar);
@@ -411,11 +600,12 @@ namespace TelegArm.UI
                 Margin = new Padding(0),
                 ForceComposited = true,   // SCROLL-SMOOTH-T1 A/B (gated by AppSettings.CompositedScroll)
                 // Bottom padding so the last bubble clears the input bar when scrolled.
-                Padding = new Padding(0, 0, 0, 8)
+                Padding = new Padding(0, 0, 0, Px(8))
             };
             ScrollbarTheme.Apply(_messagePanel, _dark);
             _messagePanel.SizeChanged += (s, e) =>
             {
+                if (Dpi.Busy || _dpiRelayoutPending) return;   // step 3.4: mid-rescale widths are interim; RelayoutAfterDpi measures
                 int w = ContentWidth(_messagePanel);
                 // Plan E3: bubbles depend on the WIDTH only. The growing composer changes the panel's HEIGHT on every
                 // wrapped line; re-measuring every bubble for that was the cost the plan flagged (Tegra 3).
@@ -425,6 +615,7 @@ namespace TelegArm.UI
                 {
                     c.Width = w;
                     (c as MessageBubbleControl)?.Measure();
+                    (c as SponsoredCardControl)?.Measure();   // step 3.2: the card measures from its width too
                 }
             };
             // Redesign 2.7b: the empty state. With no chat open, a centred service pill says what to do, as in Telegram.
@@ -452,17 +643,17 @@ namespace TelegArm.UI
                 RowCount = 1,
                 Margin = new Padding(0)
             };
-            bottomBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 0));    // 0 bot Menu (toggled: bot chats only)
-            bottomBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 48));   // 1 attach
+            bottomBar.ColumnStyles.Add(ColPx(0));    // 0 bot Menu (toggled: bot chats only)
+            bottomBar.ColumnStyles.Add(ColPx(48));   // 1 attach
             bottomBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));   // 2 input / recording
-            bottomBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 40));   // 3 emoji
-            bottomBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 48));   // 4 mic
+            bottomBar.ColumnStyles.Add(ColPx(40));   // 3 emoji
+            bottomBar.ColumnStyles.Add(ColPx(48));   // 4 mic
             // ⚠ 96 -> 40, MATCHING THE EMOJI COLUMN. 96 was historical — sized for the old text button that
             //   had the word "Send" in it. The round send disc replaced that button but the COLUMN kept its width,
             //   so a 40px control sat in a 96px cell with ~28px of dead space either side — which is why
             //   the button read as oversized and unbalanced even after the disc itself was shrunk. The
             //   control was never the problem; its cell was.
-            bottomBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 40));   // 5 send (== emoji)
+            bottomBar.ColumnStyles.Add(ColPx(40));   // 5 send (== emoji)
 
             // FIRST FontHelper call in BuildUi. FontHelper's static ctor is LAZY and registers five embedded
             // TTFs with BOTH GDI+ (PrivateFontCollection) and gdi32 (AddFontMemResourceEx) — if that cost is
@@ -470,8 +661,8 @@ namespace TelegArm.UI
             PerfLog.Boot("    BuildRightPanel: before first FontHelper.Ui call");
             _botMenuButton = new Button
             {
-                Text = "", Anchor = AnchorStyles.None, Width = 44, Height = 38, Visible = false,
-                FlatStyle = FlatStyle.Flat, Font = FontHelper.Ui(13f), Cursor = Cursors.Hand,
+                Text = "", Anchor = AnchorStyles.None, Width = Px(44), Height = Px(38), Visible = false,
+                FlatStyle = FlatStyle.Flat, Font = FontHelper.UiAt(13f, WindowDpiValue), Cursor = Cursors.Hand,   // shared: never dispose
                 BackColor = _dark ? Color.FromArgb(54, 54, 58) : Color.FromArgb(225, 225, 228),
                 ForeColor = _dark ? Color.FromArgb(225, 225, 228) : Color.FromArgb(40, 40, 44)
             };
@@ -496,7 +687,7 @@ namespace TelegArm.UI
                 {
                     Hint = "Write a message…",
                     Dock = DockStyle.Fill,
-                    Margin = new Padding(12, 10, 6, 10),
+                    Margin = new Padding(Px(12), Px(10), Px(6), Px(10)),
                     FontPoints = 11f,
                     ShowExpandGlyph = true   // step 2.7d: top-right, opens the editor window
                 });
@@ -512,7 +703,7 @@ namespace TelegArm.UI
                 {
                     Hint = "Write a message…",
                     Dock = DockStyle.Fill,
-                    Margin = new Padding(12, 10, 6, 10),
+                    Margin = new Padding(Px(12), Px(10), Px(6), Px(10)),
                     FontPoints = 11f
                 });
                 _messageInput.Enabled = false;
@@ -617,11 +808,11 @@ namespace TelegArm.UI
             {
                 Text = "✕",
                 Dock = DockStyle.Right,
-                Width = 44,
+                Width = Px(44),
                 FlatStyle = FlatStyle.Flat,
                 Cursor = Cursors.Hand,
                 TabStop = false,
-                Font = new Font("Segoe UI", 11f)
+                Font = FontCache.Get("Segoe UI", 11f, FontStyle.Regular, WindowDpiValue)   // shared: never dispose
             };
             _replyCancelBtn.FlatAppearance.BorderSize = 0;
             _replyCancelBtn.Click += (s, e) => CancelReply();
@@ -642,7 +833,7 @@ namespace TelegArm.UI
             // FORUM-TOPICS: topic chip bar at row 4 (above the messages) — horizontal scrollable, mirrors _folderBar.
             // Hidden (row height 0) unless a forum group is open. Because it's a sibling row ABOVE _msgHost, the date pill
             // (a child of _msgHost) sits below it naturally → DateFlyoutTopOffset stays 0.
-            _forumTopicBar = new NoNativeScrollFlowPanel { Dock = DockStyle.Fill, Margin = new Padding(2, 1, 2, 1), WrapContents = false, AutoScroll = true, BackColor = _dark ? Color.FromArgb(40, 40, 40) : Color.White };   // FORUM-TOPICS: symmetric L/R (was 0/8); "All" lands ~10px, aligning with the mini/pinned bars
+            _forumTopicBar = new NoNativeScrollFlowPanel { Dock = DockStyle.Fill, Margin = new Padding(Px(2), Px(1), Px(2), Px(1)), WrapContents = false, AutoScroll = true, BackColor = _dark ? Color.FromArgb(40, 40, 40) : Color.White };   // FORUM-TOPICS: symmetric L/R (was 0/8); "All" lands ~10px, aligning with the mini/pinned bars
             layout.Controls.Add(_forumTopicBar, 0, 4);   // FORUM-TOPICS: added DIRECTLY (no WrapWithHScrollbar) → NO visible scrollbar; NoNativeScroll suppresses the native bar + TouchScroller gives drag-scroll
             TouchScroller.Enable(_forumTopicBar, horizontal: true);
             _msgHost = WrapWithScrollbar(_messagePanel);
@@ -663,7 +854,7 @@ namespace TelegArm.UI
             // BUBBLE-DATETIME (C): floating date pill — same float-parent trick as the jump button (a child of the
             // host, NOT the scrolling panel → never participates in paging/reconcile). Shown while scrolling; fades
             // ~1s after scrolling stops. The single fade timer runs only while it's shown/fading, then stops.
-            _dateFlyout = new DateFlyoutPill { IsDark = _dark, Accent = _accent, Visible = false, Font = FontHelper.Ui(8.5f, FontStyle.Bold) };
+            _dateFlyout = new DateFlyoutPill { IsDark = _dark, Accent = _accent, Visible = false, Font = FontHelper.UiAt(8.5f, WindowDpiValue, FontStyle.Bold) };   // shared: never dispose
             _msgHost.Controls.Add(_dateFlyout);
             _dateFlyout.BringToFront();
             _dateFlyoutTimer = new System.Windows.Forms.Timer { Interval = 90 };
@@ -730,7 +921,7 @@ namespace TelegArm.UI
                 // TOUCH-FREEZE: this runs per coalesced pan tick (~100Hz) — a pan parked near the top
                 // fired the line + call 85×/s. Attempts are tick-limited; the head limiter in
                 // LoadOlderMessages spaces the actual work for every other trigger path too.
-                if (!_loadingOlder && _hasMoreHistory && -_messagePanel.AutoScrollPosition.Y <= 40
+                if (!_loadingOlder && _hasMoreHistory && -_messagePanel.AutoScrollPosition.Y <= Px(40)
                     && Environment.TickCount - _lastNearTopAttemptTick >= 250)
                 {
                     _lastNearTopAttemptTick = Environment.TickCount;
@@ -757,7 +948,7 @@ namespace TelegArm.UI
             // makes its AutoScroll reset to the top. Preserve the scroll offset.
             int scrollY = _messagePanel != null ? -_messagePanel.AutoScrollPosition.Y : 0;
             _miniBar.Visible = active;
-            _rightLayout.RowStyles[1].Height = active ? 48 : 0;
+            SetRowPx(_rightLayout, 1, active ? 48 : 0);
             if (_messagePanel != null)
                 _messagePanel.AutoScrollPosition = new Point(0, scrollY);
         }
@@ -804,7 +995,9 @@ namespace TelegArm.UI
         private static void DrawHamburger(Graphics g, Rectangle area, Color accent)
         {
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            const int lineW = 20, lineH = 3, gap = 4;   // 3 lines, evenly spaced
+            // Drawn for a 38 px button (the hamburger; the bot-menu button is 44 x 38): scales with the button (step 3.4).
+            float k = Math.Min(area.Width, area.Height) / 38f;
+            int lineW = (int)Math.Round(20 * k), lineH = Math.Max(1, (int)Math.Round(3 * k)), gap = (int)Math.Round(4 * k);   // 3 lines, evenly spaced
             int totalH = lineH * 3 + gap * 2;
             int x = area.X + (area.Width - lineW) / 2;
             int y = area.Y + (area.Height - totalH) / 2;

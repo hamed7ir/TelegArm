@@ -11,11 +11,16 @@ namespace TelegArm.UI.Controls
     /// (QRCodeGenerator + QRCodeData.ModuleMatrix — pure managed, no native bits, ARM32-safe) and draws it
     /// itself with GDI+ FillRectangle, so it themes cleanly and never depends on QRCoder's System.Drawing
     /// renderer. The matrix already includes the 4-module quiet zone (so it scans).
+    ///
+    /// Redesign step 3.2: the modules scale from the control's size (the host sizes it); the logo pad's inset and
+    /// radius are logical px at the window's DPI. At 96 DPI every value is exactly what it was.
     /// </summary>
-    public sealed class QrControl : Control
+    public sealed class QrControl : Control, IDpiAware
     {
         private bool[,] _matrix;
         private int _n;
+        private int _dpi;                                          // the DPI the pad is drawn at; 0 = not parented yet
+        private int CurDpi { get { return _dpi > 0 ? _dpi : Dpi.Of(this); } }
 
         public Color Dark { get; set; } = Color.Black;
         public Color Light { get; set; } = Color.White;
@@ -29,6 +34,16 @@ namespace TelegArm.UI.Controls
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer
                      | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
         }
+
+        protected override void OnParentChanged(EventArgs e)
+        {
+            base.OnParentChanged(e);
+            if (Parent == null) return;
+            int d = Dpi.Of(this);
+            if (d != _dpi) { _dpi = d; Invalidate(); }
+        }
+
+        void IDpiAware.OnDpiChanged(int oldDpi, int newDpi) { _dpi = newDpi; Invalidate(); }
 
         /// <summary>Encodes <paramref name="text"/> and repaints. Empty/failed → blank (caller may show a spinner).</summary>
         public void SetPayload(string text)
@@ -73,11 +88,13 @@ namespace TelegArm.UI.Controls
             var logo = CenterLogo;
             if (logo != null)
             {
+                int dpi = CurDpi;
                 int sz = (int)(side * 0.22f);
                 int lx = ox + (side - sz) / 2, ly = oy + (side - sz) / 2;
                 g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                var pad = new Rectangle(lx - 7, ly - 7, sz + 14, sz + 14);
-                using (var wb = new SolidBrush(Light)) using (var pth = DrawHelper.RoundedRect(pad, 10)) g.FillPath(wb, pth);
+                int inset = Dpi.Px(7, dpi);                                 // 2 × inset keeps the pad centred (== 14 at 96)
+                var pad = new Rectangle(lx - inset, ly - inset, sz + 2 * inset, sz + 2 * inset);
+                using (var wb = new SolidBrush(Light)) using (var pth = DrawHelper.RoundedRect(pad, Dpi.Px(10, dpi))) g.FillPath(wb, pth);
                 g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
                 g.DrawImage(logo, new Rectangle(lx, ly, sz, sz));
             }

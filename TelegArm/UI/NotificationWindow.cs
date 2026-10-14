@@ -345,13 +345,12 @@ namespace TelegArm.UI
             string t = _title ?? "";
             // Skip the "@ " mention marker so a mention shows the CHAT's initial, not "@".
             if (t.StartsWith("@ ")) t = t.Substring(2);
-            string initial = t.Length > 0 ? t.Substring(0, 1).ToUpperInvariant() : "?";
+            string initial = t.Length > 0 ? DrawHelper.Initial(t) : "?";
             // ⚠ NOT `14f * _scale`. FontHelper sizes are in POINTS, and GDI+ converts points to pixels
             //   using the device DPI — so the glyph ALREADY grows with DPI. The circle grows because it is
             //   a pixel box run through S(); multiplying the font too would scale it twice.
-            using (var f = FontHelper.Ui(14f, FontStyle.Bold))
-                TextRenderer.DrawText(g, initial, f, circle, Color.White,
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+            using (var f = FontHelper.For(initial, 14f, FontStyle.Bold))   // Vazirmatn for a Persian initial: measurable, centred
+                DrawHelper.DrawInitial(g, initial, f, circle, Color.White);   // ink-centred (owner report 2026-10-14)
         }
 
         private void DrawClose(Graphics g, Rectangle box)

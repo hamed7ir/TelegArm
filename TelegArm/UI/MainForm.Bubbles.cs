@@ -29,6 +29,7 @@ namespace TelegArm.UI
         {
             var bubble = new MessageBubbleControl(text, sender, outgoing, date)
             {
+                LayoutDpi = Dpi.Of(_messagePanel),   // step 3.2: measured below, BEFORE it is added — at the window's DPI
                 AccentColor = _accent,
                 IsDark = _dark,
                 Width = ContentWidth(_messagePanel),

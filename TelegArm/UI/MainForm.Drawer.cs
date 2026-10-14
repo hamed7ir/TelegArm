@@ -69,15 +69,16 @@ namespace TelegArm.UI
             rows.Add(Row("📣", "TelegArm Channel", OpenTelegArmChannel));   // opens the official channel in the chat view
             rows.Add(Sep());
             rows.Add(Danger("🚪", "Log out" + (me != null ? " (" + name + ")" : ""), LogOut));   // removes the ACTIVE account
-            string letter = !string.IsNullOrEmpty(name) ? name.Substring(0, 1).ToUpper() : "?";
+            string letter = !string.IsNullOrEmpty(name) ? DrawHelper.Initial(name) : "?";
             var av = _avatars.GetCached(me?.id ?? 0);
 
             // HAMBURGER-SCRIM-FIX (Option A): the drawer is now only as WIDE AS THE CARD (not the whole window),
             // so the app content to its right stays FULLY VISIBLE + UNDIMMED — no backdrop, no black screen. (A
             // full-window control would occlude the content; WinForms transparency renders the form bg black here.)
-            _drawer = new DrawerMenu(null, _dark, _accent, name, letter, av, me?.id ?? 0, rows, Wrap(ShowProfile))
+            // Step 3.4: the drawer is built per open at the window's DPI (CardW is logical).
+            _drawer = new DrawerMenu(null, _dark, _accent, name, letter, av, me?.id ?? 0, rows, Wrap(ShowProfile), WindowDpiValue)
             {
-                Bounds = new Rectangle(0, 0, DrawerMenu.CardW, Content.ClientSize.Height)   // 2.7a: under the title bar
+                Bounds = new Rectangle(0, 0, Px(DrawerMenu.CardW), Content.ClientSize.Height)   // 2.7a: under the title bar
             };
             _drawer.CloseRequested += () => BeginInvoke((Action)CloseDrawer);
             Content.Controls.Add(_drawer);
@@ -169,17 +170,17 @@ namespace TelegArm.UI
         private void DrawReplyStrip(Graphics g)
         {
             if (_replyStrip == null) return;
+            // Step 3.4: logical px at the window's DPI; the glyph bitmap is rendered at its Px size; the font is shared (never dispose).
             int h = _replyStrip.Height;
             g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
-            int textX = 14;
-            var glyph = EmojiRenderer.GetScaled(_replyEditing ? "✏️" : "↩️", 22);
-            if (glyph != null) { g.DrawImage(glyph, 12, (h - 22) / 2, 22, 22); textX = 42; }
-            int rightPad = (_replyCancelBtn != null ? _replyCancelBtn.Width : 44) + 8;
+            int textX = Px(14), gs = Px(22);
+            var glyph = EmojiRenderer.GetScaled(_replyEditing ? "✏️" : "↩️", gs);
+            if (glyph != null) { g.DrawImage(glyph, Px(12), (h - gs) / 2, gs, gs); textX = Px(42); }
+            int rightPad = (_replyCancelBtn != null ? _replyCancelBtn.Width : Px(44)) + Px(8);
             var rect = new Rectangle(textX, 0, Math.Max(0, _replyStrip.Width - textX - rightPad), h);
             Color fg = _dark ? Color.FromArgb(220, 220, 220) : Color.FromArgb(40, 40, 40);
             string text = _replyPreview ?? "";
-            using (var f = FontHelper.For(text, 9.5f))
-                EmojiRenderer.DrawLine(g, text, f, fg, rect);
+            EmojiRenderer.DrawLine(g, text, FontHelper.ForAt(text, 9.5f, WindowDpiValue), fg, rect);
         }
 
         // Drawer row builders: each action closes the drawer first, then runs deferred.
@@ -260,7 +261,10 @@ namespace TelegArm.UI
         }
 
         // ── Owner-painted left drawer (account header + menu + Night Mode toggle) ──
-        private sealed class DrawerMenu : Control
+        // Step 3.4: every length below is LOGICAL (96-DPI) and drawn through P at the host window's DPI, given at
+        // construction (the drawer is built per open); fonts are shared FontCache fonts (never dispose). IDpiAware covers a
+        // DPI change while it is open: it SETS the width from CardW (DpiScaler already ratio-scaled the bounds).
+        private sealed class DrawerMenu : Control, IDpiAware
         {
             public sealed class Row
             {
@@ -273,8 +277,13 @@ namespace TelegArm.UI
                 public Image Avatar; public long AvatarKey;
             }
 
-            public const int CardW = 300;              // exposed so ShowDrawer sizes the (narrow) drawer to JUST the card
-            private const int HeaderH = 92, RowH = 46, SepH = 11;
+            public const int CardW = 300;              // logical; exposed so ShowDrawer sizes the (narrow) drawer to JUST the card
+            private const int HeaderH = 92, RowH = 46, SepH = 11;   // logical
+
+            private int _dpi;                          // the host window's DPI
+            private int P(int v) { return Dpi.Px(v, _dpi); }
+            private int CardPx { get { return P(CardW); } }
+            private int _slop = 6;                     // drag threshold, PHYSICAL px (set at press from the monitor's raw DPI)
 
             private readonly Bitmap _snap;
             private readonly bool _dark;
@@ -293,8 +302,9 @@ namespace TelegArm.UI
             public event Action CloseRequested;
 
             public DrawerMenu(Bitmap snap, bool dark, Color accent, string name, string letter,
-                              Image avatar, long avatarKey, List<Row> rows, Action headerAction)
+                              Image avatar, long avatarKey, List<Row> rows, Action headerAction, int dpi)
             {
+                _dpi = dpi;   // first: Layout2 below reads it
                 _snap = snap; _dark = dark; _accent = accent; _name = name; _letter = letter;
                 _avatar = avatar; _avatarKey = avatarKey; _rows = rows; _headerAction = headerAction;
                 _rects = new Rectangle[rows.Count];
@@ -306,17 +316,28 @@ namespace TelegArm.UI
 
             protected override void OnSizeChanged(EventArgs e) { base.OnSizeChanged(e); Layout2(); Invalidate(); }
 
+            void IDpiAware.OnDpiChanged(int oldDpi, int newDpi)
+            {
+                if (oldDpi > 0) _scrollY = _scrollY * newDpi / oldDpi;   // keep the same rows in view (Layout2 clamps)
+                _dpi = newDpi;
+                _hover = -2;
+                Width = CardPx;   // SET from the logical value (OnSizeChanged re-lays out when it differs)
+                Layout2();
+                Invalidate();
+            }
+
             private void Layout2()
             {
-                _headerRect = new Rectangle(0, 0, CardW, HeaderH);
-                int y = HeaderH + 6;
+                int headerH = P(HeaderH), cardW = CardPx;
+                _headerRect = new Rectangle(0, 0, cardW, headerH);
+                int y = headerH + P(6);
                 for (int i = 0; i < _rows.Count; i++)
                 {
-                    int h = _rows[i].Separator ? SepH : RowH;
-                    _rects[i] = new Rectangle(0, y, CardW, h);
+                    int h = _rows[i].Separator ? P(SepH) : P(RowH);
+                    _rects[i] = new Rectangle(0, y, cardW, h);
                     y += h;
                 }
-                _contentH = y + 6;
+                _contentH = y + P(6);
                 _scrollY = Math.Min(_scrollY, MaxScroll());
             }
 
@@ -334,18 +355,21 @@ namespace TelegArm.UI
                 base.OnMouseMove(e);
                 if (_pressed)   // touch/mouse drag-scroll over the rows
                 {
-                    if (Math.Abs(e.Y - _pressY) > 6) _moved = true;
+                    if (Math.Abs(e.Y - _pressY) > _slop) _moved = true;
                     if (_moved) { _scrollY = ClampScroll(_pressScroll - (e.Y - _pressY)); Invalidate(); }
                     return;
                 }
                 int h = HitTest(e.Location);
-                if (h != _hover) { _hover = h; Cursor = h != -2 ? Cursors.Hand : Cursors.Default; Invalidate(new Rectangle(0, 0, CardW, Height)); }
+                if (h != _hover) { _hover = h; Cursor = h != -2 ? Cursors.Hand : Cursors.Default; Invalidate(new Rectangle(0, 0, CardPx, Height)); }
             }
 
             protected override void OnMouseDown(MouseEventArgs e)
             {
                 base.OnMouseDown(e);
-                if (e.X > CardW) { CloseRequested?.Invoke(); return; }
+                if (e.X > CardPx) { CloseRequested?.Invoke(); return; }
+                // Finger slop is PHYSICAL: the monitor's raw DPI, never the interface scale (6 at 96, as before).
+                var host = TopLevelControl as AppForm;
+                _slop = Dpi.Px(6, host != null ? host.MonitorDpiValue : Dpi.SystemDpi);
                 _pressed = true; _moved = false; _pressY = e.Y; _pressScroll = _scrollY;   // action fires on MouseUp if not dragged
             }
 
@@ -354,7 +378,7 @@ namespace TelegArm.UI
                 base.OnMouseUp(e);
                 bool wasPressed = _pressed, moved = _moved;
                 _pressed = false; _moved = false;
-                if (!wasPressed || moved || e.X > CardW) return;   // a drag-scroll, not a tap
+                if (!wasPressed || moved || e.X > CardPx) return;   // a drag-scroll, not a tap
                 int h = HitTest(e.Location);
                 if (h == -1) { _headerAction?.Invoke(); return; }
                 if (h >= 0 && !_rows[h].Separator) _rows[h].Action?.Invoke();
@@ -363,14 +387,14 @@ namespace TelegArm.UI
             protected override void OnMouseWheel(MouseEventArgs e)
             {
                 base.OnMouseWheel(e);
-                int ns = ClampScroll(_scrollY - Math.Sign(e.Delta) * RowH);
+                int ns = ClampScroll(_scrollY - Math.Sign(e.Delta) * P(RowH));
                 if (ns != _scrollY) { _scrollY = ns; _hover = -2; Invalidate(); }
             }
 
             private int HitTest(Point p)
             {
-                if (p.X > CardW) return -2;
-                if (p.Y < HeaderH) return _headerRect.Contains(p) ? -1 : -2;   // header is fixed (not scrolled)
+                if (p.X > CardPx) return -2;
+                if (p.Y < P(HeaderH)) return _headerRect.Contains(p) ? -1 : -2;   // header is fixed (not scrolled)
                 int py = p.Y + _scrollY;   // rows scroll
                 for (int i = 0; i < _rows.Count; i++)
                     if (!_rows[i].Separator && _rects[i].Contains(new Point(p.X, py))) return i;
@@ -380,16 +404,17 @@ namespace TelegArm.UI
             protected override void OnPaint(PaintEventArgs e)
             {
                 var g = e.Graphics;
+                int dpi = _dpi, cardW = CardPx, headerH = P(HeaderH);
                 // HAMBURGER-SCRIM-FIX: no backdrop. The drawer is card-width now, so there's no outside region to
                 // dim — the opaque card fill below IS the whole control. (Old full-window snapshot/scrim removed.)
 
                 // Card.
                 using (var cb = new SolidBrush(_dark ? Color.FromArgb(36, 36, 39) : Color.FromArgb(250, 250, 252)))
-                    g.FillRectangle(cb, 0, 0, CardW, Height);
+                    g.FillRectangle(cb, 0, 0, cardW, Height);
 
-                // Header: avatar + name + subtitle.
+                // Header: avatar + name + subtitle. (Fonts below are shared FontCache fonts: never dispose.)
                 g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                var avr = new Rectangle(20, 22, 52, 52);
+                var avr = new Rectangle(P(20), P(22), P(52), P(52));
                 if (_avatar != null)
                 {
                     using (var clip = new System.Drawing.Drawing2D.GraphicsPath()) { clip.AddEllipse(avr); g.SetClip(clip); g.DrawImage(_avatar, avr); g.ResetClip(); }
@@ -397,30 +422,27 @@ namespace TelegArm.UI
                 else
                 {
                     using (var b = new SolidBrush(DrawHelper.AvatarColor(_avatarKey))) g.FillEllipse(b, avr);
-                    using (var f = new Font("Segoe UI", 18f, FontStyle.Bold))
-                        TextRenderer.DrawText(g, _letter, f, avr, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                    DrawHelper.DrawInitial(g, _letter, FontCache.Get("Segoe UI", 18f, FontStyle.Bold, dpi), avr, Color.White);   // ink-centred (owner report 2026-10-14)
                 }
                 if (_hover == -1)
                     using (var hb = new SolidBrush(Color.FromArgb(_dark ? 22 : 18, _accent))) g.FillRectangle(hb, _headerRect);
-                using (var nf = FontHelper.Ui(11.5f))
-                    TextRenderer.DrawText(g, _name, nf, new Rectangle(86, 30, CardW - 96, 24),
-                        _dark ? Color.White : Color.FromArgb(25, 25, 28), TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
-                using (var sf = FontHelper.Ui(8.5f))
-                    TextRenderer.DrawText(g, "View profile", sf, new Rectangle(86, 54, CardW - 96, 18),
-                        _dark ? Color.FromArgb(150, 150, 155) : Color.FromArgb(135, 135, 140), TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+                TextRenderer.DrawText(g, _name, FontHelper.UiAt(11.5f, dpi), new Rectangle(P(86), P(30), P(CardW - 96), P(24)),
+                    _dark ? Color.White : Color.FromArgb(25, 25, 28), TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                TextRenderer.DrawText(g, "View profile", FontHelper.UiAt(8.5f, dpi), new Rectangle(P(86), P(54), P(CardW - 96), P(18)),
+                    _dark ? Color.FromArgb(150, 150, 155) : Color.FromArgb(135, 135, 140), TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
 
                 // Rows (scroll under the fixed header).
                 var rowsClip = g.Clip;
-                g.SetClip(new Rectangle(0, HeaderH, CardW, Math.Max(0, Height - HeaderH)));
+                g.SetClip(new Rectangle(0, headerH, cardW, Math.Max(0, Height - headerH)));
                 for (int i = 0; i < _rows.Count; i++)
                 {
                     var row = _rows[i];
                     var r = new Rectangle(_rects[i].X, _rects[i].Y - _scrollY, _rects[i].Width, _rects[i].Height);
-                    if (r.Bottom < HeaderH || r.Y > Height) continue;   // scrolled offscreen
+                    if (r.Bottom < headerH || r.Y > Height) continue;   // scrolled offscreen
                     if (row.Separator)
                     {
-                        using (var p = new Pen(_dark ? Color.FromArgb(54, 54, 58) : Color.FromArgb(232, 232, 236)))
-                            g.DrawLine(p, 16, r.Y + r.Height / 2, CardW - 16, r.Y + r.Height / 2);
+                        using (var p = new Pen(_dark ? Color.FromArgb(54, 54, 58) : Color.FromArgb(232, 232, 236)))   // 1 px hairline: not scaled
+                            g.DrawLine(p, P(16), r.Y + r.Height / 2, cardW - P(16), r.Y + r.Height / 2);
                         continue;
                     }
                     if (_hover == i)
@@ -429,7 +451,8 @@ namespace TelegArm.UI
 
                     if (row.IsAccount)
                     {
-                        var accAvr = new Rectangle(16, r.Y + (r.Height - 30) / 2, 30, 30);
+                        int accD = P(30);
+                        var accAvr = new Rectangle(P(16), r.Y + (r.Height - accD) / 2, accD, accD);
                         if (row.Avatar != null)
                         {
                             using (var clip = new System.Drawing.Drawing2D.GraphicsPath()) { clip.AddEllipse(accAvr); var pc = g.Clip; g.SetClip(clip); g.DrawImage(row.Avatar, accAvr); g.Clip = pc; pc.Dispose(); }
@@ -437,52 +460,52 @@ namespace TelegArm.UI
                         else
                         {
                             using (var b = new SolidBrush(DrawHelper.AvatarColor(row.AvatarKey))) g.FillEllipse(b, accAvr);
-                            string ltr = !string.IsNullOrEmpty(row.Label) ? row.Label.Substring(0, 1).ToUpper() : "?";
-                            using (var f = FontHelper.Ui(11f, FontStyle.Bold))
-                                TextRenderer.DrawText(g, ltr, f, accAvr, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                            string ltr = !string.IsNullOrEmpty(row.Label) ? DrawHelper.Initial(row.Label) : "?";
+                            DrawHelper.DrawInitial(g, ltr, FontHelper.ForAt(ltr, 11f, dpi, FontStyle.Bold), accAvr, Color.White);   // ink-centred (owner report 2026-10-14)
                         }
-                        using (var lf = FontHelper.Ui(10.5f))
-                            TextRenderer.DrawText(g, row.Label, lf, new Rectangle(56, r.Y, CardW - 60, r.Height),
-                                _dark ? Color.FromArgb(228, 228, 232) : Color.FromArgb(35, 35, 38),
-                                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                        TextRenderer.DrawText(g, row.Label, FontHelper.UiAt(10.5f, dpi), new Rectangle(P(56), r.Y, P(CardW - 60), r.Height),
+                            _dark ? Color.FromArgb(228, 228, 232) : Color.FromArgb(35, 35, 38),
+                            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
                         continue;
                     }
 
                     Color danger = Color.FromArgb(222, 74, 74);
                     Color glyphC = row.IsDanger ? danger : _accent;
-                    var gr = new Rectangle(16, r.Y, 30, r.Height);
+                    var gr = new Rectangle(P(16), r.Y, P(30), r.Height);
                     // Render the glyph via the Noto emoji pack (consistent + crisp on RT). The old font-char
                     // path substituted an UGLY system emoji glyph on RT (like the hamburger did). Fall back to
                     // the font glyph only if Noto lacks this emoji.
                     var glyphImg = EmojiRenderer.Get(row.Glyph);
                     if (glyphImg != null)
                     {
-                        const int gsz = 22;
+                        int gsz = P(22);
                         var oldIM = g.InterpolationMode;
                         g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
                         g.DrawImage(glyphImg, new Rectangle(gr.X + (gr.Width - gsz) / 2, gr.Y + (gr.Height - gsz) / 2, gsz, gsz));
                         g.InterpolationMode = oldIM;
                     }
-                    else using (var gf = FontHelper.Ui(12f))
-                        TextRenderer.DrawText(g, row.Glyph, gf, gr, glyphC, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                    else
+                        TextRenderer.DrawText(g, row.Glyph, FontHelper.UiAt(12f, dpi), gr, glyphC, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
                     Color lc = row.IsDanger ? danger : (_dark ? Color.FromArgb(228, 228, 232) : Color.FromArgb(35, 35, 38));
-                    using (var lf = FontHelper.Ui(10.5f))
-                        TextRenderer.DrawText(g, row.Label, lf, new Rectangle(56, r.Y, CardW - 110, r.Height), lc,
-                            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                    TextRenderer.DrawText(g, row.Label, FontHelper.UiAt(10.5f, dpi), new Rectangle(P(56), r.Y, P(CardW - 110), r.Height), lc,
+                        TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
 
                     if (row.IsToggle)
-                        DrawToggle(g, new Rectangle(CardW - 64, r.Y + (r.Height - 20) / 2, 40, 20), row.IsOn != null && row.IsOn());
+                    {
+                        int tw = P(40), th = P(20);
+                        DrawToggle(g, new Rectangle(P(CardW - 64), r.Y + (r.Height - th) / 2, tw, th), row.IsOn != null && row.IsOn());
+                    }
                 }
                 g.Clip = rowsClip; rowsClip.Dispose();
 
                 int maxS = MaxScroll();
                 if (maxS > 0 && _contentH > 0)   // thin scroll indicator
                 {
-                    int track = Math.Max(1, Height - HeaderH);
-                    int thumbH = Math.Max(30, track * track / _contentH);
-                    int thumbY = HeaderH + (int)((track - thumbH) * (_scrollY / (float)maxS));
+                    int track = Math.Max(1, Height - headerH);
+                    int thumbH = Math.Max(P(30), track * track / _contentH);
+                    int thumbY = headerH + (int)((track - thumbH) * (_scrollY / (float)maxS));
                     using (var tb = new SolidBrush(Color.FromArgb(110, _dark ? Color.White : Color.Black)))
-                        g.FillRectangle(tb, CardW - 5, thumbY, 3, thumbH);
+                        g.FillRectangle(tb, cardW - P(5), thumbY, P(3), thumbH);
                 }
             }
 
@@ -491,10 +514,10 @@ namespace TelegArm.UI
                 using (var track = new SolidBrush(on ? _accent : (_dark ? Color.FromArgb(80, 80, 86) : Color.FromArgb(200, 200, 206))))
                 using (var p = DrawHelper.RoundedRect(r, r.Height / 2))
                     g.FillPath(track, p);
-                int d = r.Height - 6;
-                int kx = on ? r.Right - d - 3 : r.X + 3;
+                int inset = P(3), d = r.Height - 2 * inset;   // knob inset (3 logical) on every side; d = 14 at 96, as before
+                int kx = on ? r.Right - d - inset : r.X + inset;
                 using (var kb = new SolidBrush(Color.White))
-                    g.FillEllipse(kb, kx, r.Y + 3, d, d);
+                    g.FillEllipse(kb, kx, r.Y + inset, d, d);
             }
 
             protected override void Dispose(bool disposing)

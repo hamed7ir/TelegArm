@@ -1,4 +1,5 @@
 using System;
+using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
@@ -52,6 +53,54 @@ namespace TelegArm.Helpers
         internal static void EnterBusy() { Interlocked.Increment(ref _busy); }
         internal static void ExitBusy() { Interlocked.Decrement(ref _busy); }
 
+        // ── the interface scale (step 3.8a) ─────────────────────────────────────────────────────────────────────────
+
+        /// <summary>Step 3.8a — the user's interface scale in percent: 50-200 in 25% steps, 100 = off. It multiplies the
+        /// monitor's DPI into the EFFECTIVE DPI every window lays out at (<see cref="Effective(int)"/>), so it composes
+        /// with per-monitor DPI: a monitor move keeps the user's choice. Resolved once in <see cref="Init"/> from
+        /// --scale=N, then TELEGARM_SCALE, then AppSettings.InterfaceScale; step 3.8b changes it live.
+        /// ⚠ At 100 every formula is the identity (<see cref="Effective(int,int)"/> returns raw), so the RT's 100%
+        ///   stays pixel-identical; SelfTest checks it.</summary>
+        public static int UserScalePercent { get; private set; } = 100;
+
+        /// <summary>Where <see cref="UserScalePercent"/> came from: "default", "--scale", "TELEGARM_SCALE" or "setting".</summary>
+        public static string ScaleSource { get; private set; } = "default";
+
+        /// <summary>A RAW monitor DPI at <paramref name="pct"/>: round(raw·pct/100), away from zero. EXACTLY raw at 100.
+        /// Every pair of a monitor DPI (multiples of 24) and a 25% detent is exact.</summary>
+        internal static int Effective(int raw, int pct)
+        {
+            if (pct == 100 || raw <= 0 || pct <= 0) return raw;
+            return (int)Math.Round(raw * (double)pct / 100, MidpointRounding.AwayFromZero);
+        }
+
+        /// <summary>The EFFECTIVE DPI for a raw monitor DPI: what windows lay out at (the monitor × the user's scale).
+        /// What stays RAW: finger slop and flick speeds, the touch keyboard's DIP rectangle, the tray icon, work-area and
+        /// screen maths, and WM_DPICHANGED's suggested rectangle (the scale cancels in its ratio).</summary>
+        public static int Effective(int raw) { return Effective(raw, UserScalePercent); }
+
+        /// <summary>The effective DPI of a window that tracks none (unparented controls, plain Forms): the system DPI
+        /// at the user's scale.</summary>
+        public static int DefaultDpi { get { return Effective(SystemDpi); } }
+
+        /// <summary>50-200 in 25% steps (the slider's detents, plan 3.8b).</summary>
+        internal static bool ValidScale(int pct) { return pct >= 50 && pct <= 200 && pct % 25 == 0; }
+
+        /// <summary>The scale to use: "--scale=N" in <paramref name="args"/>, then <paramref name="env"/>
+        /// (TELEGARM_SCALE), then <paramref name="setting"/> — the first VALID one wins; none: 100. Pure, for SelfTest.</summary>
+        internal static int ResolveScale(string[] args, string env, int setting, out string source)
+        {
+            int v;
+            if (args != null)
+                foreach (var a in args)
+                    if (a != null && a.StartsWith("--scale=", StringComparison.OrdinalIgnoreCase)
+                        && int.TryParse(a.Substring(8).TrimEnd('%'), out v) && ValidScale(v)) { source = "--scale"; return v; }
+            if (!string.IsNullOrEmpty(env) && int.TryParse(env.Trim().TrimEnd('%'), out v) && ValidScale(v)) { source = "TELEGARM_SCALE"; return v; }
+            if (setting != 100 && ValidScale(setting)) { source = "setting"; return setting; }
+            source = "default";
+            return 100;
+        }
+
         // ── arithmetic ───────────────────────────────────────────────────────────────────────────────────────
 
         /// <summary>A logical length at <paramref name="dpi"/>: round(n·dpi/96), away from zero. EXACTLY n at 96 —
@@ -70,14 +119,41 @@ namespace TelegArm.Helpers
 
         public static float F(float v, Control c) { return F(v, Of(c)); }
 
-        /// <summary>The DPI of the window <paramref name="c"/> is in: its top-level window's own DPI when that
-        /// window tracks one (<see cref="IDpiHost"/>), else the system DPI.</summary>
+        /// <summary>The EFFECTIVE DPI of the window <paramref name="c"/> is in: its top-level window's own DPI when that
+        /// window tracks one (<see cref="IDpiHost"/>), else <see cref="DefaultDpi"/> (the system DPI at the user's scale).</summary>
         public static int Of(Control c)
         {
             var host = (c == null ? null : (c.TopLevelControl ?? c)) as IDpiHost;
             int d = host != null ? host.Dpi : 0;
-            return d > 0 ? d : SystemDpi;
+            return d > 0 ? d : DefaultDpi;
         }
+
+        /// <summary>Step 3.1 — the RAW DPI of the monitor at a screen point, as this process sees it (the system DPI unless
+        /// per-monitor aware). For a popup, BEFORE it has a window: a menu or a toast is sized for where it will open.</summary>
+        public static int ForPoint(Point screen)
+        {
+            try
+            {
+                if (HasCached(ref _hasMonitorDpi, "shcore.dll", "GetDpiForMonitor"))   // 8.1 / RT 8.1+
+                {
+                    uint x, y;
+                    if (GetDpiForMonitor(MonitorFromPoint(new POINT { X = screen.X, Y = screen.Y }, 2), 0, out x, out y) == 0 && x > 0) return (int)x;
+                }
+            }
+            catch { }
+            return SystemDpi;
+        }
+
+        /// <summary>The RAW DPI of a screen (its centre's monitor).</summary>
+        public static int ForScreen(Screen s)
+        {
+            if (s == null) return SystemDpi;
+            var b = s.Bounds;
+            return ForPoint(new Point(b.Left + b.Width / 2, b.Top + b.Height / 2));
+        }
+
+        /// <summary>THE entry point for a popup's DPI: the EFFECTIVE DPI (monitor × user scale) at the point it opens.</summary>
+        public static int ForPopup(Point screen) { return Effective(ForPoint(screen)); }
 
         /// <summary>The DPI of the monitor <paramref name="hwnd"/> is on, AS THIS PROCESS SEES IT: the real per-monitor
         /// value when per-monitor aware, the system DPI otherwise (Windows virtualizes it — measured in step 1.1).
@@ -87,8 +163,8 @@ namespace TelegArm.Helpers
             if (hwnd == IntPtr.Zero) return SystemDpi;
             try
             {
-                if (Has("user32.dll", "GetDpiForWindow")) { int d = (int)GetDpiForWindow(hwnd); if (d > 0) return d; }   // 1607+
-                if (Has("shcore.dll", "GetDpiForMonitor"))                                                                 // 8.1 / RT 8.1
+                if (HasCached(ref _hasWindowDpi, "user32.dll", "GetDpiForWindow")) { int d = (int)GetDpiForWindow(hwnd); if (d > 0) return d; }   // 1607+
+                if (HasCached(ref _hasMonitorDpi, "shcore.dll", "GetDpiForMonitor"))                                                                 // 8.1 / RT 8.1
                 {
                     uint x, y;
                     if (GetDpiForMonitor(MonitorFromWindow(hwnd, 2), 0, out x, out y) == 0 && x > 0) return (int)x;
@@ -121,11 +197,21 @@ namespace TelegArm.Helpers
             catch (Exception ex) { call = "threw " + ex.GetType().Name; }
             Mode = ReadBack(gtdac, gpda);
             SystemDpi = ReadSystemDpi();
+            // Step 3.8a: the interface scale (rig and rescue: --scale=N / TELEGARM_SCALE; else the setting).
+            string scaleSource, env = null;
+            int setting = 100;
+            try { env = Environment.GetEnvironmentVariable("TELEGARM_SCALE"); } catch { }
+            try { setting = AppSettings.Instance.InterfaceScale; } catch { }
+            string[] args = null;
+            try { args = Environment.GetCommandLineArgs(); } catch { }
+            UserScalePercent = ResolveScale(args, env, setting, out scaleSource);
+            ScaleSource = scaleSource;
 
             ProbeSummary = "os=" + OsVersion()
                 + " exports{SetProcessDpiAwarenessContext=" + YesNo(spdac) + " SetProcessDpiAwareness=" + YesNo(spda)
                 + " SetProcessDPIAware=" + YesNo(spdaw) + " readback=" + (gtdac ? "context" : gpda ? "shcore" : "legacy") + "}"
                 + " request=" + Request + " call=" + call + " mode=" + Mode + " systemDpi=" + SystemDpi
+                + " scale=" + UserScalePercent + "% (" + ScaleSource + ")"
                 + " monitors=[" + Monitors(spda) + "]";
             Logger.Diag("[DPI] " + ProbeSummary);
         }
@@ -288,6 +374,16 @@ namespace TelegArm.Helpers
         }
 
         private static string YesNo(bool b) { return b ? "yes" : "no"; }
+
+        private static int _hasWindowDpi = -1, _hasMonitorDpi = -1;
+
+        /// <summary><see cref="Has"/>, asked once: ForWindow runs on every resize and activation (GetModuleHandle plus
+        /// GetProcAddress each time, before step 3.1).</summary>
+        private static bool HasCached(ref int flag, string dll, string fn)
+        {
+            if (flag < 0) flag = Has(dll, fn) ? 1 : 0;
+            return flag == 1;
+        }
 
         /// <summary>True when <paramref name="dll"/> exists and exports <paramref name="fn"/>. Lets an absent API be
         /// told apart from a failing one, and keeps every call below from ever throwing EntryPointNotFound.</summary>

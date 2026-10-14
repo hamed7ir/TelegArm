@@ -280,12 +280,12 @@ namespace TelegArm.UI
             {
                 Text = "Show more",
                 AutoSize = false,
-                Height = 30,
+                Height = Px(30),   // step 3.4: logical px; shared font, never dispose
                 Width = ContentWidth(_chatListPanel),
                 TextAlign = ContentAlignment.MiddleCenter,
                 Margin = new Padding(0),
                 Cursor = Cursors.Hand,
-                Font = FontHelper.Ui(9f, FontStyle.Bold),
+                Font = FontHelper.UiAt(9f, WindowDpiValue, FontStyle.Bold),
                 ForeColor = _accent
             };
             lbl.Click += (s, e) =>
@@ -434,12 +434,12 @@ namespace TelegArm.UI
             {
                 Text = "No results for " + what,
                 AutoSize = false,
-                Height = 34,
+                Height = Px(34),
                 Width = ContentWidth(_chatListPanel),
                 TextAlign = ContentAlignment.MiddleLeft,
-                Padding = new Padding(14, 0, 0, 0),
+                Padding = new Padding(Px(14), 0, 0, 0),
                 Margin = new Padding(0),
-                Font = FontHelper.Ui(9f),
+                Font = FontHelper.UiAt(9f, WindowDpiValue),   // shared: never dispose
                 ForeColor = _dark ? Color.FromArgb(150, 150, 155) : Color.FromArgb(120, 120, 125)
             };
             _chatListPanel.Controls.Add(lbl);
@@ -452,12 +452,12 @@ namespace TelegArm.UI
             {
                 Text = text,
                 AutoSize = false,
-                Height = 22,
+                Height = Px(22),
                 Width = ContentWidth(_chatListPanel),
                 TextAlign = ContentAlignment.MiddleLeft,
-                Padding = new Padding(10, 0, 0, 0),
+                Padding = new Padding(Px(10), 0, 0, 0),
                 Margin = new Padding(0),
-                Font = FontHelper.Ui(8f, FontStyle.Bold),
+                Font = FontHelper.UiAt(8f, WindowDpiValue, FontStyle.Bold),   // shared: never dispose
                 ForeColor = _dark ? Color.FromArgb(150, 150, 155) : Color.FromArgb(120, 120, 125)
             };
             _chatListPanel.Controls.Add(lbl);

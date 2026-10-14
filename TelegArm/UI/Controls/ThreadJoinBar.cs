@@ -13,8 +13,12 @@ namespace TelegArm.UI.Controls
     /// "✕" dismiss. One owner-painted control (no child controls) — the proven RT-safe bar pattern shared
     /// with <see cref="ComposerFooterBar"/>. RTL-aware: mirrors the layout when the message text is
     /// right-to-left (Persian). Joining is OPTIONAL — posting a comment works without it.
+    ///
+    /// Redesign step 3.2 (the ChatListItemControl pattern): lengths are LOGICAL (96-DPI) px drawn through Px at the
+    /// bar's DPI; fonts are shared FontHelper.UiAt / ForAt fonts (never disposed). Identity at 96. The height is the
+    /// host's (MainForm's thread-join row).
     /// </summary>
-    public sealed class ThreadJoinBar : Control
+    public sealed class ThreadJoinBar : Control, IDpiAware
     {
         public Color AccentColor { get; set; } = Color.DodgerBlue;
         public bool IsDark { get; set; }
@@ -26,10 +30,28 @@ namespace TelegArm.UI.Controls
         private readonly string _joinText = "Join";
         private Rectangle _joinRect, _dismissRect;
 
+        private int _dpi;                                          // the DPI this bar is laid out at; 0 = not parented yet
+        private int CurDpi { get { return _dpi > 0 ? _dpi : Dpi.Of(this); } }
+
         public ThreadJoinBar()
         {
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer
                      | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+        }
+
+        /// <summary>Built before it is added: the window's DPI is known only once parented.</summary>
+        protected override void OnParentChanged(EventArgs e)
+        {
+            base.OnParentChanged(e);
+            if (Parent == null) return;
+            int d = Dpi.Of(this);
+            if (d != _dpi) { _dpi = d; Invalidate(); }
+        }
+
+        void IDpiAware.OnDpiChanged(int oldDpi, int newDpi)
+        {
+            _dpi = newDpi;   // no size of its own: DpiScaler scaled the bounds; every length is derived at paint
+            Invalidate();
         }
 
         public string Message
@@ -55,22 +77,23 @@ namespace TelegArm.UI.Controls
 
         protected override void OnPaint(PaintEventArgs e)
         {
+            int dpi = CurDpi;
+            int P(int v) => Dpi.Px(v, dpi);
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
             g.Clear(IsDark ? Color.FromArgb(38, 38, 41) : Color.FromArgb(247, 247, 249));
             using (var p = new Pen(IsDark ? Color.FromArgb(60, 60, 63) : Color.FromArgb(228, 228, 232)))
-                g.DrawLine(p, 0, 0, Width, 0);   // top separator, like the other bars
+                g.DrawLine(p, 0, 0, Width, 0);   // top separator, like the other bars (a 1 px hairline at every DPI)
 
             bool rtl = IsRtl(_message);
-            const int pad = 12, gap = 8;
-            int bh = Math.Min(Height - 12, 34);
+            int pad = P(12), gap = P(8);
+            int bh = Math.Min(Height - P(12), P(34));
             int by = (Height - bh) / 2;
 
-            int joinW;
-            using (var mf = FontHelper.Ui(10f, FontStyle.Bold))
-                joinW = Math.Max(88, TextRenderer.MeasureText(_joinText, mf).Width + 44);
-            int dw = ShowDismiss ? 30 : 0;
+            var joinFont = FontHelper.UiAt(10f, dpi, FontStyle.Bold);   // shared: never dispose
+            int joinW = Math.Max(P(88), TextRenderer.MeasureText(_joinText, joinFont).Width + P(44));
+            int dw = ShowDismiss ? P(30) : 0;
 
             // The Join button sits on the trailing edge; ✕ just inside it; the message fills the leading band.
             // RTL mirrors leading/trailing (Join on the left, message right-aligned).
@@ -79,7 +102,7 @@ namespace TelegArm.UI.Controls
             {
                 _joinRect = new Rectangle(Width - pad - joinW, by, joinW, bh);
                 _dismissRect = ShowDismiss ? new Rectangle(_joinRect.Left - gap - dw, by, dw, bh) : Rectangle.Empty;
-                textStart = pad + 2;
+                textStart = pad + P(2);
                 textEnd = (ShowDismiss ? _dismissRect.Left : _joinRect.Left) - gap;
             }
             else
@@ -87,22 +110,20 @@ namespace TelegArm.UI.Controls
                 _joinRect = new Rectangle(pad, by, joinW, bh);
                 _dismissRect = ShowDismiss ? new Rectangle(_joinRect.Right + gap, by, dw, bh) : Rectangle.Empty;
                 textStart = (ShowDismiss ? _dismissRect.Right : _joinRect.Right) + gap;
-                textEnd = Width - pad - 2;
+                textEnd = Width - pad - P(2);
             }
 
             using (var b = new SolidBrush(AccentColor))
-            using (var path = DrawHelper.RoundedRect(_joinRect, 8))
+            using (var path = DrawHelper.RoundedRect(_joinRect, P(8)))
                 g.FillPath(b, path);
-            using (var f = FontHelper.Ui(10f, FontStyle.Bold))
-                TextRenderer.DrawText(g, _joinText, f, _joinRect, Color.White,
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+            TextRenderer.DrawText(g, _joinText, joinFont, _joinRect, Color.White,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
 
             if (ShowDismiss)
             {
                 Color xc = IsDark ? Color.FromArgb(150, 150, 156) : Color.FromArgb(120, 120, 126);
-                using (var f = FontHelper.Ui(11f))
-                    TextRenderer.DrawText(g, "✕", f, _dismissRect, xc,
-                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                TextRenderer.DrawText(g, "✕", FontHelper.UiAt(11f, dpi), _dismissRect, xc,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
             }
 
             int tw = Math.Max(0, textEnd - textStart);
@@ -112,8 +133,7 @@ namespace TelegArm.UI.Controls
                 var tr = new Rectangle(textStart, 0, tw, Height);
                 var flags = TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix
                           | (rtl ? (TextFormatFlags.Right | TextFormatFlags.RightToLeft) : TextFormatFlags.Left);
-                using (var f = FontHelper.For(_message, 9.5f))
-                    TextRenderer.DrawText(g, _message, f, tr, tc, flags);
+                TextRenderer.DrawText(g, _message, FontHelper.ForAt(_message, 9.5f, dpi), tr, tc, flags);
             }
         }
 

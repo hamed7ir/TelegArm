@@ -28,10 +28,6 @@ namespace TelegArm.UI.Controls
         [DllImport("user32.dll")] private static extern IntPtr PostMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
         [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
         [DllImport("user32.dll")] private static extern IntPtr WindowFromPoint(POINT p);
-        [DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr hWnd);
-        [DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
-        [DllImport("gdi32.dll")] private static extern int GetDeviceCaps(IntPtr hdc, int nIndex);
-        private const int LOGPIXELSX = 88;
 
         [StructLayout(LayoutKind.Sequential)]
         private struct POINT { public int X, Y; public POINT(int x, int y) { X = x; Y = y; } }
@@ -51,34 +47,18 @@ namespace TelegArm.UI.Controls
         private const int MK_LBUTTON = 0x0001;
         private const int TOUCHEVENTF_MOVE = 0x0001, TOUCHEVENTF_DOWN = 0x0002, TOUCHEVENTF_UP = 0x0004;
 
-        // UI-FIX-T1: the pan/tap threshold is a finger-slop distance, so it scales with the system DPI
-        // (TOUCHINPUT coords are physical px). RT 8.1 @100% (shipping target) => exactly 10, zero behavior
-        // change; a 200% dev box => 20, making dev-box touch tuning representative. LongPressMs is TIME —
-        // deliberately not scaled. Evaluated once at first use (after SetProcessDpiAwareness in Program.Run).
-        private static readonly int MoveThreshold = ScaledMoveThreshold();
+        // UI-FIX-T1, redesign step 3.2: the pan/tap threshold is a finger-slop DISTANCE and the flick/tap/stop
+        // limits are finger SPEEDS, all in TOUCHINPUT's physical px — so they scale with the RAW DPI of the monitor
+        // the touched window is on, taken PER GESTURE at DOWN (SetGestureScale). RAW, never the effective DPI: the
+        // user's interface scale must not change how far a finger has to travel (plan 3.8a). RT 8.1 @100% (shipping
+        // target) => exactly 10 px and the old px/s, zero behaviour change. LongPressMs and every other time
+        // constant are TIME — deliberately not scaled.
+        private const int SlopLogical = 10;   // finger slop at 96 DPI
         private const int LongPressMs = 500;
 
-        /// <summary>The resolved finger-slop threshold, for the [DPI] startup truth line. First access
-        /// evaluates ScaledMoveThreshold — callers must read it AFTER SetProcessDpiAwareness.</summary>
-        internal static int MoveThresholdPx { get { return MoveThreshold; } }
-
-        private static int ScaledMoveThreshold()
-        {
-            int t = 10;
-            try
-            {
-                IntPtr dc = GetDC(IntPtr.Zero);
-                if (dc != IntPtr.Zero)
-                {
-                    int dpi = GetDeviceCaps(dc, LOGPIXELSX);
-                    ReleaseDC(IntPtr.Zero, dc);
-                    if (dpi > 96) t = 10 * dpi / 96;
-                }
-            }
-            catch { /* keep the 96-dpi default */ }
-            System.Diagnostics.Debug.WriteLine("[HITTEST] touch MoveThreshold=" + t + "px");   // one-shot init line
-            return t;
-        }
+        /// <summary>The finger slop at the SYSTEM DPI, for the [DPI] startup truth line (read it after Dpi.Init).
+        /// The live value is per gesture — the touched window's monitor.</summary>
+        internal static int MoveThresholdPx { get { return TelegArm.Helpers.Dpi.Px(SlopLogical, TelegArm.Helpers.Dpi.SystemDpi); } }
 
         private static readonly List<KeyValuePair<ScrollableControl, bool>> _surfaces
             = new List<KeyValuePair<ScrollableControl, bool>>();   // (surface, horizontal)
@@ -213,6 +193,11 @@ namespace TelegArm.UI.Controls
         private static Point _startScreen, _lastScreen;
         private static Timer _holdTimer;
 
+        // Step 3.2: THIS gesture's physical tuning, set at DOWN by SetGestureScale (k = raw monitor DPI / 96).
+        private static int _gSlop = SlopLogical;                       // finger slop, px (was the static MoveThreshold)
+        private static double _gTapMax = TapMaxVelocity, _gFlickMin = FlickMinVelocity,
+                              _gFlickMax = FlickMaxVelocity, _gStop = StopVelocity;   // px/s
+
         // SCROLL-SMOOTH-T1 Part 3: WM_TOUCH MOVEs can exceed 100Hz — each Pan() is a blit + ~N child
         // repositions, so panning per-move floods the paint pipeline with incoherent frames. Deltas are
         // COALESCED to at most one Pan per ~10ms (momentum's 16ms timer already complies); the velocity
@@ -224,7 +209,7 @@ namespace TelegArm.UI.Controls
         // ── Momentum / flick inertia (TOUCH-MOMENTUM) ─────────────────────
         // All physics are TIME-based (closed-form exponential integral per tick): on Tegra 3 the timer drops
         // ticks, and that must change smoothness only — never the trajectory. Velocities are finger-space px/s
-        // (physical px, the same space as MoveThreshold). THE TUNING SURFACE:
+        // (physical px, the same space as the slop). THE TUNING SURFACE, at 96 DPI (the px/s ones scale per gesture):
         private const double FlickMinVelocity = 150.0;  // below this a release is a positioning drag → no coast
         private const double FlickMaxVelocity = 5000.0; // clamp — a wild swipe must not coast for ten seconds
         private const double DecayLambda = 2.0;         // v(t)=v0·e^(−λt); total coast distance = v0/λ (≈750px for a 1500px/s flick)
@@ -234,7 +219,7 @@ namespace TelegArm.UI.Controls
 
         // ── Tap classification (TOUCH-CLASSIFY) ───────────────────────────
         // Displacement alone cannot classify a tap: catches, fast micro-strokes and digitizer contact
-        // splits all lift under MoveThreshold yet are scroll interactions — and under the tap grammar an
+        // splits all lift under the slop yet are scroll interactions — and under the tap grammar an
         // accidental tap PAUSES downloads / switches chats. Suppression reasons are logged per event.
         private const double TapMaxVelocity = 150.0;    // = FlickMinVelocity: lifting faster than a flick-start is a stroke, never a tap
         private const int ScrollEndCooldownMs = 150;    // tap blackout after a pan/coast END on the same surface (contact splits, instant re-touches)
@@ -250,6 +235,7 @@ namespace TelegArm.UI.Controls
         private static double _mVel;                     // signed finger-space px/s along the surface's pan axis
         private static double _mCarry;                   // fractional-px accumulator — the slow tail must not stall <1px/tick
         private static long _mLastTs;
+        private static double _mStop = StopVelocity;     // 3.2: the flicking gesture's stop velocity (k-scaled), captured at StartMomentum
         private static Timer _mTimer;                    // ONE shared UI-thread timer, running only while coasting
 
         // BATCH-TA-16d/D2 — FLOATING OVERLAYS MUST NOT EAT SCROLLING.
@@ -323,7 +309,7 @@ namespace TelegArm.UI.Controls
                 _active = false; _dragging = false; _caughtCoast = false; _surface = null; _targetHwnd = IntPtr.Zero;
                 StopHoldTimer();
                 if (TelegArm.Helpers.Logger.Enabled)
-                    Debug.WriteLine("[HITTEST] gesture aborted by exception: " + ex.GetType().Name + ": " + ex.Message);
+                    TelegArm.Helpers.Logger.Diag("[HITTEST] gesture aborted by exception: " + ex.GetType().Name + ": " + ex.Message);
             }
             finally { CloseTouchInputHandle(m.LParam); }
         }
@@ -349,7 +335,7 @@ namespace TelegArm.UI.Controls
                     if (_active && (ti.dwID == _touchId || Environment.TickCount - _startTick > 15000))
                     {
                         _active = false; _dragging = false; StopHoldTimer();
-                        if (TelegArm.Helpers.Logger.Enabled) Debug.WriteLine("[HITTEST] stale gesture reset (lost UP, id=" + _touchId + ")");
+                        if (TelegArm.Helpers.Logger.Enabled) TelegArm.Helpers.Logger.Diag("[HITTEST] stale gesture reset (lost UP, id=" + _touchId + ")");
                     }
                     if (_active || surface == null) continue;     // track only the primary touch
                     _active = true; _dragging = false; _consumed = false;
@@ -359,6 +345,7 @@ namespace TelegArm.UI.Controls
                     _caughtCoast = caught != null;
                     _cooldownAtDown = InCooldown(surface);
                     _touchId = ti.dwID; _surface = surface; _targetHwnd = hwnd;
+                    SetGestureScale(hwnd);                        // 3.2: slop + speed limits from the touched window's RAW DPI
                     _startScreen = _lastScreen = pt; _startTick = Environment.TickCount;
                     _velCount = 0; PushVelSample(pt);             // velocity ring starts at the down point
                     _pendDx = 0; _pendDy = 0; _lastPanTs = 0;     // coalescer reset (first pan applies immediately)
@@ -369,7 +356,7 @@ namespace TelegArm.UI.Controls
                     if (!_active || ti.dwID != _touchId) continue;
                     PushVelSample(pt);
                     if (!_dragging &&
-                        (Math.Abs(pt.X - _startScreen.X) > MoveThreshold || Math.Abs(pt.Y - _startScreen.Y) > MoveThreshold))
+                        (Math.Abs(pt.X - _startScreen.X) > _gSlop || Math.Abs(pt.Y - _startScreen.Y) > _gSlop))
                     {
                         _dragging = true;
                         StopHoldTimer();   // moved → it's a pan, not a long-press
@@ -400,8 +387,8 @@ namespace TelegArm.UI.Controls
                     // within the threshold of the down point. The up-point check also catches a fast flick
                     // that scrolled with too few MOVE samples to trip _dragging — so a scroll never taps.
                     bool moved = _dragging
-                                 || Math.Abs(pt.X - _startScreen.X) > MoveThreshold
-                                 || Math.Abs(pt.Y - _startScreen.Y) > MoveThreshold;
+                                 || Math.Abs(pt.X - _startScreen.X) > _gSlop
+                                 || Math.Abs(pt.Y - _startScreen.Y) > _gSlop;
                     PushVelSample(pt);                            // release sample — velocity feeds the tap gate AND the flick
                     double vel = ReleaseVelocity(_surface);       // signed px/s along the pan axis (0 = unmeasurable)
                     if (!moved && !_consumed)
@@ -410,21 +397,21 @@ namespace TelegArm.UI.Controls
                         // a coast-catch (1.1), not land in a scroll-end cooldown (1.3), and lift slow (1.2).
                         string suppress = _caughtCoast ? "coast-catch"
                                         : _cooldownAtDown ? "cooldown"
-                                        : Math.Abs(vel) >= TapMaxVelocity ? "velocity v=" + (int)vel
+                                        : Math.Abs(vel) >= _gTapMax ? "velocity v=" + (int)vel
                                         : null;
                         if (suppress == null)
                         {
-                            if (TelegArm.Helpers.Logger.Enabled) System.Diagnostics.Debug.WriteLine("[HITTEST] touch: stationary tap → synthesize click");
+                            if (TelegArm.Helpers.Logger.Enabled) TelegArm.Helpers.Logger.Diag("[HITTEST] touch: stationary tap → synthesize click");
                             SynthesizeTap(_targetHwnd, _startScreen);
                         }
-                        else if (TelegArm.Helpers.Logger.Enabled) System.Diagnostics.Debug.WriteLine("[HITTEST] tap suppressed reason=" + suppress);
+                        else if (TelegArm.Helpers.Logger.Enabled) TelegArm.Helpers.Logger.Diag("[HITTEST] tap suppressed reason=" + suppress);
                     }
                     else if (_dragging)
-                        if (TelegArm.Helpers.Logger.Enabled) System.Diagnostics.Debug.WriteLine("[HITTEST] touch: scroll gesture → tap suppressed");
+                        if (TelegArm.Helpers.Logger.Enabled) TelegArm.Helpers.Logger.Diag("[HITTEST] touch: scroll gesture → tap suppressed");
                     if (_dragging) { _cooldownSurface = _surface; _cooldownEndTs = Stopwatch.GetTimestamp(); }   // 1.3: pan end arms the cooldown
                     // Flick: a scroll-classified release coasts; a small-but-fast stroke (1.2) also feeds the
                     // flick path — its energy belongs to the scroll. A long-press release is _consumed (menu showing).
-                    if (!_consumed && _surface != null && (moved || Math.Abs(vel) >= FlickMinVelocity)) TryFlick(_surface);
+                    if (!_consumed && _surface != null && (moved || Math.Abs(vel) >= _gFlickMin)) TryFlick(_surface);
                     _active = false; _dragging = false; _caughtCoast = false; _surface = null; _targetHwnd = IntPtr.Zero;
                 }
             }
@@ -491,7 +478,7 @@ namespace TelegArm.UI.Controls
                 int disp = IsHorizontal(s)
                     ? _velPt[newest].X - _velPt[anchor].X
                     : _velPt[newest].Y - _velPt[anchor].Y;
-                if (Math.Abs(disp) < MoveThreshold / 2) return 0;
+                if (Math.Abs(disp) < _gSlop / 2) return 0;
                 return disp / Math.Max(dt, 0.008);
             }
             return IsHorizontal(s)
@@ -507,19 +494,33 @@ namespace TelegArm.UI.Controls
                 && Stopwatch.GetTimestamp() - _cooldownEndTs < Stopwatch.Frequency * ScrollEndCooldownMs / 1000;
         }
 
-        /// <summary>Starts a coast when the release velocity clears FlickMinVelocity on the surface's pan axis.</summary>
+        /// <summary>Step 3.2: this gesture's slop and speed limits from the RAW DPI of the monitor the touched window
+        /// is on (Dpi.ForWindow: the system DPI unless per-monitor aware). At 96 every value is the constant itself.</summary>
+        private static void SetGestureScale(IntPtr hwnd)
+        {
+            int dpi = TelegArm.Helpers.Dpi.ForWindow(hwnd);
+            double k = dpi / 96.0;
+            _gSlop = TelegArm.Helpers.Dpi.Px(SlopLogical, dpi);
+            _gTapMax = TapMaxVelocity * k;
+            _gFlickMin = FlickMinVelocity * k;
+            _gFlickMax = FlickMaxVelocity * k;
+            _gStop = StopVelocity * k;
+        }
+
+        /// <summary>Starts a coast when the release velocity clears the gesture's flick minimum on the surface's pan axis.</summary>
         private static void TryFlick(ScrollableControl s)
         {
             double v = ReleaseVelocity(s);
-            if (Math.Abs(v) < FlickMinVelocity) return;      // positioning drag → release stays put
-            if (v > FlickMaxVelocity) v = FlickMaxVelocity;
-            else if (v < -FlickMaxVelocity) v = -FlickMaxVelocity;
+            if (Math.Abs(v) < _gFlickMin) return;            // positioning drag → release stays put
+            if (v > _gFlickMax) v = _gFlickMax;
+            else if (v < -_gFlickMax) v = -_gFlickMax;
             StartMomentum(s, v);
         }
 
         private static void StartMomentum(ScrollableControl s, double v)
         {
             _mSurface = s; _mVel = v; _mCarry = 0; _mLastTs = Stopwatch.GetTimestamp();
+            _mStop = _gStop;                                 // the coast outlives the gesture: keep ITS stop velocity
             if (_mTimer == null)
             {
                 _mTimer = new Timer { Interval = MomentumTickMs };
@@ -527,7 +528,7 @@ namespace TelegArm.UI.Controls
             }
             _mTimer.Start();
             if (TelegArm.Helpers.Logger.Enabled)
-                Debug.WriteLine("[HITTEST] flick v=" + (int)v + " ctrl="
+                TelegArm.Helpers.Logger.Diag("[HITTEST] flick v=" + (int)v + " ctrl="
                     + (string.IsNullOrEmpty(s.Name) ? s.GetType().Name : s.Name));
         }
 
@@ -547,7 +548,7 @@ namespace TelegArm.UI.Controls
             _cooldownSurface = _mSurface; _cooldownEndTs = Stopwatch.GetTimestamp();   // 1.3: coast end arms the tap cooldown
             _mSurface = null; _mVel = 0; _mCarry = 0;
             if (_mTimer != null) _mTimer.Stop();
-            if (TelegArm.Helpers.Logger.Enabled) Debug.WriteLine("[HITTEST] coast end reason=" + reason);
+            if (TelegArm.Helpers.Logger.Enabled) TelegArm.Helpers.Logger.Diag("[HITTEST] coast end reason=" + reason);
         }
 
         private static void MomentumTick()
@@ -578,7 +579,7 @@ namespace TelegArm.UI.Controls
                 if (s.AutoScrollPosition == before) { StopMomentum("boundary"); return; }   // clamped at the edge → stop dead
             }
 
-            if (Math.Abs(_mVel) < StopVelocity) StopMomentum("decay");
+            if (Math.Abs(_mVel) < _mStop) StopMomentum("decay");
         }
 
         private static void StartHoldTimer()

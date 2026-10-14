@@ -190,9 +190,8 @@ namespace TelegArm.UI
             else
             {
                 using (var ab = new SolidBrush(DrawHelper.AvatarColor(u.id))) g.FillEllipse(ab, avatarRect);
-                string initial = name.Length > 0 ? name.Substring(0, 1).ToUpperInvariant() : "?";
-                TextRenderer.DrawText(g, initial, FontHelper.UiAt(14f, dpi, FontStyle.Bold), avatarRect, Color.White,
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                string initial = name.Length > 0 ? DrawHelper.Initial(name) : "?";
+                DrawHelper.DrawInitial(g, initial, FontHelper.ForAt(initial, 14f, dpi, FontStyle.Bold), avatarRect, Color.White);   // ink-centred (owner report 2026-10-14)
                 EnsureAvatar(u);
             }
 

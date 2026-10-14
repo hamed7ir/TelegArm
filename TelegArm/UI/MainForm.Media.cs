@@ -81,9 +81,9 @@ namespace TelegArm.UI
         private void OpenDownloadsPanel()
         {
             var p = new DownloadsPanel(_service, _dark, _accent);
-            var anchor = _dlIndicator != null
-                ? _dlIndicator.PointToScreen(new Point(_dlIndicator.Width - p.Width, _dlIndicator.Height + 2))
-                : PointToScreen(new Point(ClientSize.Width - p.Width - 8, 64));
+            var anchor = _dlIndicator != null   // step 3.4: logical offsets; the work-area clamp below stays raw
+                ? _dlIndicator.PointToScreen(new Point(_dlIndicator.Width - p.Width, _dlIndicator.Height + Px(2)))
+                : PointToScreen(new Point(ClientSize.Width - p.Width - Px(8), Px(64)));
             var wa = Screen.FromControl(this).WorkingArea;
             p.Location = new Point(Math.Max(wa.Left, Math.Min(anchor.X, wa.Right - p.Width)),
                                    Math.Max(wa.Top, Math.Min(anchor.Y, wa.Bottom - p.Height)));
@@ -632,6 +632,7 @@ namespace TelegArm.UI
         private void ClearMessagePanel()
         {
             TouchScroller.StopMomentum();   // 3.4: a coast must not scroll the NEXT chat's content
+            StopRemeasure();                // step 3.4 (review): a DPI re-measure queue must not touch the next chat's view
 
             StopAllInline();   // stop the inline video player (WebM/GIF) + free buffers/frames BEFORE the bubbles are disposed
 

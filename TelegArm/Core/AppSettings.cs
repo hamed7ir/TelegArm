@@ -117,6 +117,10 @@ namespace TelegArm.Core
         /// build, so "" is how "the user never chose" survives on disk. Read at startup (Program), restart to apply.</summary>
         public string DpiMode { get; set; } = "";
 
+        /// <summary>Redesign step 3.8a — the interface scale, percent: 50-200 in 25% steps, 100 = off. Multiplies the
+        /// per-monitor DPI (Dpi.Effective). The slider arrives with 3.8b; until then only the rig and --scale use it.</summary>
+        public int InterfaceScale { get; set; } = 100;
+
         /// <summary>STEP 0.4 — schema version of this file. ⚠ NO INITIALIZER, ON PURPOSE: a 1.x file has no such
         /// field, and Json.NET leaves an absent property at its initializer — "= 2" would make every old file look
         /// already migrated. Absent ⇒ 0 ⇒ <see cref="Migrate"/> runs once.</summary>

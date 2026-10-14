@@ -49,8 +49,8 @@ namespace TelegArm.UI
         private void PositionProxyPill()
         {
             if (_proxyPill == null || _chatListHost == null || !ReferenceEquals(_proxyPill.Parent, _chatListHost)) return;
-            _proxyPill.Left = 12;
-            _proxyPill.Top = Math.Max(0, _chatListHost.ClientSize.Height - _proxyPill.Height - 12);
+            _proxyPill.Left = Px(12);   // step 3.4: logical margins
+            _proxyPill.Top = Math.Max(0, _chatListHost.ClientSize.Height - _proxyPill.Height - Px(12));
         }
 
         /// <summary>AppForm's self-check fell back to native chrome after the UI was built: the title bar is gone.</summary>

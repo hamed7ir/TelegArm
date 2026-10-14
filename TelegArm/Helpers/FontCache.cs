@@ -40,7 +40,7 @@ namespace TelegArm.Helpers
             if (dpi <= 0) dpi = Dpi.Logical;
             // Normalised once, here, so every road to the same size meets on one key (review: PersianAt passes
             // 12 x 0.85 = 10.200001 while Rescale arrives at 10.2, which made two fonts for one size).
-            pt = (float)Math.Round(pt, 2);
+            pt = (float)Math.Round(pt, 3);   // 3, not 2: 8.925 / 9.775 / 10.625 are the legacy Persian sizes exactly
             var key = new Key { Family = family ?? "Segoe UI", Pt = pt, Style = style, Dpi = dpi };
             lock (_lock)
             {
@@ -61,7 +61,7 @@ namespace TelegArm.Helpers
         {
             if (font == null) return null;
             float pt = font.Unit == GraphicsUnit.Pixel ? font.Size * 72f / (oldDpi > 0 ? oldDpi : Dpi.Logical) : font.SizeInPoints;
-            return Get(font.FontFamily.Name, (float)Math.Round(pt, 2), font.Style, newDpi);
+            return Get(font.FontFamily.Name, (float)Math.Round(pt, 3), font.Style, newDpi);
         }
 
         /// <summary>How many distinct fonts are cached (for diagnostics and the cache-growth check of step 3.5).</summary>

@@ -21,16 +21,22 @@ namespace TelegArm.UI.Controls
     ///   unantialiased edge. A Region here would look WORSE, not safer.
     /// ⚠ THE MIC STAYS A SEPARATE CONTROL. Telegram-Android morphs mic↔send as the input empties and
     ///   fills; that is a BEHAVIOUR change (what the button does, and when), not a look change, so it is
-    ///   deliberately not built here. Follow-up if wanted.</summary>
-    public class SendButton : Control
+    ///   deliberately not built here. Follow-up if wanted.
+    /// Redesign step 3.2: lengths are LOGICAL (96-DPI) and drawn through Px at the button's DPI (the window's, once
+    ///   parented); IDpiAware SETS the 40x40 from the logical value, never multiplies. Identity at 96.</summary>
+    public class SendButton : Control, IDpiAware
     {
+        private const int Side = 40;   // logical px — identical to MicButton
+
         private bool _hover, _pressed;
+        private int _dpi;                                          // the DPI this button is laid out at; 0 = not parented yet
+        private int CurDpi { get { return _dpi > 0 ? _dpi : Dpi.Of(this); } }
 
         public SendButton()
         {
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
                      | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
-            Size = new Size(40, 40);          // identical to MicButton
+            Size = new Size(Dpi.Px(Side, CurDpi), Dpi.Px(Side, CurDpi));   // identical to MicButton
             Cursor = Cursors.Hand;
             TabStop = false;
             // ⚠⚠ DO NOT SET `BackColor = Color.Transparent` HERE. A plain Control REJECTS it —
@@ -57,6 +63,22 @@ namespace TelegArm.UI.Controls
             base.Dispose(disposing);
         }
 
+        /// <summary>Built before it is added: the window's DPI is known only once parented.</summary>
+        protected override void OnParentChanged(EventArgs e)
+        {
+            base.OnParentChanged(e);
+            if (Parent == null) return;
+            int d = Dpi.Of(this);
+            if (d != _dpi) { _dpi = d; Size = new Size(Dpi.Px(Side, d), Dpi.Px(Side, d)); Invalidate(); }
+        }
+
+        void IDpiAware.OnDpiChanged(int oldDpi, int newDpi)
+        {
+            _dpi = newDpi;
+            Size = new Size(Dpi.Px(Side, newDpi), Dpi.Px(Side, newDpi));   // SET from the logical value: DpiScaler already ratio-scaled the bounds
+            Invalidate();
+        }
+
         protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }
         protected override void OnMouseLeave(EventArgs e) { _hover = false; _pressed = false; Invalidate(); base.OnMouseLeave(e); }
         protected override void OnMouseDown(MouseEventArgs e) { _pressed = true; Invalidate(); base.OnMouseDown(e); }
@@ -65,6 +87,9 @@ namespace TelegArm.UI.Controls
 
         protected override void OnPaint(PaintEventArgs e)
         {
+            int dpi = CurDpi;
+            int P(int v) => Dpi.Px(v, dpi);
+            float k = dpi / 96f;   // exactly 1 at 96
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
 
@@ -75,7 +100,7 @@ namespace TelegArm.UI.Controls
             //   equivalent of their optical weight: the ink stops well short of the cell edge, the way
             //   theirs does. Same lesson as the header glyph box (TA-24) — matching the BOX is not the
             //   same as matching the WEIGHT.
-            int d = Math.Min(30, Math.Min(Width, Height) - 6);
+            int d = Math.Min(P(30), Math.Min(Width, Height) - P(6));
             var disc = new Rectangle((Width - d) / 2, (Height - d) / 2, d, d);
             Color accent = ThemeHelper.GetWindowsAccentColor();
 
@@ -85,20 +110,22 @@ namespace TelegArm.UI.Controls
                 // where send WILL be, which is what stops the row shifting when it becomes available.
                 using (var b = new SolidBrush(ThemeHelper.IsDark ? Color.FromArgb(58, 58, 63) : Color.FromArgb(214, 214, 220)))
                     g.FillEllipse(b, disc);
-                DrawPlane(g, disc, ThemeHelper.IsDark ? Color.FromArgb(96, 96, 102) : Color.FromArgb(168, 168, 176));
+                DrawPlane(g, disc, ThemeHelper.IsDark ? Color.FromArgb(96, 96, 102) : Color.FromArgb(168, 168, 176), k);
                 return;
             }
 
             // Pressed darkens, hover lightens — the same two-state feedback the other composer buttons give.
             Color fill = _pressed ? Darken(accent, 0.82f) : _hover ? Lighten(accent, 0.12f) : accent;
             using (var b = new SolidBrush(fill)) g.FillEllipse(b, disc);
-            DrawPlane(g, disc, Color.White);
+            DrawPlane(g, disc, Color.White, k);
         }
 
         /// <summary>The paper plane, drawn as a filled path rather than a font glyph — the same reason the
         /// header's magnifier and ⋮ are drawn: a font/emoji glyph renders inconsistently on RT.
-        /// Slightly nudged right and up so the plane reads as centred (its visual mass sits left-low).</summary>
-        private static void DrawPlane(Graphics g, Rectangle disc, Color ink)
+        /// Slightly nudged right and up so the plane reads as centred (its visual mass sits left-low).
+        /// Its geometry scales with the disc (already Px-sized); <paramref name="k"/> (dpi/96) only scales the crease's
+        /// 1 px floor.</summary>
+        private static void DrawPlane(Graphics g, Rectangle disc, Color ink, float k)
         {
             float s = disc.Width;
             float cx = disc.X + s / 2f + s * 0.02f;
@@ -118,7 +145,7 @@ namespace TelegArm.UI.Controls
 
                 // The centre crease: a hairline back to the notch, which is what makes it read as folded
                 // paper rather than as a plain arrow.
-                using (var p = new Pen(Color.FromArgb(70, ink.R, ink.G, ink.B), Math.Max(1f, s * 0.03f)))
+                using (var p = new Pen(Color.FromArgb(70, ink.R, ink.G, ink.B), Math.Max(1f * k, s * 0.03f)))
                     g.DrawLine(p, notch, tip);
             }
         }

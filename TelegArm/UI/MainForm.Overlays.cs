@@ -37,22 +37,22 @@ namespace TelegArm.UI
 
         private void PaintSwitchOverlay(object sender, PaintEventArgs e)
         {
+            // Step 3.4: logical px and shared fonts at the window's DPI (identity at 96). Fonts are shared: never dispose.
             var g = e.Graphics; g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            int dpi = WindowDpiValue;
             int cx = _switchOverlay.Width / 2, cy = _switchOverlay.Height / 2;
-            int d = 100; var rect = new Rectangle(cx - d / 2, cy - d / 2 - 44, d, d);
+            int d = Px(100); var rect = new Rectangle(cx - d / 2, cy - d / 2 - Px(44), d, d);
             if (_switchAvatar != null) DrawHelper.DrawCircularImage(g, rect, _switchAvatar);
             else
             {
                 using (var b = new SolidBrush(_accent)) g.FillEllipse(b, rect);
-                string ini = !string.IsNullOrEmpty(_switchOverlayName) ? _switchOverlayName.Substring(0, 1).ToUpperInvariant() : "?";
-                using (var f = new Font("Segoe UI", 36f, FontStyle.Bold))
-                    TextRenderer.DrawText(g, ini, f, rect, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                string ini = !string.IsNullOrEmpty(_switchOverlayName) ? DrawHelper.Initial(_switchOverlayName) : "?";
+                DrawHelper.DrawInitial(g, ini, FontCache.Get("Segoe UI", 36f, FontStyle.Bold, dpi), rect, Color.White);   // ink-centred (owner report 2026-10-14)
             }
             string title = "Switching to " + (_switchOverlayName ?? "account") + new string('.', _switchDotCount);
-            using (var f = new Font("Segoe UI", 13.5f, FontStyle.Bold))
-                TextRenderer.DrawText(g, title, f, new Rectangle(0, cy + 30, _switchOverlay.Width, 34),
-                    _dark ? Color.FromArgb(236, 236, 240) : Color.FromArgb(33, 33, 38),
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+            TextRenderer.DrawText(g, title, FontCache.Get("Segoe UI", 13.5f, FontStyle.Bold, dpi), new Rectangle(0, cy + Px(30), _switchOverlay.Width, Px(34)),
+                _dark ? Color.FromArgb(236, 236, 240) : Color.FromArgb(33, 33, 38),
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
         }
 
         private void ShowSwitchOverlay(long targetId, string name)
@@ -99,9 +99,10 @@ namespace TelegArm.UI
             if (_switchCancelButton != null) _switchCancelButton.Visible = switching;
             if (_proxyOverlayButton != null) _proxyOverlayButton.Visible = !switching;
 
-            _retryButton.Location = new Point(_connectingPanel.Width / 2 - _retryButton.Width - 6, 118);
+            // Step 3.4: logical px at the window's DPI (re-run after a DPI change: the gap and row are derived, not stored).
+            _retryButton.Location = new Point(_connectingPanel.Width / 2 - _retryButton.Width - Px(6), Px(118));
             var second = switching ? _switchCancelButton : _proxyOverlayButton;
-            if (second != null) second.Location = new Point(_connectingPanel.Width / 2 + 6, 118);
+            if (second != null) second.Location = new Point(_connectingPanel.Width / 2 + Px(6), Px(118));
         }
 
         private void EnsureConnectingUi()
@@ -109,9 +110,11 @@ namespace TelegArm.UI
             if (_connectingPanel != null) return;
             // UI-FIX-T1: no local `dark` snapshot — the Paint lambda reads _dark LIVE (captured colors were the
             // stale-after-theme-switch bug, UI-AUDIT A.3); RecolorConnectingUi re-pushes the property colors.
+            // Step 3.4: every length is logical px at the window's DPI; the label fonts are shared FontCache fonts (never
+            // dispose). DpiScaler rescales all of it on a DPI change; only the button row is re-derived (LayoutConnectingButtons).
             _connectingPanel = new Panel
             {
-                Size = new Size(460, 172),
+                Size = new Size(Px(460), Px(172)),
                 BackColor = _dark ? Color.FromArgb(44, 44, 48) : Color.FromArgb(250, 250, 252),
                 Visible = false
             };
@@ -124,26 +127,26 @@ namespace TelegArm.UI
             _connectingTitle = new Label
             {
                 Text = "Connecting…",
-                AutoSize = false, Size = new Size(428, 34), Location = new Point(16, 20),
+                AutoSize = false, Size = new Size(Px(428), Px(34)), Location = new Point(Px(16), Px(20)),
                 TextAlign = ContentAlignment.MiddleCenter, BackColor = Color.Transparent,
-                Font = new Font("Segoe UI", 13.5f, FontStyle.Bold),
+                Font = FontCache.Get("Segoe UI", 13.5f, FontStyle.Bold, WindowDpiValue),   // shared: never dispose
                 ForeColor = _dark ? Color.FromArgb(236, 236, 240) : Color.FromArgb(33, 33, 38)
             };
             _connectingDetail = new Label
             {
                 Text = "Waiting for network — make sure your VPN is on.",
-                AutoSize = false, Size = new Size(428, 46), Location = new Point(16, 58),
+                AutoSize = false, Size = new Size(Px(428), Px(46)), Location = new Point(Px(16), Px(58)),
                 TextAlign = ContentAlignment.MiddleCenter, BackColor = Color.Transparent,
-                Font = new Font("Segoe UI", 9.75f),
+                Font = FontCache.Get("Segoe UI", 9.75f, FontStyle.Regular, WindowDpiValue),   // shared: never dispose
                 ForeColor = _dark ? Color.FromArgb(170, 170, 176) : Color.FromArgb(108, 108, 114)
             };
             _retryButton = new RoundedButton   // 2.7a: was a MaterialButton (Contained)
             {
                 Text = "Retry now", Kind = RoundedButtonKind.Primary, Modern = true,
-                Size = new Size(170, 40), Font = FontHelper.UiAt(10f, WindowDpiValue, FontStyle.Bold)
+                Size = new Size(Px(170), Px(40)), Font = FontHelper.UiAt(10f, WindowDpiValue, FontStyle.Bold)
             };
             // BATCH-TA-16f/F1 — the two buttons share the row, so Retry no longer centres alone.
-            _retryButton.Location = new Point(_connectingPanel.Width / 2 - _retryButton.Width - 6, 118);
+            _retryButton.Location = new Point(_connectingPanel.Width / 2 - _retryButton.Width - Px(6), Px(118));
             _retryButton.Click += (s, e) =>
             {
                 var c = _retryNowCts;   // cut the backoff wait → retry immediately
@@ -160,15 +163,15 @@ namespace TelegArm.UI
             _proxyOverlayButton = new RoundedButton   // 2.7a: was a MaterialButton (Outlined)
             {
                 Text = "Proxy", Kind = RoundedButtonKind.Secondary, Modern = true,
-                Size = new Size(120, 40), Font = FontHelper.UiAt(10f, WindowDpiValue, FontStyle.Bold)
+                Size = new Size(Px(120), Px(40)), Font = FontHelper.UiAt(10f, WindowDpiValue, FontStyle.Bold)
             };
-            _proxyOverlayButton.Location = new Point(_connectingPanel.Width / 2 + 6, 118);
+            _proxyOverlayButton.Location = new Point(_connectingPanel.Width / 2 + Px(6), Px(118));
             _proxyOverlayButton.Click += (s, e) => OpenProxySettings();
 
             _switchCancelButton = new RoundedButton   // 2.7a: was a MaterialButton (Outlined)
             {
                 Text = "Cancel", Kind = RoundedButtonKind.Neutral, Modern = true,
-                Size = new Size(150, 40), Visible = false, Font = FontHelper.UiAt(10f, WindowDpiValue, FontStyle.Bold)
+                Size = new Size(Px(150), Px(40)), Visible = false, Font = FontHelper.UiAt(10f, WindowDpiValue, FontStyle.Bold)
             };
             _switchCancelButton.Click += (s, e) =>
             {

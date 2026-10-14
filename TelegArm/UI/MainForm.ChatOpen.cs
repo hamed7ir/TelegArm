@@ -67,9 +67,9 @@ namespace TelegArm.UI
             var chip = new Label
             {
                 Text = "×   Searching in: " + name,
-                AutoSize = false, Height = 40, Width = ContentWidth(_chatListPanel),
-                TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(12, 0, 0, 0), Margin = new Padding(0),
-                Font = FontHelper.Ui(9.5f, FontStyle.Bold), Cursor = Cursors.Hand, ForeColor = _accent,
+                AutoSize = false, Height = Px(40), Width = ContentWidth(_chatListPanel),   // step 3.4: logical px
+                TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(Px(12), 0, 0, 0), Margin = new Padding(0),
+                Font = FontHelper.UiAt(9.5f, WindowDpiValue, FontStyle.Bold), Cursor = Cursors.Hand, ForeColor = _accent,   // shared: never dispose
                 BackColor = _dark ? Color.FromArgb(48, 48, 52) : Color.FromArgb(235, 238, 242)
             };
             chip.Click += (s, e) => ExitInChatSearch();
@@ -153,7 +153,7 @@ namespace TelegArm.UI
         {
             if (_inChatPaging || _inChatSearchEntry == null || string.IsNullOrEmpty(_inChatQuery) || _inChatOffsetId == 0) return;
             int pos = -_chatListPanel.AutoScrollPosition.Y, viewport = _chatListPanel.ClientSize.Height, content = _chatListPanel.DisplayRectangle.Height;
-            if (!(content > viewport && pos + viewport >= content - 200)) return;
+            if (!(content > viewport && pos + viewport >= content - Px(200))) return;
             _inChatPaging = true;
             try
             {
@@ -368,7 +368,7 @@ namespace TelegArm.UI
                 _threadJoinBar.Visible = show;
                 _threadJoinBar.Invalidate();
             }
-            if (_rightLayout != null) _rightLayout.RowStyles[8].Height = show ? 48 : 0;   // FORUM-TOPICS: thread join bar row 7→8
+            SetRowPx(_rightLayout, 8, show ? 48 : 0);   // FORUM-TOPICS: thread join bar row 7→8 (step 3.4: logical px)
         }
 
         /// <summary>✕ on the join bar — hide it for the rest of this thread session. Posting still works unjoined
@@ -417,7 +417,7 @@ namespace TelegArm.UI
             _currentBotInfo = null;
             _replyKbSingleUse = false;
             if (_botMenuButton != null) _botMenuButton.Visible = false;
-            if (_composerColumns != null) _composerColumns.ColumnStyles[0].Width = 0;
+            SetColPx(_composerColumns, 0, 0);
             if (_replyKb != null) _replyKb.Clear();
             if (_messageInput != null) _messageInput.Hint = "Write a message…";
             SyncReplyKeyboardHeight();
@@ -443,7 +443,7 @@ namespace TelegArm.UI
                     _botMenuButton.Visible = show;
                     _botMenuButton.Invalidate();
                 }
-                if (_composerColumns != null) _composerColumns.ColumnStyles[0].Width = show ? 48 : 0;
+                SetColPx(_composerColumns, 0, show ? 48 : 0);   // step 3.4: logical px
                 System.Diagnostics.Debug.WriteLine("[BOT] menu loaded cmds=" + (hasCommands ? _currentBotInfo.commands.Length : 0) + " webapp=" + webAppMenu);
             }
             catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[BOT] menu load err: " + ex.Message); }
@@ -479,10 +479,15 @@ namespace TelegArm.UI
             catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[BOT] command err: " + ex.Message); }
         }
 
+        private bool _replyKbDpiHooked;
+
         /// <summary>Sets the reply-keyboard row height from the control's desired height (and its host visibility).</summary>
         private void SyncReplyKeyboardHeight()
         {
             if (_replyKb == null || _rightLayout == null) return;
+            // Step 3.4: the control re-measures itself on a DPI change and says so; the row is then SET again from it.
+            if (!_replyKbDpiHooked) { _replyKbDpiHooked = true; _replyKb.DesiredHeightChanged += (s, e) => SyncReplyKeyboardHeight(); }
+            // DesiredHeight is PHYSICAL px at the control's DPI (step 3.4) — written as is, never through Px/SetRowPx.
             int h = _replyKb.HasButtons ? _replyKb.DesiredHeight : 0;
             _rightLayout.RowStyles[7].Height = h;   // FORUM-TOPICS: reply keyboard row 6→7
             if (_replyKbHost != null) _replyKbHost.Visible = h > 0;

@@ -332,7 +332,7 @@ namespace TelegArm.UI
                         _peerNames.TryGetValue(pu.user_id, out sender);
 
                     bool atBottom = -_messagePanel.AutoScrollPosition.Y + _messagePanel.ClientSize.Height
-                                    >= _messagePanel.DisplayRectangle.Height - 8;
+                                    >= _messagePanel.DisplayRectangle.Height - Px(8);
                     int scrollY = -_messagePanel.AutoScrollPosition.Y;
 
                     _messagePanel.SuspendLayout();
@@ -362,7 +362,7 @@ namespace TelegArm.UI
             picker.Picked += InsertEmoji;
             picker.DocumentPicked += SendDocument;
             var p = _emojiButton.PointToScreen(new Point(0, 0));
-            picker.Location = new Point(p.X - picker.Width + _emojiButton.Width, p.Y - picker.Height - 4); // above the button
+            picker.Location = new Point(p.X - picker.Width + _emojiButton.Width, p.Y - picker.Height - Px(4)); // above the button (step 3.4: logical gap)
             picker.Show(this);
             picker.Activate();
         }
@@ -623,7 +623,7 @@ namespace TelegArm.UI
             }
 
             _replyStrip.Visible = active;
-            _rightLayout.RowStyles[6].Height = active ? 40 : 0;   // FORUM-TOPICS: reply strip row 5→6
+            SetRowPx(_rightLayout, 6, active ? 40 : 0);   // FORUM-TOPICS: reply strip row 5→6 (step 3.4: logical px)
             if (_messagePanel != null)
                 _messagePanel.AutoScrollPosition = new Point(0, scrollY);
         }

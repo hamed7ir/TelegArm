@@ -10,8 +10,12 @@ namespace TelegArm.UI.Controls
     /// Owner-painted "pinned message" bar (single control, no children — the proven
     /// MiniPlayerBar/SelectionBar pattern, so it renders correctly on RT). Shows an accent left bar,
     /// a "Pinned message"/counter title, and a one-line preview. Clicking raises <see cref="BarClicked"/>.
+    ///
+    /// Redesign step 3.2 (the ChatListItemControl pattern): lengths are LOGICAL (96-DPI) px drawn through Px at the
+    /// bar's DPI (the icon's hit box too); fonts are shared FontHelper.UiAt / ForAt fonts (never disposed). Identity
+    /// at 96. The height is the host's (MainForm's pinned-bar row).
     /// </summary>
-    public sealed class PinnedBar : Control
+    public sealed class PinnedBar : Control, IDpiAware
     {
         public Color AccentColor { get; set; } = Color.DodgerBlue;
         public bool IsDark { get; set; }
@@ -24,13 +28,31 @@ namespace TelegArm.UI.Controls
         /// <summary>Tapping the right-edge list icon opens the full pinned list.</summary>
         public event EventHandler ShowAllClicked;
 
-        private const int IconBox = 34;   // right-edge hit area for the "show all pinned" list icon
+        private const int IconBox = 34;   // right-edge hit area for the "show all pinned" list icon (logical px)
+
+        private int _dpi;                                          // the DPI this bar is laid out at; 0 = not parented yet
+        private int CurDpi { get { return _dpi > 0 ? _dpi : Dpi.Of(this); } }
 
         public PinnedBar()
         {
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer
                      | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
             Cursor = Cursors.Hand;
+        }
+
+        /// <summary>Built before it is added: the window's DPI is known only once parented.</summary>
+        protected override void OnParentChanged(EventArgs e)
+        {
+            base.OnParentChanged(e);
+            if (Parent == null) return;
+            int d = Dpi.Of(this);
+            if (d != _dpi) { _dpi = d; Invalidate(); }
+        }
+
+        void IDpiAware.OnDpiChanged(int oldDpi, int newDpi)
+        {
+            _dpi = newDpi;   // no size of its own: DpiScaler scaled the bounds; every length is derived at paint
+            Invalidate();
         }
 
         public void SetContent(string title, string preview)
@@ -43,12 +65,14 @@ namespace TelegArm.UI.Controls
         protected override void OnMouseClick(MouseEventArgs e)
         {
             base.OnMouseClick(e);
-            if (e.X >= Width - IconBox) ShowAllClicked?.Invoke(this, EventArgs.Empty);   // right-edge icon → list
-            else BarClicked?.Invoke(this, EventArgs.Empty);                              // body → cycle next
+            if (e.X >= Width - Dpi.Px(IconBox, CurDpi)) ShowAllClicked?.Invoke(this, EventArgs.Empty);   // right-edge icon → list
+            else BarClicked?.Invoke(this, EventArgs.Empty);                                              // body → cycle next
         }
 
         protected override void OnPaint(PaintEventArgs e)
         {
+            int dpi = CurDpi;
+            int P(int v) => Dpi.Px(v, dpi);
             var g = e.Graphics;
             g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
 
@@ -56,19 +80,19 @@ namespace TelegArm.UI.Controls
 
             // Accent bar at the leading edge.
             using (var b = new SolidBrush(AccentColor))
-                g.FillRectangle(b, 12, 8, 3, Math.Max(4, Height - 16));
+                g.FillRectangle(b, P(12), P(8), P(3), Math.Max(P(4), Height - P(16)));
 
-            const int x = 24;
-            int cw = Math.Max(0, Width - x - IconBox);   // reserve the right-edge list icon
+            int x = P(24), iconBox = P(IconBox);
+            int cw = Math.Max(0, Width - x - iconBox);   // reserve the right-edge list icon
             Color prevColor = IsDark ? Color.FromArgb(180, 180, 185) : Color.FromArgb(90, 90, 95);
 
             // "Show all pinned" list icon (stacked lines) at the right edge.
-            int iconW = 16, ix = Width - IconBox + (IconBox - iconW) / 2, iy = Height / 2 - 5;
-            using (var ip = new Pen(IsDark ? Color.FromArgb(170, 170, 175) : Color.FromArgb(110, 110, 115), 2f))
+            int iconW = P(16), ix = Width - iconBox + (iconBox - iconW) / 2, iy = Height / 2 - P(5);
+            using (var ip = new Pen(IsDark ? Color.FromArgb(170, 170, 175) : Color.FromArgb(110, 110, 115), Dpi.F(2f, dpi)))
             {
                 g.DrawLine(ip, ix, iy, ix + iconW, iy);
-                g.DrawLine(ip, ix, iy + 5, ix + iconW, iy + 5);
-                g.DrawLine(ip, ix, iy + 10, ix + iconW, iy + 10);
+                g.DrawLine(ip, ix, iy + P(5), ix + iconW, iy + P(5));
+                g.DrawLine(ip, ix, iy + P(10), ix + iconW, iy + P(10));
             }
 
             // Clip ALL text to the content area so nothing (incl. a custom-emoji box glyph) bleeds past the bar.
@@ -79,16 +103,15 @@ namespace TelegArm.UI.Controls
             const TextFormatFlags baseFlags = TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine
                                             | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
 
-            using (var tf = FontHelper.Ui(8.25f, FontStyle.Bold))
-                TextRenderer.DrawText(g, _title, tf, new Rectangle(x, 4, cw, 15), AccentColor,
-                    baseFlags | TextFormatFlags.Left);
+            // shared fonts: never dispose
+            TextRenderer.DrawText(g, _title, FontHelper.UiAt(8.25f, dpi, FontStyle.Bold), new Rectangle(x, P(4), cw, P(15)), AccentColor,
+                baseFlags | TextFormatFlags.Left);
 
             // Preview: give it the taller remaining space so Persian isn't vertically clipped; RTL right-aligned.
-            var prevRect = new Rectangle(x, 18, cw, Math.Max(14, Height - 18 - 4));
+            var prevRect = new Rectangle(x, P(18), cw, Math.Max(P(14), Height - P(18) - P(4)));
             bool rtl = IsRtl(_preview);
             var prevFlags = baseFlags | (rtl ? (TextFormatFlags.Right | TextFormatFlags.RightToLeft) : TextFormatFlags.Left);
-            using (var pf = FontHelper.For(_preview, 9f))
-                TextRenderer.DrawText(g, _preview, pf, prevRect, prevColor, prevFlags);
+            TextRenderer.DrawText(g, _preview, FontHelper.ForAt(_preview, 9f, dpi), prevRect, prevColor, prevFlags);
 
             g.Clip = oldClip;
 

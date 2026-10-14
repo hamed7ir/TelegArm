@@ -142,7 +142,7 @@ namespace TelegArm.UI
         private int _jumpUnread;                    // new messages that arrived while scrolled up
         private System.Windows.Forms.Timer _scrollWatch;
         private System.Windows.Forms.Timer _perfTimer;   // [PERF] 1.5s flush of the diagnosis counters
-        private const int AtBottomThreshold = 150;  // within this many px of the bottom = "at bottom"
+        private int AtBottomThreshold { get { return Px(150); } }  // within this many (logical) px of the bottom = "at bottom" (step 3.4)
         private PinnedBar _pinnedBar;
         private List<Message> _pinnedMessages;     // full ordered pinned set (newest→oldest), content + ids
         private int _pinnedIndex;
