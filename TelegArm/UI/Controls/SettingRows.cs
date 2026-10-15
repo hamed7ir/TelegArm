@@ -602,7 +602,7 @@ namespace TelegArm.UI.Controls
             if (!Enabled || _opts.Length == 0 || _menu != null) return;
             int dpi = Dpi.Of(this);
             var menu = new ThemedContextMenuStrip();
-            menu.Font = FontHelper.UiAt(10f, dpi);   // shared: Control never disposes its Font
+            menu.FontPt = 10f;   // step 3.1: applied at the open point's DPI when the menu opens
             for (int i = 0; i < _opts.Length; i++)
             {
                 int index = i;
@@ -625,7 +625,7 @@ namespace TelegArm.UI.Controls
                 m.Dispose();
             };
             _menu = menu;
-            menu.Show(this, new Point(geo.Value.X, Height - Dpi.Px(6, dpi)));
+            menu.ShowAt(this, new Point(geo.Value.X, Height - Dpi.Px(6, dpi)));
         }
 
         protected override void Dispose(bool disposing)

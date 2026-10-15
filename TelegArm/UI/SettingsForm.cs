@@ -839,16 +839,26 @@ namespace TelegArm.UI
             // SCROLL-SMOOTH-T1 A/B: composited scrolling (the style participates in handle creation).
             var compSw = new ToggleRow("Smoother scrolling (composited)", s.CompositedScroll) { Subtitle = "Less row overlap while scrolling · after restart" };
             compSw.Changed += (snd, ev) => { s.CompositedScroll = compSw.On; s.Save(); };
-            // DPI-MODE-TOGGLE: opt-in DPI-unaware declaration (STEP 0.4: DpiMode is the source of truth; Save mirrors it).
-            var dpiSw = new ToggleRow("Proportional scaling on high-DPI displays", s.DpiUnaware) { Subtitle = "Fixes mismatched sizes; blurry · after restart" };
-            dpiSw.Changed += (snd, ev) => { s.DpiMode = dpiSw.On ? "Unaware" : ""; s.Save(); };
+            // Step 3.7: the scaling MODE (STEP 0.4: DpiMode is the source of truth; Save mirrors DpiUnaware). Automatic =
+            // per-monitor, the build default since 3.7 (stored as ""); System = one DPI for the session; Compatibility =
+            // DPI-unaware, Windows stretches everything (blurry, but proportional) — the off-switch plan §0.4 asks for.
+            // (It was a toggle that only wrote "Unaware" or "", wiping a hand-set "System".)
+            string mode = (s.DpiMode ?? "").Trim().ToLowerInvariant();
+            int modeIdx = mode == "system" ? 1 : mode == "unaware" ? 2 : 0;
+            var dpiSw = new SegmentedRow("Display scaling mode", new[] { "Automatic", "System", "Compatibility" }, modeIdx)
+            { Subtitle = "Compatibility is blurry but proportional · after restart" };
+            dpiSw.SelectedIndexChanged += (snd, ev) =>
+            {
+                s.DpiMode = dpiSw.SelectedIndex == 1 ? "System" : dpiSw.SelectedIndex == 2 ? "Unaware" : "";
+                s.Save();
+            };
             // Step 2.6 (plan 2.6 "Advanced: ChromeMode"): TelegArm's own title bar, or the ordinary Windows frame — the
             // escape hatch of step 1.3, reachable without editing settings.json.
             bool native = string.Equals(s.ChromeMode, "Native", StringComparison.OrdinalIgnoreCase);
             var frame = new SegmentedRow("Window frame", new[] { "TelegArm", "Windows" }, native ? 1 : 0) { Subtitle = "Takes effect after restart" };
             frame.SelectedIndexChanged += (snd, ev) => { s.ChromeMode = frame.SelectedIndex == 1 ? "Native" : ""; s.Save(); };
             // STEP 1.1 — how the process is actually scaled. Tap for the full probe summary.
-            var scale = new ActionRow("Display scaling") { Subtitle = Dpi.Mode + " · " + Dpi.SystemDpi + " dpi — tap for details" };
+            var scale = new ActionRow("Display scaling") { Subtitle = Dpi.Mode + " · " + Dpi.SystemDpi + " dpi · " + Dpi.Request + " — tap for details" };
             scale.Click += (snd, ev) => ThemedDialog.Show(this, "Display scaling", Dpi.ProbeSummary.Replace(" request=", "\nrequest=")
                 .Replace(" call=", "\ncall=").Replace(" mode=", "\nmode=").Replace(" monitors=", "\nmonitors="), "OK");
             page.Section("Display & window", compSw, dpiSw, frame, scale);

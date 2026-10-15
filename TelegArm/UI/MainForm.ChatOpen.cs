@@ -468,8 +468,12 @@ namespace TelegArm.UI
                 string label = "/" + cmd + (string.IsNullOrEmpty(c.description) ? "" : "   —   " + c.description);
                 AddMenuItem(menu, label, () => SendBotCommand(cmd));
             }
-            if (_botMenuButton != null && _botMenuButton.Visible) menu.Show(_botMenuButton, new Point(0, -menu.PreferredSize.Height));
-            else menu.Show(Cursor.Position);
+            if (_botMenuButton != null && _botMenuButton.Visible)
+            {
+                menu.PrepareAt(_botMenuButton.PointToScreen(Point.Empty));   // step 3.1: measured as it opens (font, rows, icons)
+                menu.ShowAt(_botMenuButton, new Point(0, -menu.PreferredSize.Height));
+            }
+            else menu.ShowAt(Cursor.Position);
         }
 
         private async void SendBotCommand(string command)

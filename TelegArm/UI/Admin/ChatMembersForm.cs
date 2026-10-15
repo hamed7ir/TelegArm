@@ -243,7 +243,7 @@ namespace TelegArm.UI.Admin
             if (i < 0 || i >= _users.Count) return;
             var u = _users[i];
             var menu = new ThemedContextMenuStrip();
-            menu.Font = FontHelper.UiAt(10.5f, WindowDpiValue);   // shared: Control never disposes its Font. The row padding is the menu's own.
+            menu.FontPt = 10.5f;   // step 3.1: applied at the open point's DPI when the menu opens. The row padding is the menu's own.
             if (_mode == Mode.Members)
             {
                 AddItem(menu, "Promote to admin", () => PromoteFlow(u, null));
@@ -261,7 +261,7 @@ namespace TelegArm.UI.Admin
                 AddItem(menu, "Unban", () => UnbanFlow(u));
             }
             menu.Closed += (s, e) => BeginInvoke((Action)menu.Dispose);
-            menu.Show(_list, _list.PointToClient(Cursor.Position));   // over the list: the menu sizes itself at this window's DPI
+            menu.ShowAt(_list, _list.PointToClient(Cursor.Position));   // at the cursor: the menu sizes itself at that monitor's DPI
         }
 
         private void AddItem(ContextMenuStrip menu, string text, Action act)

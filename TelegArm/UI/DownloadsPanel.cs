@@ -142,30 +142,44 @@ namespace TelegArm.UI
     /// Dismisses on outside tap (Deactivate) and Esc — the EmojiPicker popup pattern. A pure CONSUMER of
     /// TelegramService roster state: it lists transfers whose chats are closed. Rows subscribe to their
     /// handle's Changed and unsubscribe on close (E-3).
+    ///
+    /// Redesign step 3.3: a plain-Form popup laid out at the DPI of WHERE IT OPENS (the caller passes Dpi.ForPopup), sized
+    /// before Show, and an IDpiHost so anything inside that asks Dpi.Of gets that DPI. Every length is LOGICAL through Px
+    /// at that DPI; the rows and pills take it explicitly. Fonts are shared FontHelper.UiAt fonts (never disposed). On
+    /// WM_DPICHANGED it closes (swallowed, no base) like the emoji popup: it already closes on any outside tap, and the
+    /// next open is sized where it opens. At 96 DPI every value is exactly what it was.
     /// </summary>
-    public sealed class DownloadsPanel : Form
+    public sealed class DownloadsPanel : Form, IDpiHost
     {
         private readonly TelegramService _service;
         private readonly bool _dark;
         private readonly Color _accent;
         private readonly FlowLayoutPanel _list;
         private readonly List<Row> _rows = new List<Row>();
+        private readonly int _dpi;   // step 3.3: the DPI this popup lays out at (where it opened); it closes rather than rescale
 
-        public DownloadsPanel(TelegramService service, bool dark, Color accent)
+        int IDpiHost.Dpi { get { return _dpi; } }
+
+        private int Px(int n) { return Dpi.Px(n, _dpi); }
+
+        /// <param name="dpi">Step 3.3 — the effective DPI where the panel opens: the caller's Dpi.ForPopup(anchor).
+        /// 0 = <see cref="Dpi.DefaultDpi"/>.</param>
+        public DownloadsPanel(TelegramService service, bool dark, Color accent, int dpi)
         {
             _service = service; _dark = dark; _accent = accent;
+            _dpi = dpi > 0 ? dpi : Dpi.DefaultDpi;
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.Manual;
             ShowInTaskbar = false;
-            Size = new Size(420, 380);
+            Size = new Size(Px(420), Px(380));   // sized at its DPI BEFORE Show: the caller positions it by this size
             BackColor = dark ? Color.FromArgb(40, 40, 43) : Color.FromArgb(248, 248, 250);
             KeyPreview = true;
             KeyDown += (s, e) => { if (e.KeyCode == Keys.Escape) Close(); };
             Deactivate += (s, e) => { try { Close(); } catch { } };
             TelegArm.Helpers.AppIcon.Set(this);
 
-            var header = new Panel { Dock = DockStyle.Top, Height = 42, BackColor = dark ? Color.FromArgb(50, 50, 54) : Color.FromArgb(236, 236, 240) };
-            header.Controls.Add(MakeLabel("Downloads", 12, 10, 120, true));
+            var header = new Panel { Dock = DockStyle.Top, Height = Px(42), BackColor = dark ? Color.FromArgb(50, 50, 54) : Color.FromArgb(236, 236, 240) };
+            header.Controls.Add(MakeLabel("Downloads", 12, 10, 120, true));   // logical x, y, width (MakeLabel scales them)
             var btnCancelAll = HeaderButton("Cancel all", Pic.Cancel, false, 0);
             btnCancelAll.Click += (s, e) =>
             {
@@ -189,9 +203,9 @@ namespace TelegArm.UI
             header.Controls.Add(btnCancelAll); header.Controls.Add(btnResumeAll); header.Controls.Add(btnPauseAll);
             Controls.Add(header);
 
-            var footer = new Panel { Dock = DockStyle.Bottom, Height = 36, BackColor = header.BackColor };
+            var footer = new Panel { Dock = DockStyle.Bottom, Height = Px(36), BackColor = header.BackColor };
             var clear = HeaderButton("Clear finished", Pic.Clear, false, 0);
-            clear.Size = new Size(126, 30); clear.Left = Width - 12 - 126; clear.Top = 5;   // wider for the longer label
+            clear.Size = new Size(Px(126), Px(30)); clear.Left = Width - Px(12) - Px(126); clear.Top = Px(5);   // wider for the longer label
             clear.Click += (s, e) => _service.ClearFinishedTransfers();
             footer.Controls.Add(clear);
             Controls.Add(footer);
@@ -215,23 +229,38 @@ namespace TelegArm.UI
             if (Logger.Enabled) System.Diagnostics.Debug.WriteLine("[DLMGR] open n=" + _rows.Count);
         }
 
+        /// <summary><paramref name="x"/>, <paramref name="y"/>, <paramref name="w"/> are LOGICAL; scaled here.</summary>
         private Label MakeLabel(string text, int x, int y, int w, bool bold)
         {
             return new Label
             {
-                Text = text, Location = new Point(x, y), AutoSize = false, Size = new Size(w, 22),
+                Text = text, Location = new Point(Px(x), Px(y)), AutoSize = false, Size = new Size(Px(w), Px(22)),
                 ForeColor = _dark ? Color.FromArgb(230, 230, 235) : Color.FromArgb(40, 40, 45),
-                Font = FontHelper.Ui(bold ? 10f : 8.5f, bold ? FontStyle.Bold : FontStyle.Regular)
+                Font = FontHelper.UiAt(bold ? 10f : 8.5f, _dpi, bold ? FontStyle.Bold : FontStyle.Regular)   // shared: never dispose
             };
         }
 
         private PillButton HeaderButton(string text, Pic glyph, bool primary, int slotFromRight)
         {
-            return new PillButton(text, glyph, primary, _dark, _accent)
+            return new PillButton(text, glyph, primary, _dark, _accent, _dpi)
             {
-                Size = new Size(88, 30),
-                Location = new Point(Width - 12 - 88 - slotFromRight * 94, 6)
+                Size = new Size(Px(88), Px(30)),
+                Location = new Point(Width - Px(12) - Px(88) - slotFromRight * Px(94), Px(6))   // Width is already Px(420)
             };
+        }
+
+        /// <summary>Step 3.3 — WM_DPICHANGED (per-monitor only; inert while the process is system-aware). Swallowed —
+        /// Result 0, no base (WinForms must not scale a plain Form), never the suggested rectangle — and the popup closes,
+        /// as it does on any outside tap; the next open is built at the DPI of where it opens.</summary>
+        protected override void WndProc(ref System.Windows.Forms.Message m)
+        {
+            if (m.Msg == WindowDpi.WM_DPICHANGED)
+            {
+                m.Result = IntPtr.Zero;
+                try { Close(); } catch { }
+                return;
+            }
+            base.WndProc(ref m);
         }
 
         // ── Rounded, themed "pill" buttons with GDI+ glyphs (matches the accent Start button) ──
@@ -243,9 +272,12 @@ namespace TelegArm.UI
             => Color.FromArgb(Math.Min(255, c.R + by), Math.Min(255, c.G + by), Math.Min(255, c.B + by));
 
         /// <summary>Draws a rounded pill (accent-filled if primary, else a themed pill) with a centered
-        /// glyph+label group. Shared by the header/footer PillButtons and the per-row buttons.</summary>
-        private static void DrawPill(Graphics g, Rectangle r, string text, Pic glyph, bool primary, bool hover, bool dark, Color accent)
+        /// glyph+label group. Shared by the header/footer PillButtons and the per-row buttons.
+        /// Step 3.3: the glyph box, gaps and font are LOGICAL at <paramref name="dpi"/> (the popup's); the pill's own shape
+        /// comes from <paramref name="r"/>, which the caller has already scaled.</summary>
+        private static void DrawPill(Graphics g, Rectangle r, string text, Pic glyph, bool primary, bool hover, bool dark, Color accent, int dpi)
         {
+            int P(int v) => Dpi.Px(v, dpi);
             g.SmoothingMode = SmoothingMode.AntiAlias;
             Color fill, fg;
             if (primary) { fill = hover ? Lighten(accent) : accent; fg = Color.White; }
@@ -260,24 +292,24 @@ namespace TelegArm.UI
             using (var path = DrawHelper.RoundedRect(new Rectangle(r.X, r.Y, r.Width - 1, r.Height - 1), (r.Height - 1) / 2))
                 g.FillPath(b, path);
 
-            int glyphW = 13, gap = 5;
-            using (var f = FontHelper.Ui(8f, primary ? FontStyle.Bold : FontStyle.Regular))
+            int glyphW = P(13), gap = P(5);
+            var f = FontHelper.UiAt(8f, dpi, primary ? FontStyle.Bold : FontStyle.Regular);   // shared: never dispose
+            int tw = string.IsNullOrEmpty(text) ? 0 : TextRenderer.MeasureText(text, f).Width;
+            int groupW = (glyph == Pic.None ? 0 : glyphW + gap) + tw;
+            int left = r.X + Math.Max(P(6), (r.Width - groupW) / 2);
+            if (glyph != Pic.None)
             {
-                int tw = string.IsNullOrEmpty(text) ? 0 : TextRenderer.MeasureText(text, f).Width;
-                int groupW = (glyph == Pic.None ? 0 : glyphW + gap) + tw;
-                int left = r.X + Math.Max(6, (r.Width - groupW) / 2);
-                if (glyph != Pic.None)
-                {
-                    DrawGlyph(g, glyph, left + glyphW / 2f, r.Y + r.Height / 2f, gc, glyphW);
-                    left += glyphW + gap;
-                }
-                if (tw > 0)
-                    TextRenderer.DrawText(g, text, f, new Rectangle(left, r.Y, tw + 4, r.Height), fg,
-                        TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                DrawGlyph(g, glyph, left + glyphW / 2f, r.Y + r.Height / 2f, gc, glyphW, dpi);
+                left += glyphW + gap;
             }
+            if (tw > 0)
+                TextRenderer.DrawText(g, text, f, new Rectangle(left, r.Y, tw + P(4), r.Height), fg,
+                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
         }
 
-        private static void DrawGlyph(Graphics g, Pic glyph, float cx, float cy, Color color, int size)
+        /// <summary>The glyph's shape scales from <paramref name="size"/> (already scaled); the stroke widths and the trash
+        /// can's 1 px lid offset are LOGICAL at <paramref name="dpi"/>.</summary>
+        private static void DrawGlyph(Graphics g, Pic glyph, float cx, float cy, Color color, int size, int dpi)
         {
             float s = size / 2f;
             switch (glyph)
@@ -297,39 +329,41 @@ namespace TelegArm.UI
                     }
                     break;
                 case Pic.Cancel:
-                    using (var p = new Pen(color, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                    using (var p = new Pen(color, Dpi.F(2f, dpi)) { StartCap = LineCap.Round, EndCap = LineCap.Round })
                     {
                         g.DrawLine(p, cx - s * 0.7f, cy - s * 0.7f, cx + s * 0.7f, cy + s * 0.7f);
                         g.DrawLine(p, cx + s * 0.7f, cy - s * 0.7f, cx - s * 0.7f, cy + s * 0.7f);
                     }
                     break;
                 case Pic.Clear:   // small trash can
-                    using (var p = new Pen(color, 1.5f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+                    using (var p = new Pen(color, Dpi.F(1.5f, dpi)) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
                     {
-                        float w = s * 1.3f, top = cy - s * 0.85f, bot = cy + s;
+                        float w = s * 1.3f, top = cy - s * 0.85f, bot = cy + s, one = Dpi.F(1f, dpi);
                         g.DrawLine(p, cx - w * 0.62f, top, cx + w * 0.62f, top);                 // lid
                         g.DrawLine(p, cx - w * 0.22f, top - s * 0.32f, cx + w * 0.22f, top - s * 0.32f); // handle
                         g.DrawLines(p, new[] {                                                   // body
-                            new PointF(cx - w * 0.46f, top + 1),
+                            new PointF(cx - w * 0.46f, top + one),
                             new PointF(cx - w * 0.36f, bot),
                             new PointF(cx + w * 0.36f, bot),
-                            new PointF(cx + w * 0.46f, top + 1) });
+                            new PointF(cx + w * 0.46f, top + one) });
                     }
                     break;
             }
         }
 
-        /// <summary>An owner-drawn rounded pill button (header/footer). Hover-aware; raises Click as normal.</summary>
+        /// <summary>An owner-drawn rounded pill button (header/footer). Hover-aware; raises Click as normal.
+        /// Step 3.3: drawn at the popup's DPI, passed in (the panel closes rather than rescale, so it never changes).</summary>
         private sealed class PillButton : Control
         {
             private readonly Pic _glyph;
             private readonly bool _primary, _dark;
             private readonly Color _accent;
+            private readonly int _dpi;
             private bool _hover;
 
-            public PillButton(string text, Pic glyph, bool primary, bool dark, Color accent)
+            public PillButton(string text, Pic glyph, bool primary, bool dark, Color accent, int dpi)
             {
-                Text = text; _glyph = glyph; _primary = primary; _dark = dark; _accent = accent;
+                Text = text; _glyph = glyph; _primary = primary; _dark = dark; _accent = accent; _dpi = dpi;
                 Cursor = Cursors.Hand;
                 SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
                          | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw
@@ -344,7 +378,7 @@ namespace TelegArm.UI
             {
                 var g = e.Graphics;
                 g.Clear(Parent != null ? Parent.BackColor : (_dark ? Color.FromArgb(50, 50, 54) : Color.FromArgb(236, 236, 240)));
-                DrawPill(g, new Rectangle(0, 0, Width, Height), Text, _glyph, _primary, _hover, _dark, _accent);
+                DrawPill(g, new Rectangle(0, 0, Width, Height), Text, _glyph, _primary, _hover, _dark, _accent, _dpi);
             }
         }
 
@@ -368,31 +402,38 @@ namespace TelegArm.UI
             if (all.Length == 0)
             {
                 var empty = MakeLabel("No active downloads", 16, 16, 300, false);
-                empty.Margin = new Padding(16);
+                empty.Margin = new Padding(Px(16));
                 _list.Controls.Add(empty);
             }
             else foreach (var t in all)
             {
-                var row = new Row(_service, t, _dark, _accent) { Width = _list.ClientSize.Width - 6 };
+                var row = new Row(_service, t, _dark, _accent, _dpi);
+                row.Width = _list.ClientSize.Width - row.Margin.Horizontal;   // 1.x: "- 6", the default 3 + 3 margin (Row sets it at its DPI)
                 _rows.Add(row);
                 _list.Controls.Add(row);
             }
             _list.ResumeLayout();
         }
 
-        /// <summary>One transfer row: name/chat/progress + Pause|Resume|Cancel (or tap-to-open when done).</summary>
+        /// <summary>One transfer row: name/chat/progress + Pause|Resume|Cancel (or tap-to-open when done).
+        /// Step 3.3: every length LOGICAL through P at the popup's DPI, passed in (the panel closes rather than rescale);
+        /// fonts are shared UiAt fonts (never disposed). At 96 DPI every value is exactly what it was.</summary>
         private sealed class Row : Control
         {
             private readonly TelegramService _svc;
             private readonly TelegramService.TransferInfo _ti;
             private readonly bool _dark;
             private readonly Color _accent;
+            private readonly int _dpi;
             private int _tick;
 
-            public Row(TelegramService svc, TelegramService.TransferInfo ti, bool dark, Color accent)
+            private int P(int v) { return Dpi.Px(v, _dpi); }
+
+            public Row(TelegramService svc, TelegramService.TransferInfo ti, bool dark, Color accent, int dpi)
             {
-                _svc = svc; _ti = ti; _dark = dark; _accent = accent;
-                Height = 58;
+                _svc = svc; _ti = ti; _dark = dark; _accent = accent; _dpi = dpi;
+                Height = P(58);
+                Margin = new Padding(P(3));   // the default 3 px margin, made logical (the panel sizes the row by it)
                 Cursor = Cursors.Hand;
                 SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer
                          | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
@@ -417,8 +458,8 @@ namespace TelegArm.UI
 
             // Button zones (right-aligned): [pause/resume] [cancel]
             private int _hoverBtn;   // 0 none, 1 = Btn1, 2 = Btn2
-            private Rectangle Btn1 { get { return new Rectangle(Width - 154, 14, 70, 30); } }
-            private Rectangle Btn2 { get { return new Rectangle(Width - 78, 14, 64, 30); } }
+            private Rectangle Btn1 { get { return new Rectangle(Width - P(154), P(14), P(70), P(30)); } }
+            private Rectangle Btn2 { get { return new Rectangle(Width - P(78), P(14), P(64), P(30)); } }
 
             protected override void OnMouseMove(MouseEventArgs e)
             {
@@ -461,9 +502,8 @@ namespace TelegArm.UI
                 var h = _ti.Handle;
 
                 string name = _ti.FileName ?? ("doc " + _ti.DocId);
-                using (var f = FontHelper.Ui(9f, FontStyle.Bold))
-                    TextRenderer.DrawText(g, name, f, new Rectangle(10, 6, Width - 170, 18), fg,
-                        TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+                TextRenderer.DrawText(g, name, FontHelper.UiAt(9f, _dpi, FontStyle.Bold), new Rectangle(P(10), P(6), Width - P(170), P(18)), fg,   // shared font: never dispose
+                    TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
                 string status = st == DownloadHandle.DState.Downloading ? "downloading"
                               : st == DownloadHandle.DState.Paused ? "paused"
                               : st == DownloadHandle.DState.Done ? "done — tap to open"
@@ -473,14 +513,13 @@ namespace TelegArm.UI
                 string line = (_ti.ChatTitle != null ? _ti.ChatTitle + "‎  •  " : "")
                             + (h != null && h.Total > 0 ? "‎" + DrawHelper.FormatSize(h.Transmitted) + " / " + DrawHelper.FormatSize(h.Total) + "  •  " : "")
                             + status;
-                using (var f = FontHelper.Ui(7.5f))
-                    TextRenderer.DrawText(g, line, f, new Rectangle(10, 24, Width - 170, 14), sub,
-                        TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+                TextRenderer.DrawText(g, line, FontHelper.UiAt(7.5f, _dpi), new Rectangle(P(10), P(24), Width - P(170), P(14)), sub,   // shared font: never dispose
+                    TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
 
                 // progress bar
                 float frac = h != null ? h.Fraction : 0f;
                 if (st == DownloadHandle.DState.Done) frac = 1f;
-                var bar = new Rectangle(10, 44, Width - 170, 5);
+                var bar = new Rectangle(P(10), P(44), Width - P(170), P(5));
                 using (var bb = new SolidBrush(_dark ? Color.FromArgb(70, 70, 76) : Color.FromArgb(215, 215, 220))) g.FillRectangle(bb, bar);
                 if (frac > 0)
                     using (var ab = new SolidBrush(st == DownloadHandle.DState.Paused ? sub : _accent))
@@ -491,11 +530,11 @@ namespace TelegArm.UI
                     || st == DownloadHandle.DState.Failed || st == DownloadHandle.DState.Cancelled)
                 {
                     bool resume = st != DownloadHandle.DState.Downloading;
-                    DrawPill(g, Btn1, resume ? "Resume" : "Pause", resume ? Pic.Play : Pic.Pause, resume, _hoverBtn == 1, _dark, _accent);
+                    DrawPill(g, Btn1, resume ? "Resume" : "Pause", resume ? Pic.Play : Pic.Pause, resume, _hoverBtn == 1, _dark, _accent, _dpi);
                     if (st == DownloadHandle.DState.Downloading || st == DownloadHandle.DState.Paused)
-                        DrawPill(g, Btn2, "Cancel", Pic.Cancel, false, _hoverBtn == 2, _dark, _accent);
+                        DrawPill(g, Btn2, "Cancel", Pic.Cancel, false, _hoverBtn == 2, _dark, _accent, _dpi);
                 }
-                using (var pen = new Pen(_dark ? Color.FromArgb(60, 60, 66) : Color.FromArgb(228, 228, 233)))
+                using (var pen = new Pen(_dark ? Color.FromArgb(60, 60, 66) : Color.FromArgb(228, 228, 233)))   // a 1 px hairline at every DPI, as PinnedRowControl's
                     g.DrawLine(pen, 0, Height - 1, Width, Height - 1);
             }
         }

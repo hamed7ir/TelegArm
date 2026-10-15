@@ -240,7 +240,7 @@ namespace TelegArm.UI
             // second copy of this is dangerous rather than merely untidy.
             ProxyShare.AddMenuItems(menu, this, _url, Flash);
             menu.Closed += (s, e) => BeginInvoke((Action)menu.Dispose);
-            menu.Show(screenPt);
+            menu.ShowAt(screenPt);
         }
 
         /// <summary>Two-second inline confirmation. One shared one-shot timer, restarted per flash.</summary>

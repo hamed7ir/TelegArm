@@ -24,11 +24,19 @@ namespace TelegArm.UI
             foreach (var em in QuickReactions)
             {
                 var e2 = em;
-                var it = new ToolStripMenuItem(em) { Font = FontHelper.Ui(11f) };
+                var it = new ToolStripMenuItem(em) { Font = FontHelper.UiAt(11f, WindowDpiValue) };   // shared: never disposed
                 it.Click += (s, e) => BeginInvoke((Action)(() => ToggleReaction(msg, e2)));
                 react.DropDownItems.Add(it);
             }
             menu.Items.Add(react);
+            // Step 3.1: the 11 pt at the MENU's DPI (its open point's). The menu's own Opening ran first and set MenuDpi.
+            var themed = menu as ThemedContextMenuStrip;
+            if (themed != null)
+                themed.Opening += (s, e) =>
+                {
+                    var f = FontHelper.UiAt(11f, themed.MenuDpi > 0 ? themed.MenuDpi : WindowDpiValue);
+                    foreach (ToolStripItem ri in react.DropDownItems) ri.Font = f;
+                };
         }
 
         /// <summary>Reads a message's reactions into bubble chips (skips custom-emoji reactions).</summary>
@@ -269,7 +277,7 @@ namespace TelegArm.UI
         private void ShowPollVoters(int msgId, string option, string optionText)
         {
             if (_selectedChat == null) return;
-            using (var dlg = new PollVotersForm(_service, _selectedChat.Peer, msgId, option, optionText, _dark, _accent))
+            using (var dlg = new PollVotersForm(_service, _selectedChat.Peer, msgId, option, optionText, _dark, _accent, Dpi.Of(this)))   // step 3.3: laid out at its owner's DPI
                 dlg.ShowDialog(this);
         }
 
@@ -384,7 +392,8 @@ namespace TelegArm.UI
             AddMenuItem(menu, "▣   Photo or File", () => OpenAttachmentDialog());
             AddMenuItem(menu, "⏺   Round Video", () => OpenRoundRecorder());
             AddMenuItem(menu, "📊   Create Poll", () => OpenCreatePoll());
-            menu.Show(_attachButton, new Point(0, -menu.PreferredSize.Height));
+            menu.PrepareAt(_attachButton.PointToScreen(Point.Empty));   // step 3.1: measured as it opens (font, rows, icons)
+            menu.ShowAt(_attachButton, new Point(0, -menu.PreferredSize.Height));
         }
 
         private void OpenRoundRecorder()
@@ -407,7 +416,7 @@ namespace TelegArm.UI
         private async void OpenCreatePoll()
         {
             if (_selectedChat == null) return;
-            using (var dlg = new CreatePollForm(_dark, _accent))
+            using (var dlg = new CreatePollForm(_dark, _accent, Dpi.Of(this)))   // step 3.3: laid out at its owner's DPI
             {
                 if (dlg.ShowDialog(this) != DialogResult.OK) return;
                 try

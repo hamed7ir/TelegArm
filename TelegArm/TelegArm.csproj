@@ -201,6 +201,8 @@
     <Compile Include="Helpers\DiagReport.cs" />
     <Compile Include="Helpers\ShotRig.cs" />
     <Compile Include="Helpers\Dpi.cs" />
+    <Compile Include="Helpers\DpiCaches.cs" />
+    <Compile Include="Helpers\Platform.cs" />
     <Compile Include="Helpers\IDpiAware.cs" />
     <Compile Include="Helpers\DpiScaler.cs" />
     <Compile Include="Helpers\FontCache.cs" />
@@ -225,6 +227,7 @@
     <Compile Include="UI\Controls\ThemedLabel.cs" />
     <Compile Include="UI\Controls\EmptyState.cs" />
     <Compile Include="UI\Controls\SettingRows.cs" />
+    <Compile Include="UI\Controls\SliderRow.cs" />
     <Compile Include="UI\Controls\SettingRowsExtra.cs" />
     <Compile Include="UI\Controls\EmojiComposer.cs" />
     <Compile Include="UI\DialogProbe.cs" />

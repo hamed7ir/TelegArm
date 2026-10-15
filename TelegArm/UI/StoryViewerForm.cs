@@ -24,13 +24,21 @@ namespace TelegArm.UI
     /// <summary>STORIES-BUILD-2/3: the full-screen story VIEWER. Owner-draws the photo (or hosts a VlcVideoControl
     /// for a video story) + a segmented progress bar + top/bottom overlays; auto-advances (photos ~5s, videos over
     /// their real duration), tap-left/right steps, hold pauses, swipe-down/✕/Esc closes, advances peer-to-peer.
-    /// Marks stories seen on view (dims the ring).</summary>
-    internal sealed class StoryViewerForm : Form
+    /// Marks stories seen on view (dims the ring).
+    /// Step 3.6: per-window DPI (a plain Form, so its own WindowDpi): full screen on the screen it opens over, lengths
+    /// through Px at that DPI, shared pixel fonts; a rescale re-covers the screen and re-measures the caption.</summary>
+    internal sealed class StoryViewerForm : Form, IDpiHost, IDpiAware
     {
         private const int StoryMs = 5000;   // photo dwell time
         private const int TickMs = 50;      // ~20fps progress fill
-        private const int VideoTopH = 56;   // video is inset below this chrome strip (progress + header live here)
-        private const int SideW = 48;       // left/right nav-chevron strip; video is inset by this so the ‹ › show over it
+        private const int VideoTopH = 56;   // logical: video is inset below this chrome strip (progress + header live here)
+        private const int SideW = 48;       // logical: left/right nav-chevron strip; video is inset by this so the ‹ › show over it
+
+        private readonly WindowDpi _windowDpi;
+        private bool _shown;                // OnShown ran: from then on only WindowDpi moves the window
+        private int CurDpi { get { return _windowDpi.Dpi; } }
+        private int Px(int n) { return Dpi.Px(n, _windowDpi.Dpi); }
+        int IDpiHost.Dpi { get { return _windowDpi.Dpi; } }
 
         private readonly TelegramService _service;
         private readonly List<StoryPeerRef> _peers;
@@ -84,9 +92,10 @@ namespace TelegArm.UI
             _preloaded = preloaded;                          // null for the tray → fetch as before; the profile supplies its posted/pinned list
             _startPeerIdx = _peerIdx;
 
+            _windowDpi = new WindowDpi(this);
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.Manual;
-            Bounds = Screen.PrimaryScreen.Bounds;
+            PlaceOnScreen();   // step 3.6: was Screen.PrimaryScreen.Bounds; re-placed on the owner's screen in OnHandleCreated
             BackColor = Color.Black;
             KeyPreview = true;
             ShowInTaskbar = false;
@@ -103,8 +112,66 @@ namespace TelegArm.UI
 
         protected override void OnShown(EventArgs e)
         {
+            _shown = true;
             base.OnShown(e);
             EnterPeer(_peerIdx, false);
+        }
+
+        // ── DPI + placement (step 3.6) ───────────────────────────────────────
+        /// <summary>The screen the viewer covers: its owner's (ShowDialog sets Owner before the handle exists), else the
+        /// active form's, else the cursor's.</summary>
+        private Screen PickScreen()
+        {
+            try
+            {
+                Form anchor = Owner;
+                if (anchor == null || anchor.IsDisposed || !anchor.IsHandleCreated) anchor = Form.ActiveForm;
+                if (anchor != null && !ReferenceEquals(anchor, this) && !anchor.IsDisposed && anchor.IsHandleCreated)
+                    return Screen.FromHandle(anchor.Handle);
+            }
+            catch { }
+            try { return Screen.FromPoint(Cursor.Position); } catch { }
+            return Screen.PrimaryScreen;
+        }
+
+        /// <summary>Full screen on <see cref="PickScreen"/>, at that screen's effective DPI (Dpi.ForPopup) BEFORE it is
+        /// shown. Only before OnShown: nothing DPI-derived exists yet (caption and video come after), so the DPI is taken
+        /// over without a rescale.</summary>
+        private void PlaceOnScreen()
+        {
+            var b = PickScreen().Bounds;
+            _windowDpi.Adopt(Dpi.ForPopup(new Point(b.Left + b.Width / 2, b.Top + b.Height / 2)));
+            Bounds = b;
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            if (!_shown) PlaceOnScreen();       // the owner is known now
+            _windowDpi.Resync("handle");        // the window's real monitor DPI wins (inert while system-aware)
+        }
+
+        protected override void OnActivated(EventArgs e) { base.OnActivated(e); _windowDpi.Resync("activated"); }
+
+        protected override void WndProc(ref System.Windows.Forms.Message m)
+        {
+            if (_windowDpi != null && _windowDpi.OnMessage(ref m)) return;   // WM_DPICHANGED: ours, never WinForms' (no base call)
+            base.WndProc(ref m);
+        }
+
+        /// <summary>DpiScaler has moved the window (suggested / scaled-in-place rect) and ratio-scaled the video's bounds:
+        /// re-cover the screen it is on now and re-derive the video inset and the caption from logical values.</summary>
+        void IDpiAware.OnDpiChanged(int oldDpi, int newDpi)
+        {
+            try { Bounds = Screen.FromHandle(Handle).Bounds; } catch { }
+            if (_caption != null)
+            {
+                _caption.LayoutDpi = newDpi;
+                var st = _storyIdx >= 0 && _storyIdx < _stories.Count ? _stories[_storyIdx] : null;
+                MeasureCaption(st != null ? st.caption : null);
+            }
+            LayoutVideo();
+            Invalidate();
         }
 
         // ── navigation ───────────────────────────────────────────────────────
@@ -158,7 +225,7 @@ namespace TelegArm.UI
             _pendingViews.Add(st.id);   // VIEW-REGISTER: this story is now viewed → register on FlushSeen
 
             _caption?.Dispose();
-            _caption = string.IsNullOrEmpty(st.caption) ? null : new InlineText(st.caption, st.entities, null);
+            _caption = string.IsNullOrEmpty(st.caption) ? null : new InlineText(st.caption, st.entities, null) { LayoutDpi = CurDpi };
             MeasureCaption(st.caption);
 
             LoadMedia(st);
@@ -256,9 +323,10 @@ namespace TelegArm.UI
         private void LayoutVideo()
         {
             if (_video == null) return;
-            int botH = _caption != null ? Math.Min(_captionH + 30, ClientSize.Height / 3) : 0;
+            int botH = _caption != null ? Math.Min(_captionH + Px(30), ClientSize.Height / 3) : 0;
             // Inset by SideW on both sides so the nav chevrons (drawn in OnPaint) stay visible over the native video.
-            _video.Bounds = new Rectangle(SideW, VideoTopH, Math.Max(1, ClientSize.Width - 2 * SideW), Math.Max(1, ClientSize.Height - VideoTopH - botH));
+            int side = Px(SideW), top = Px(VideoTopH);
+            _video.Bounds = new Rectangle(side, top, Math.Max(1, ClientSize.Width - 2 * side), Math.Max(1, ClientSize.Height - top - botH));
         }
 
         private void StopVideo()
@@ -283,13 +351,13 @@ namespace TelegArm.UI
                 float pos = _video.Position;
                 if (pos > 0f) _progress = Math.Min(1f, pos);          // fill tracks the ACTUAL video position
                 if (_videoPlayStarted && (DateTime.UtcNow - _videoStartedAt).TotalSeconds > 62) { NextStory(); return; }   // safety cap
-                Invalidate(new Rectangle(0, 0, ClientSize.Width, VideoTopH));
+                Invalidate(new Rectangle(0, 0, ClientSize.Width, Px(VideoTopH)));
                 return;
             }
             // photo OR video-fallback (VLC unavailable / unsupported): the fixed dwell timer
             _progress += TickMs / (float)StoryMs;
             if (_progress >= 1f) { _progress = 1f; NextStory(); }
-            else Invalidate(new Rectangle(0, 0, ClientSize.Width, _videoStory ? VideoTopH : 20));
+            else Invalidate(new Rectangle(0, 0, ClientSize.Width, Px(_videoStory ? VideoTopH : 20)));
         }
 
         // ── mark-seen ──────────────────────────────────────────────────────────
@@ -320,7 +388,9 @@ namespace TelegArm.UI
 
         internal void PointerMove(int x, int y)
         {
-            if (_down && y - _downY > 120 && Math.Abs(x - _downX) < 160) _swiping = true;   // swipe down to close
+            // swipe down to close; finger distances are PHYSICAL (the monitor's raw DPI, never the interface scale)
+            int mon = _windowDpi.MonitorDpi;
+            if (_down && y - _downY > Dpi.Px(120, mon) && Math.Abs(x - _downX) < Dpi.Px(160, mon)) _swiping = true;
         }
 
         internal void PointerUp(int x, int y)
@@ -363,7 +433,7 @@ namespace TelegArm.UI
         protected override void OnPaint(PaintEventArgs e)
         {
             var g = e.Graphics;
-            int cw = ClientSize.Width, ch = ClientSize.Height;
+            int cw = ClientSize.Width, ch = ClientSize.Height, dpi = CurDpi;
 
             if (!_videoStory)
             {
@@ -373,23 +443,24 @@ namespace TelegArm.UI
                     g.InterpolationMode = InterpolationMode.HighQualityBicubic;
                     g.DrawImage(_curImage, r);
                 }
-                else if (_loading) DrawCenteredText(g, cw, ch, "Loading…", 12f, Color.FromArgb(180, 180, 180));
-                using (var scrim = new LinearGradientBrush(new Rectangle(0, 0, cw, 96),
+                else if (_loading) DrawCenteredText(g, cw, ch, "Loading…", 12f, Color.FromArgb(180, 180, 180), dpi);
+                int scrimH = Px(96);
+                using (var scrim = new LinearGradientBrush(new Rectangle(0, 0, cw, scrimH),
                            Color.FromArgb(150, 0, 0, 0), Color.FromArgb(0, 0, 0, 0), LinearGradientMode.Vertical))
-                    g.FillRectangle(scrim, 0, 0, cw, 96);
+                    g.FillRectangle(scrim, 0, 0, cw, scrimH);
             }
             else
             {
                 // VIDEO: the VLC child covers the inset middle; draw the chrome in the uncovered top/bottom strips.
                 g.Clear(Color.Black);
-                if (_loading) DrawCenteredText(g, cw, ch, "Loading…", 12f, Color.FromArgb(180, 180, 180));
-                else if (_videoFallback) DrawCenteredText(g, cw, ch, "Video story", 13f, Color.FromArgb(200, 200, 200));
+                if (_loading) DrawCenteredText(g, cw, ch, "Loading…", 12f, Color.FromArgb(180, 180, 180), dpi);
+                else if (_videoFallback) DrawCenteredText(g, cw, ch, "Video story", 13f, Color.FromArgb(200, 200, 200), dpi);
             }
 
             DrawProgress(g, cw);
             DrawHeader(g, cw);
             DrawNavIndicators(g, cw, ch);
-            if (_caption != null && e.ClipRectangle.Bottom > ch - (_captionH + 40)) DrawCaption(g, cw, ch);
+            if (_caption != null && e.ClipRectangle.Bottom > ch - (_captionH + Px(40))) DrawCaption(g, cw, ch);
         }
 
         /// <summary>The tappable-zone HINTS: a ‹ on the left (previous) and a › on the right (next), vertically
@@ -398,17 +469,17 @@ namespace TelegArm.UI
         private void DrawNavIndicators(Graphics g, int cw, int ch)
         {
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            int cy = ch / 2;
-            if (_peerIdx > 0 || _storyIdx > 0) DrawChevron(g, 26, cy, true);   // has a previous story/peer
-            DrawChevron(g, cw - 26, cy, false);                               // next always exists (story, peer, or close)
+            int cy = ch / 2, inset = Px(26), dpi = CurDpi;
+            if (_peerIdx > 0 || _storyIdx > 0) DrawChevron(g, inset, cy, true, dpi);   // has a previous story/peer
+            DrawChevron(g, cw - inset, cy, false, dpi);                               // next always exists (story, peer, or close)
         }
 
-        private static void DrawChevron(Graphics g, int cx, int cy, bool left)
+        private static void DrawChevron(Graphics g, int cx, int cy, bool left, int dpi)
         {
-            const int r = 17, d = 6;
+            int r = Dpi.Px(17, dpi), d = Dpi.Px(6, dpi);
             using (var b = new SolidBrush(Color.FromArgb(70, 0, 0, 0)))
                 g.FillEllipse(b, cx - r, cy - r, r * 2, r * 2);
-            using (var pen = new Pen(Color.White, 2.4f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+            using (var pen = new Pen(Color.White, Dpi.F(2.4f, dpi)) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
             {
                 Point[] pts = left
                     ? new[] { new Point(cx + d, cy - d), new Point(cx - d, cy), new Point(cx + d, cy + d) }
@@ -420,7 +491,7 @@ namespace TelegArm.UI
         private void DrawProgress(Graphics g, int cw)
         {
             int n = _stories.Count; if (n <= 0) return;
-            const int pad = 8, gap = 4, y = 10, h = 3;
+            int pad = Px(8), gap = Px(4), y = Px(10), h = Px(3);
             float segW = (cw - 2 * pad - gap * (n - 1)) / (float)n;
             if (segW <= 0) return;
             for (int i = 0; i < n; i++)
@@ -437,7 +508,8 @@ namespace TelegArm.UI
             if (_peerIdx < 0 || _peerIdx >= _peers.Count) return;
             var p = _peers[_peerIdx];
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            const int ax = 12, ay = 22, d = 30;
+            int dpi = CurDpi;
+            int ax = Px(12), ay = Px(22), d = Px(30);
             var avr = new Rectangle(ax, ay, d, d);
             var img = _avatar != null ? _avatar(p.PeerId) : null;
             if (img != null)
@@ -446,38 +518,37 @@ namespace TelegArm.UI
             {
                 using (var b = new SolidBrush(DrawHelper.AvatarColor(p.PeerId))) g.FillEllipse(b, avr);
                 string ini = Initial(p.Name);
-                using (var f = FontHelper.For(ini, 12f, FontStyle.Bold))   // owned point font (3.6 converts this form)
-                    DrawHelper.DrawInitial(g, ini, f, avr, Color.White);   // ink-centred (owner report 2026-10-14)
+                DrawHelper.DrawInitial(g, ini, FontHelper.ForAt(ini, 12f, dpi, FontStyle.Bold), avr, Color.White);   // ink-centred (owner report 2026-10-14); shared font: never dispose
             }
             string time = _storyIdx >= 0 && _storyIdx < _stories.Count ? RelTime(_stories[_storyIdx].date) : "";
-            using (var nf = FontHelper.For(p.Name ?? "", 10.5f, FontStyle.Bold))
-                TextRenderer.DrawText(g, p.Name ?? "", nf, new Rectangle(ax + d + 8, ay, cw - (ax + d + 8) - 60, 18), Color.White,
-                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
-            using (var tf = FontHelper.Ui(8.5f))
-                TextRenderer.DrawText(g, time, tf, new Rectangle(ax + d + 8, ay + 16, 200, 14), Color.FromArgb(200, 200, 200),
-                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
-            _closeRect = new Rectangle(cw - 46, 16, 34, 34);
-            using (var pen = new Pen(Color.White, 2f))
+            int tx = ax + d + Px(8);
+            TextRenderer.DrawText(g, p.Name ?? "", FontHelper.ForAt(p.Name ?? "", 10.5f, dpi, FontStyle.Bold),   // shared: never dispose
+                new Rectangle(tx, ay, cw - tx - Px(60), Px(18)), Color.White,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+            TextRenderer.DrawText(g, time, FontHelper.UiAt(8.5f, dpi), new Rectangle(tx, ay + Px(16), Px(200), Px(14)), Color.FromArgb(200, 200, 200),
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+            _closeRect = new Rectangle(cw - Px(46), Px(16), Px(34), Px(34));
+            int k = Px(9);   // the ✕'s inset in its tap square
+            using (var pen = new Pen(Color.White, Dpi.F(2f, dpi)))
             {
-                g.DrawLine(pen, _closeRect.Left + 9, _closeRect.Top + 9, _closeRect.Right - 9, _closeRect.Bottom - 9);
-                g.DrawLine(pen, _closeRect.Right - 9, _closeRect.Top + 9, _closeRect.Left + 9, _closeRect.Bottom - 9);
+                g.DrawLine(pen, _closeRect.Left + k, _closeRect.Top + k, _closeRect.Right - k, _closeRect.Bottom - k);
+                g.DrawLine(pen, _closeRect.Right - k, _closeRect.Top + k, _closeRect.Left + k, _closeRect.Bottom - k);
             }
         }
 
         private void DrawCaption(Graphics g, int cw, int ch)
         {
-            int maxW = Math.Max(40, cw - 24);
-            using (var f = FontHelper.For(" ", 10.5f))
-            {
-                _caption.Measure(g, maxW, f);
-                _caption.Position(maxW, IsRtlCaption());
-                int h = _caption.Height;
-                int y = ch - h - 26;
-                using (var scrim = new LinearGradientBrush(new Rectangle(0, y - 40, cw, h + 66),
-                           Color.FromArgb(0, 0, 0, 0), Color.FromArgb(180, 0, 0, 0), LinearGradientMode.Vertical))
-                    g.FillRectangle(scrim, 0, y - 40, cw, h + 66);
-                _caption.Paint(g, 12, y, Color.White, Color.FromArgb(130, 190, 255), f, true, _accent, false);
-            }
+            int maxW = Math.Max(Px(40), cw - Px(24));
+            var f = FontHelper.ForAt(" ", 10.5f, CurDpi);   // shared pixel font (the caption's LayoutDpi): never dispose
+            _caption.Measure(g, maxW, f);
+            _caption.Position(maxW, IsRtlCaption());
+            int h = _caption.Height;
+            int y = ch - h - Px(26);
+            int top = y - Px(40), sh = h + Px(66);
+            using (var scrim = new LinearGradientBrush(new Rectangle(0, top, cw, sh),
+                       Color.FromArgb(0, 0, 0, 0), Color.FromArgb(180, 0, 0, 0), LinearGradientMode.Vertical))
+                g.FillRectangle(scrim, 0, top, cw, sh);
+            _caption.Paint(g, Px(12), y, Color.White, Color.FromArgb(130, 190, 255), f, true, _accent, false);
         }
 
         private void MeasureCaption(string capText)
@@ -486,10 +557,10 @@ namespace TelegArm.UI
             if (_caption == null) return;
             try
             {
-                using (var g = CreateGraphics())
-                using (var f = FontHelper.For(capText ?? " ", 10.5f))
+                using (var g = CreateGraphics())   // pixel-unit font: the measure does not depend on this DC's DPI
                 {
-                    int maxW = Math.Max(40, ClientSize.Width - 24);
+                    var f = FontHelper.ForAt(capText ?? " ", 10.5f, CurDpi);   // shared: never dispose
+                    int maxW = Math.Max(Px(40), ClientSize.Width - Px(24));
                     _caption.Measure(g, maxW, f);
                     _caption.Position(maxW, IsRtlCaption());
                     _captionH = _caption.Height;
@@ -513,11 +584,10 @@ namespace TelegArm.UI
             return new Rectangle(bounds.X + (bounds.Width - w) / 2, bounds.Y + (bounds.Height - h) / 2, w, h);
         }
 
-        private static void DrawCenteredText(Graphics g, int cw, int ch, string text, float size, Color color)
+        private static void DrawCenteredText(Graphics g, int cw, int ch, string text, float size, Color color, int dpi)
         {
-            using (var f = FontHelper.Ui(size))
-                TextRenderer.DrawText(g, text, f, new Rectangle(0, 0, cw, ch), color,
-                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            TextRenderer.DrawText(g, text, FontHelper.UiAt(size, dpi), new Rectangle(0, 0, cw, ch), color,   // shared: never dispose
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         }
 
         private static string Initial(string name)

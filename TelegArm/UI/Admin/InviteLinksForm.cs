@@ -159,7 +159,7 @@ namespace TelegArm.UI.Admin
             if (i < 0 || i >= _invites.Count) return;
             var inv = _invites[i];
             var menu = new ThemedContextMenuStrip();
-            menu.Font = FontHelper.UiAt(10.5f, WindowDpiValue);   // shared: Control never disposes its Font. The row padding is the menu's own.
+            menu.FontPt = 10.5f;   // step 3.1: applied at the open point's DPI when the menu opens. The row padding is the menu's own.
             var copy = new ToolStripMenuItem("Copy link");
             copy.Click += (s, e) => { try { Clipboard.SetText(inv.link ?? ""); } catch { } };
             menu.Items.Add(copy);
@@ -170,7 +170,7 @@ namespace TelegArm.UI.Admin
                 menu.Items.Add(revoke);
             }
             menu.Closed += (s, e) => BeginInvoke((Action)menu.Dispose);
-            menu.Show(_list, _list.PointToClient(Cursor.Position));   // over the list: the menu sizes itself at this window's DPI
+            menu.ShowAt(_list, _list.PointToClient(Cursor.Position));   // at the cursor: the menu sizes itself at that monitor's DPI
         }
 
         private async void RevokeFlow(ChatInviteExported inv)

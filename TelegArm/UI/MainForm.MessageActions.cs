@@ -103,7 +103,7 @@ namespace TelegArm.UI
             if (menu.Items.Count == 0) { menu.Dispose(); return; }
 
             menu.Closed += (s, e) => BeginInvoke((Action)menu.Dispose);
-            menu.Show(screenPt);
+            menu.ShowAt(screenPt);
         }
 
         /// <summary>Pins a message after asking who should see it (everyone vs. just me).</summary>
@@ -216,7 +216,14 @@ namespace TelegArm.UI
             if (_pinnedMessages == null || _pinnedMessages.Count == 0) return;
             if (_pinnedListForm != null && !_pinnedListForm.IsDisposed) { _pinnedListForm.Activate(); return; }
 
-            var form = new PinnedListForm(_dark, _accent);
+            // Step 3.3: the popup is built at the DPI of WHERE IT OPENS: under the pinned bar's right end, else this window's
+            // top centre — clamped into `scr`, as the popup itself is below (the right edge is exclusive, hence the - 1).
+            var scr = Screen.FromControl(this).WorkingArea;   // physical screen maths: stays raw
+            var at = _pinnedBar != null && _pinnedBar.Visible
+                ? _pinnedBar.PointToScreen(new Point(_pinnedBar.Width - 1, _pinnedBar.Height))
+                : PointToScreen(new Point(Width / 2, Px(80)));
+            var form = new PinnedListForm(_dark, _accent,
+                Dpi.ForPopup(new Point(Math.Max(scr.Left, Math.Min(at.X, scr.Right - 1)), Math.Max(scr.Top, Math.Min(at.Y, scr.Bottom - 1)))));
             _pinnedListForm = form;
             form.JumpRequested += id => { ScrollToAndHighlight(id); if (!form.IsDisposed) form.Close(); };
             form.ContextRequested += OnPinnedRowContext;
@@ -227,7 +234,6 @@ namespace TelegArm.UI
             var anchor = _pinnedBar != null && _pinnedBar.Visible
                 ? _pinnedBar.PointToScreen(new Point(_pinnedBar.Width - form.Width, _pinnedBar.Height))
                 : PointToScreen(new Point((Width - form.Width) / 2, Px(80)));
-            var scr = Screen.FromControl(this).WorkingArea;   // physical screen maths: stays raw
             int fx = Math.Max(scr.Left, Math.Min(anchor.X, scr.Right - form.Width));
             int fy = Math.Max(scr.Top, Math.Min(anchor.Y, scr.Bottom - form.Height));
             form.Location = new Point(fx, fy);
@@ -241,7 +247,7 @@ namespace TelegArm.UI
             AddMenuItem(menu, "↧   Jump to message", () => { ScrollToAndHighlight(msgId); _pinnedListForm?.Close(); });
             AddMenuItem(menu, "📌   Unpin", () => UnpinFromList(msgId));
             menu.Closed += (s, e) => BeginInvoke((Action)menu.Dispose);
-            menu.Show(screenPt);
+            menu.ShowAt(screenPt);
         }
 
         /// <summary>Unpin from the list: for-everyone where the peer allows it, else just on our side.</summary>

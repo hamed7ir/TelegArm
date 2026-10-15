@@ -178,6 +178,16 @@ namespace TelegArm.Helpers
         /// <summary>Convenience: gunzip + open a .tgs in one call.</summary>
         public static LottieClip OpenTgs(byte[] tgs) => Open(DecompressTgs(tgs));
 
+        /// <summary>Step 3.6 — the square raster size for a Lottie shown in a <paramref name="logical"/>-px box at
+        /// <paramref name="dpi"/>: Px(logical, dpi), capped at 1.5× logical on ARM32 (render cost grows with size², every
+        /// frame on the UI thread of a Tegra 3). Exactly <paramref name="logical"/> at 96.</summary>
+        public static int RenderSize(int logical, int dpi)
+        {
+            int px = Dpi.Px(logical, dpi);
+            if (Platform.IsArm32) px = Math.Min(px, (int)Math.Round(1.5 * logical, MidpointRounding.AwayFromZero));
+            return Math.Max(1, px);
+        }
+
         // Internal native shims used by LottieClip (keeps all P/Invoke in one place).
         internal static void Render(IntPtr h, int frame, IntPtr buffer, int size, int stride)
             => lottie_animation_render(h, (UIntPtr)(uint)frame, buffer,
@@ -250,7 +260,7 @@ namespace TelegArm.Helpers
         }
 
         private readonly LottieClip _clip;
-        private readonly Bitmap _buffer;
+        private Bitmap _buffer;                 // replaced only by Resize, on the UI thread (the ticker's thread)
         private readonly Action<Image> _onFrame;
         private readonly int _startTick;
         private int _lastFrame = -1;
@@ -274,6 +284,25 @@ namespace TelegArm.Helpers
             _globallyPaused = paused;
             if (paused) _ticker.Stop();
             else lock (_active) { if (_active.Count > 0) _ticker.Start(); }
+        }
+
+        /// <summary>Step 3.6 — re-rasterises at <paramref name="size"/> px (a DPI change; pass RLottie.RenderSize). UI thread
+        /// only, like the shared ticker. The current frame is rendered into the NEW buffer and handed to the consumer before
+        /// the old one is disposed, so nothing ever paints a disposed bitmap; on any failure the old buffer stays.</summary>
+        public void Resize(int size)
+        {
+            if (_disposed || size <= 0 || (_buffer != null && _buffer.Width == size)) return;
+            Bitmap nb = null;
+            try
+            {
+                nb = new Bitmap(size, size, PixelFormat.Format32bppPArgb);
+                _clip.RenderInto(nb, _lastFrame < 0 ? 0 : _lastFrame);
+            }
+            catch { try { nb?.Dispose(); } catch { } return; }
+            var old = _buffer;
+            _buffer = nb;
+            _onFrame?.Invoke(_buffer);          // the consumer now holds the new bitmap
+            try { old?.Dispose(); } catch { }
         }
 
         private void Step()

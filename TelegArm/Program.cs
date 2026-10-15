@@ -48,11 +48,6 @@ namespace TelegArm
             catch { return "1.0.0"; }
         }
 
-        /// <summary>Physical system DPI captured at startup (96 = 100%). The login screen reads this to offer the
-        /// "switch to larger UI" (DPI-unaware) rescue on a scaled display. 96 when unaware (DPI-virtualized → the
-        /// rescue then hides). Step 1.1: a wrapper over <see cref="Dpi.SystemDpi"/>, kept for its callers.</summary>
-        public static int SystemDpi { get { return Dpi.SystemDpi; } }
-
         /// <summary>The EFFECTIVE awareness read back after the declaration — a wrapper over <see cref="Dpi.Mode"/>.</summary>
         internal static string DpiAwareness { get { return Dpi.Mode; } }
 

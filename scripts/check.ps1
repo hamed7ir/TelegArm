@@ -7,7 +7,7 @@
 # Raise -Step's default as the plan advances. Exit code 0 = every enforced gate passed and SelfTest passed.
 #
 # ASCII only: Windows PowerShell 5.1 reads a BOM-less script as ANSI.
-param([string]$Step = '2.9', [switch]$NoSelfTest)
+param([string]$Step = '3.7', [switch]$NoSelfTest)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $app = Join-Path $root 'TelegArm'
@@ -25,6 +25,37 @@ function Hits($files, [string]$pattern, [string]$exceptFiles) {
         foreach ($m in Select-String -LiteralPath $f.FullName -Pattern $pattern) {
             if (($m.Line -replace '//.*$', '') -notmatch $pattern) { continue }
             $out += (Rel $f.FullName) + ':' + $m.LineNumber + ': ' + $m.Line.Trim()
+        }
+    }
+    return $out
+}
+
+# Step 3.3: every new Size/Point/Padding/Rectangle(...) whose ARGUMENTS hold a bare integer >= 2 outside Px(...)/P(...)
+# (see the gate). The argument text is taken to the matching parenthesis, Px(...)/P(...)/F(...) calls are removed, and
+# what is left is searched for a literal that is not part of a float, a name, or / * % arithmetic.
+function LiteralHits($files, [string]$exceptFiles) {
+    $out = @()
+    foreach ($f in $files) {
+        if ($exceptFiles -and $f.Name -match $exceptFiles) { continue }
+        $lines = [IO.File]::ReadAllLines($f.FullName)
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $code = $lines[$i] -replace '//.*$', ''
+            if ($code -match 'LogicalMinimumSize\s*=') { continue }
+            if ($lines[$i] -match '//.*\blogical\b') { continue }   # a declared LOGICAL constant (Px'd where it is used)
+            foreach ($m in [regex]::Matches($code, 'new\s+(Size|Point|Padding|Rectangle)\s*\(')) {
+                $k = $m.Index + $m.Length; $depth = 1; $args = ''
+                while ($k -lt $code.Length -and $depth -gt 0) {
+                    $c = $code[$k]
+                    if ($c -eq '(') { $depth++ } elseif ($c -eq ')') { $depth--; if ($depth -eq 0) { break } }
+                    $args += $c; $k++
+                }
+                $prev = $null
+                while ($prev -ne $args) { $prev = $args; $args = [regex]::Replace($args, '\b(Dpi\.Px|Px|P|S|Dpi\.F|F)\s*\([^()]*\)', '0') }
+                $args = [regex]::Replace($args, '0x[0-9A-Fa-f]+|(<<|>>)\s*\d+', '0')   # message decoding, not lengths
+                if ($args -match '(?<![\w.])(?<![/*%]\s?)(?<![/*%])([2-9]|\d{2,})(?![\w.])(?!\s*[*/])') {   # "2 * x" scales a scaled x
+                    $out += (Rel $f.FullName) + ':' + ($i + 1) + ': ' + $lines[$i].Trim(); break
+                }
+            }
         }
     }
     return $out
@@ -98,10 +129,19 @@ $gates = @(
         Hits $done 'MessageBox\.Show' $null } }
     @{ From = '2.6'; Name = 'no ThemedChrome (the 1.x shim is deleted once 2.6b has no callers)'; Test = { Hits $all 'ThemedChrome' $null } }
     @{ From = '2.8'; Name = 'no MaterialSkin anywhere'; Test = { Hits $all '\bMaterial[A-Z]\w*|\bMaterialSkin\b' $null } }
-    @{ From = '3.1'; Name = 'no CreateGraphics().Dpi'; Test = { Hits $all 'CreateGraphics\(\)\s*\.\s*Dpi' $null } }
-    @{ From = '3.3'; Name = 'no new Font( or .SizeInPoints outside FontCache / FontHelper'; Test = { Hits $all 'new\s+Font\s*\(|\.SizeInPoints\b' '^(FontCache|FontHelper)\.cs$' } }
-    @{ From = '3.3'; Name = 'no bare int literals in new Size/Point/Padding/Rectangle under UI\ (use Px)'; Test = {
-        Hits $ui 'new\s+(Size|Point|Padding|Rectangle)\s*\(\s*-?\d+\s*,' $null } }
+    @{ From = '3.1'; Name = 'no CreateGraphics().Dpi / .DpiX / .DpiY (a window''s DPI comes from Dpi.Of / ForPopup)'; Test = {
+        Hits $all 'CreateGraphics\(\)\s*\.\s*Dpi|\.Dpi[XY]\b' '^(EmojiComposer|DrawHelper)\.cs$' } }
+    # Step 3.3 (made honest in Phase 3): fonts come from FontCache/FontHelper. Allowed: a PIXEL-unit font sized from
+    # geometry (it is DPI-correct by construction), InlineText's fonts derived from its base font in the base font's
+    # unit (by design), and DrawHelper's measuring of a font it is handed.
+    @{ From = '3.3'; Name = 'no new Font( or .SizeInPoints outside FontCache / FontHelper (pixel-unit fonts from geometry allowed)'; Test = {
+        @(Hits $all 'new\s+Font\s*\(|\.SizeInPoints\b' '^(FontCache|FontHelper|InlineText|DrawHelper|RoundProbeForm)\.cs$' |
+          Where-Object { $_ -notmatch 'GraphicsUnit\.Pixel' }) } }
+    # Step 3.3: a 96-DPI pixel literal in a Size/Point/Padding/Rectangle. Honest version: the ARGUMENTS are parsed and
+    # only an integer >= 2 that is not inside Px(...)/P(...) and not part of arithmetic on something already scaled
+    # (/ * %) counts. 0 and 1 (origins, hairlines) and LogicalMinimumSize (logical by design) do not.
+    @{ From = '3.3'; Name = 'no 96-DPI int literals in new Size/Point/Padding/Rectangle under UI\ (use Px)'; Test = {
+        @(LiteralHits $ui '^(RoundProbeForm|DesignGalleryForm|TextBoxProbe|DialogProbe|SettingsProbe|InputLabForm)\.cs$') } }
     @{ From = '5.1'; Name = 'no Color.FromArgb( outside Palette.cs / ColorMath.cs / DrawHelper.cs'; Test = { Hits $all 'Color\.FromArgb\s*\(' '^(Palette|ColorMath|DrawHelper)\.cs$' } }
     @{ From = '5.1'; Name = 'no registry read inside a paint method (read ThemeHelper.Palette)'; Test = {
         @(PaintBodies $all | Where-Object { $_ -match 'Registry\.|GetWindowsAccentColor\s*\(|IsDarkMode\s*\(' }) } }

@@ -175,7 +175,7 @@ namespace TelegArm.UI
                     if (clip != null)
                     {
                         if (bubble.IsDisposed) { clip.Dispose(); return; }
-                        bubble.AnimationOwner = new LottieAnimator(clip, 160,
+                        bubble.AnimationOwner = new LottieAnimator(clip, RLottie.RenderSize(160, WindowDpiValue),   // step 3.6: the 160 logical sticker box at this DPI (160 at 96)
                             img => { if (!bubble.IsDisposed) bubble.SetFrame(img); });
                         return;
                     }

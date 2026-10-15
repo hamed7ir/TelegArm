@@ -214,7 +214,14 @@ namespace TelegArm.UI
         private void OpenEmojiPicker()
         {
             var p = ThemeHelper.Palette;
-            var picker = new EmojiPicker(_service, p.Dark, p.Accent);
+            // Step 3.1: a popup takes the DPI of WHERE IT OPENS (under the button), not this window's; built at that DPI.
+            var anchor = _emoji.PointToScreen(new Point(0, _emoji.Height));
+            Rectangle wa;
+            try { wa = Screen.FromControl(this).WorkingArea; } catch { wa = Screen.PrimaryScreen.WorkingArea; }
+            // The DPI of where it LANDS: the anchor clamped into the work area it is placed in (review of step 3.1).
+            int dpi = Dpi.ForPopup(new Point(Math.Max(wa.Left, Math.Min(anchor.X, wa.Right - 1)),
+                                             Math.Max(wa.Top, Math.Min(anchor.Y, wa.Bottom - 1))));
+            var picker = new EmojiPicker(_service, p.Dark, p.Accent, dpi: dpi);
             picker.Picked += emoji =>
             {
                 if (string.IsNullOrEmpty(emoji)) return;
@@ -223,11 +230,9 @@ namespace TelegArm.UI
                 SyncButtons();
             };
             picker.DocumentPicked += doc => { var h = StickerPicked; if (h != null) h(doc); };
-            var at = _emoji.PointToScreen(new Point(0, _emoji.Height + Px(4)));
-            Rectangle wa;
-            try { wa = Screen.FromControl(this).WorkingArea; } catch { wa = Screen.PrimaryScreen.WorkingArea; }
+            var at = new Point(anchor.X, anchor.Y + Dpi.Px(4, dpi));
             int left = Math.Max(wa.Left, Math.Min(at.X, wa.Right - picker.Width));
-            int top = at.Y + picker.Height <= wa.Bottom ? at.Y : Math.Max(wa.Top, at.Y - _emoji.Height - Px(8) - picker.Height);
+            int top = at.Y + picker.Height <= wa.Bottom ? at.Y : Math.Max(wa.Top, at.Y - _emoji.Height - Dpi.Px(8, dpi) - picker.Height);
             picker.Location = new Point(left, top);
             picker.Show(this);
             picker.Activate();

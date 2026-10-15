@@ -158,14 +158,14 @@ namespace TelegArm.UI.Admin
                 return;
             }
             var menu = new ThemedContextMenuStrip();
-            menu.Font = FontHelper.UiAt(10.5f, WindowDpiValue);   // shared: Control never disposes its Font
+            menu.FontPt = 10.5f;   // step 3.1: applied at the open point's DPI when the menu opens
             foreach (var g in eligible)
             {
                 var grp = g;   // capture per-iteration
                 var it = menu.Items.Add(string.IsNullOrEmpty(g.Title) ? "Group" : g.Title);
                 it.Click += async (s, e) => await DoLink(grp);
             }
-            menu.Show(_discussionBtn, new Point(_discussionBtn.ClientRectangle.Left, _discussionBtn.Height));
+            menu.ShowAt(_discussionBtn, new Point(_discussionBtn.ClientRectangle.Left, _discussionBtn.Height));
         }
 
         private async System.Threading.Tasks.Task DoLink(Channel group)

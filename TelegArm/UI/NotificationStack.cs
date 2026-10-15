@@ -99,30 +99,19 @@ namespace TelegArm.UI
 
         // ── G1 — THE GAPS SCALE, LIKE THE BOX THEY SEPARATE ──────────────────────────────────────
         /// <summary>Design-pixel gaps at 96 dpi: from the working-area edge, and between stacked windows.
-        /// ⚠ THESE ARE SCALED AT USE (see ScaledGap). They were raw pixels until TA-30, which left a 200%
+        /// ⚠ THESE ARE SCALED AT USE (see SlotFor). They were raw pixels until TA-30, which left a 200%
         /// display with a 12 px margin around a 720x168 window — the window doubled and the breathing room
         /// did not, so the stack looked pinched against the corner. Anything measured in pixels next to a
         /// scaled box has to scale with it.</summary>
         private const int DesignEdgeGap = 12, DesignStackGap = 8;
 
-        /// <summary>The system-DPI factor the app actually renders at. Read from the anchor rather than
-        /// cached at startup, so it is correct after a display change; falls back to 1.0 if there is no
-        /// anchor yet. Matches how NotificationWindow derives its own scale (Graphics.DpiX / 96).</summary>
-        private static float Scale()
+        /// <summary>Step 3.1 — the TARGET screen's working area, and the EFFECTIVE DPI the stack is built at there:
+        /// Dpi.ForPopup at its centre (a toast takes its DPI from where it opens, not from the main window).
+        /// Read fresh on every show and relayout, like the work area.</summary>
+        private static int TargetDpi(out Rectangle wa)
         {
-            try
-            {
-                var src = _anchor != null && !_anchor.IsDisposed && _anchor.IsHandleCreated
-                    ? (Control)_anchor : null;
-                if (src == null) return 1f;
-                using (var g = src.CreateGraphics()) return g.DpiX / 96f;
-            }
-            catch { return 1f; }
-        }
-
-        private static int ScaledGap(int designPx)
-        {
-            return (int)Math.Round(designPx * Scale());
+            wa = WorkArea();
+            return Dpi.ForPopup(new Point(wa.Left + wa.Width / 2, wa.Top + wa.Height / 2));
         }
 
         public static void Show(Form anchor, NotifyInfo info, bool dark, Color accent)
@@ -184,15 +173,19 @@ namespace TelegArm.UI
         /// NotificationWindow is constructed, so N3b's promotion and an ordinary arrival cannot drift.</summary>
         private static void Spawn(NotifyInfo info, bool dark, Color accent, int initialCount)
         {
-            var w = new NotificationWindow(info, dark, accent, initialCount);
+            // Step 3.1 — the target screen and its DPI FIRST; the window is built at that DPI and shown at its
+            // slot there (one Bounds set before Show).
+            Rectangle wa;
+            int dpi = TargetDpi(out wa);
+            var w = new NotificationWindow(info, dark, accent, initialCount, dpi);
             w.Clicked += OnClicked;
             w.Dismissed += OnDismissed;
             _byChat[(info.AccountId, info.PeerId)] = w;
             _live.Add(w);
-            w.ShowNoActivate(SlotFor(_live.Count - 1, w.Size));
+            w.ShowNoActivate(new Rectangle(SlotFor(_live.Count - 1, w.Size, wa, dpi), w.Size));
             Logger.Diag("[NOTIFY-WIN] show acct=" + info.AccountId + " peer=" + info.PeerId
                         + " msg=" + info.MessageId + " count=" + initialCount
-                        + " live=" + _live.Count + " queue=" + _queue.Count + " at=" + w.Location);
+                        + " live=" + _live.Count + " queue=" + _queue.Count + " at=" + w.Location + " dpi=" + dpi);
             Relayout();
         }
 
@@ -228,10 +221,9 @@ namespace TelegArm.UI
         /// desktop that does not exist. Measure at the awareness the app actually runs at.)
         /// ⚠ Read FRESH on every show and every relayout, so moving the main window to another monitor —
         /// or a resolution change — re-anchors the whole stack rather than leaving it on the old screen.</summary>
-        private static Point SlotFor(int index, Size size)
+        private static Point SlotFor(int index, Size size, Rectangle wa, int dpi)
         {
-            Rectangle wa = WorkArea();
-            int edge = ScaledGap(DesignEdgeGap), stack = ScaledGap(DesignStackGap);
+            int edge = Dpi.Px(DesignEdgeGap, dpi), stack = Dpi.Px(DesignStackGap, dpi);
             int x = wa.Right - size.Width - edge;
             int y = wa.Bottom - size.Height - edge - index * (size.Height + stack);
             // Never climb off the top of the working area — on a short screen the stack simply stops
@@ -263,10 +255,21 @@ namespace TelegArm.UI
                 var w = _live[i];
                 if (w == null || w.IsDisposed) { _live.RemoveAt(i); continue; }
             }
+            if (_live.Count == 0) return;
+            // Step 3.1 — every live toast at the target screen's DPI (a monitor move or a DPI change resizes them too).
+            Rectangle wa;
+            int dpi = TargetDpi(out wa);
+            Size size = NotificationWindow.SizeAt(dpi);
             for (int i = 0; i < _live.Count; i++)
             {
-                try { _live[i].MoveTo(SlotFor(i, _live[i].Size)); } catch { }
+                try { _live[i].Place(dpi, new Rectangle(SlotFor(i, size, wa, dpi), size)); } catch { }
             }
+        }
+
+        /// <summary>Step 3.1 — posted by a toast's WM_DPICHANGED; never throws.</summary>
+        internal static void RelayoutAfterDpiChange()
+        {
+            try { Relayout(); } catch { }
         }
 
         private static void OnClicked(NotificationWindow w)

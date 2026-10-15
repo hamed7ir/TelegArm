@@ -5,6 +5,7 @@ using System.Windows.Forms;
 using LibVLCSharp.Shared;
 using LibVLCSharp.WinForms;
 using TelegArm.Core;
+using TelegArm.Helpers;
 
 namespace TelegArm.UI.Controls
 {
@@ -13,7 +14,7 @@ namespace TelegArm.UI.Controls
     /// Playback is driven by the host via the public API; the host owns the control
     /// bar so it is never painted over by the native video window.
     /// </summary>
-    public class VlcVideoControl : UserControl
+    public class VlcVideoControl : UserControl, IDpiAware
     {
         private readonly bool _vlcReady;
         private LibVLC _libVlc;
@@ -25,6 +26,8 @@ namespace TelegArm.UI.Controls
         private Label _statusLabel;
         private Panel _fallbackPanel;
         private Label _fallbackLabel;
+        private Button _openBtn;
+        private int _dpi;   // step 3.3: the DPI ApplyDpi last set the metrics at
         private string _currentFile;
 
         public bool IsReady { get { return _vlcReady; } }
@@ -92,22 +95,61 @@ namespace TelegArm.UI.Controls
 
             _fallbackPanel = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(18, 18, 18), Visible = false };
             _fallbackLabel = new Label { Dock = DockStyle.Fill, ForeColor = Color.White, TextAlign = ContentAlignment.MiddleCenter };
-            var openBtn = new Button
+            _openBtn = new Button
             {
                 Text = "Open with system player",
                 Dock = DockStyle.Bottom,
-                Height = 44,
                 FlatStyle = FlatStyle.Flat,
                 ForeColor = Color.White
             };
-            openBtn.FlatAppearance.BorderColor = Color.Gray;
-            openBtn.Click += (s, e) => OpenExternally();
+            _openBtn.FlatAppearance.BorderColor = Color.Gray;
+            _openBtn.Click += (s, e) => OpenExternally();
             _fallbackPanel.Controls.Add(_fallbackLabel);
-            _fallbackPanel.Controls.Add(openBtn);
+            _fallbackPanel.Controls.Add(_openBtn);
 
             Controls.Add(_videoHost);
             Controls.Add(_fallbackPanel);
             Controls.Add(_statusLabel);
+            ApplyDpi(Dpi.Of(this));   // unparented here (the default DPI); re-set when it joins its window, below
+        }
+
+        // ── DPI (step 3.3) ───────────────────────────────────────────────────────────────────────────────────
+
+        /// <summary>SETS the DPI-dependent metrics from logical values at <paramref name="dpi"/> (never multiplies, so it is
+        /// safe after DpiScaler's generic pass): the fallback button's 44 px, and the font the labels and the button inherit.
+        /// That font is the one they always had — Control.DefaultFont, as no host (MediaViewerForm, StoryViewerForm) sets
+        /// one — now as the SHARED pixel-unit font of the same family and point size at this DPI (FontCache: never
+        /// dispose), so it follows the window to another monitor. At 96 both are exactly what they were.</summary>
+        private void ApplyDpi(int dpi)
+        {
+            _dpi = dpi;
+            Font = FontCache.Rescale(Control.DefaultFont, Dpi.Logical, dpi);   // shared: never dispose
+            if (_openBtn != null) _openBtn.Height = Dpi.Px(44, dpi);
+        }
+
+        /// <summary>Built unparented, at the default DPI. StoryViewerForm creates this lazily, after it has taken its
+        /// screen's DPI, so the metrics are re-set at the window's DPI when the control joins it — and again when its
+        /// handle is created inside the window (it may have joined through an ancestor, which raises no ParentChanged here).</summary>
+        protected override void OnParentChanged(EventArgs e)
+        {
+            base.OnParentChanged(e);
+            if (Parent == null || Disposing || IsDisposed) return;   // removed / tearing down: nothing to adopt
+            int d = Dpi.Of(this);
+            if (d != _dpi) ApplyDpi(d);
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            int d = Dpi.Of(this);
+            if (d != _dpi) ApplyDpi(d);
+        }
+
+        /// <summary>The host window moved to another DPI: DpiScaler has ratio-scaled the bounds and this explicit font
+        /// already; re-set both from the logical values (exact, and keeps <see cref="_dpi"/> current).</summary>
+        void IDpiAware.OnDpiChanged(int oldDpi, int newDpi)
+        {
+            if (newDpi > 0) ApplyDpi(newDpi);
         }
 
         /// <summary>Shows a centered status message (downloading / error).</summary>

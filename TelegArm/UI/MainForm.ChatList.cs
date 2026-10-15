@@ -566,7 +566,7 @@ namespace TelegArm.UI
             var menu = new ThemedContextMenuStrip();
             BuildChatActionMenu(menu, entry, ChatMenuSurface.ChatListRow);
             menu.Closed += (s, e) => BeginInvoke((Action)menu.Dispose);
-            menu.Show(screenPt);
+            menu.ShowAt(screenPt);
         }
 
         // ── BATCH-TA-20/S0 — ONE DEFINITION OF THE CHAT ACTION MENU ──────────────────────────────
@@ -699,7 +699,7 @@ namespace TelegArm.UI
             BuildChatActionMenu(menu, entry, ChatMenuSurface.ChatHeader);
             menu.Closed += (s, e) => BeginInvoke((Action)menu.Dispose);
             // Hang it under the button — same gesture as the proxy sheet's ⋮ and every other menu here.
-            menu.Show(_chatMenuBtn.PointToScreen(new Point(0, _chatMenuBtn.Height)));
+            menu.ShowAt(_chatMenuBtn.PointToScreen(new Point(0, _chatMenuBtn.Height)));
         }
 
         private async void ToggleChatMute(ChatEntry entry)

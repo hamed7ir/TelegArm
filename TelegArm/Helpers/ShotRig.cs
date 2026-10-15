@@ -189,6 +189,8 @@ namespace TelegArm.Helpers
                 }, null));
                 Shot("p2-profile-edit-" + t, () => new ProfileForm(new TelegramService()));
                 Shot("trip-inputlab-" + t, () => new InputLabForm());   // device trip 2026-10: --input-lab
+                // Step 3.1: the emoji picker as a popup (no service: the sticker/GIF tabs stay empty).
+                Shot("p3-emoji-" + t, () => new EmojiPicker(null, ThemeHelper.IsDark, ThemeHelper.GetWindowsAccentColor()));
                 // Step 2.7d: the composer editor window (no service: its emoji picker is not opened here).
                 Shot("editor-" + t, () => new ComposerEditorForm("Ada Lovelace",
                     "Draft line one \U0001F600\nline two with **bold** and __italic__\n\n"

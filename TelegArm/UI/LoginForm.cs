@@ -33,7 +33,7 @@ namespace TelegArm.UI
         private ProxyStatusPill _proxyPill;          // BATCH-TA-16/P3 — bottom-left floating proxy pill
         private RoundedButton _settingsBtn;          // bottom-right — Settings is otherwise unreachable pre-login
         private Label _bigTitle, _subtitle, _flagLabel, _countryName, _statusLabel, _qrSteps;
-        private Label _qrToggleLink, _phoneToggleLink, _resendLink, _dpiRescueLink;
+        private Label _qrToggleLink, _phoneToggleLink, _resendLink;
         private PictureBox _flagPic;
         private TextBox _dialBox, _phoneBox, _codeBox, _pwdBox;
         private RoundedButton _submitButton;
@@ -165,13 +165,6 @@ namespace TelegArm.UI
             _resendLink = AccentLink("Resend code", ResendCode);
             Content.Controls.Add(_qrToggleLink); Content.Controls.Add(_phoneToggleLink); Content.Controls.Add(_resendLink);
 
-            // DPI-rescue: on a high-DPI display the system-aware default renders this window small, and the
-            // toggle that fixes it is buried in Settings (unreachable through the tiny UI). Surface it here as a
-            // one-tap switch to proportional (DPI-unaware) scaling + self-restart. Shown only when warranted and
-            // only on the safe root views (Qr/Phone) — see ShowView / DpiRescueApplicable.
-            _dpiRescueLink = AccentLink("Display looks small?  Switch to larger UI", ApplyProportionalAndRestart);
-            Content.Controls.Add(_dpiRescueLink);
-
             // ── Shared filled-accent action button + status ──
             _submitButton = new RoundedButton { Width = Px(300), Height = Px(48), Kind = RoundedButtonKind.Primary, Modern = true, Font = FontHelper.UiAt(12.5f, dpi, FontStyle.Bold) };
             _submitButton.Click += OnSubmitClick;
@@ -189,19 +182,6 @@ namespace TelegArm.UI
             foreach (Control c in Content.Controls) if (c != _proxyPill && c != _settingsBtn) c.Visible = false;
         }
 
-        /// <summary>The proxy pill bottom-left and Settings bottom-right, inside Content (their height can change).</summary>
-        /// <summary>Step 2.4: when the DPI-rescue link will show, the window gets one extra row for it above the bottom
-        /// corners — at the 1.x height it would overlap the QR view's "phone number" link. Decided here, not in the
-        /// constructor: AddMode (which suppresses the link) is set by the caller after construction, and OnLoad still runs
-        /// before the window is first shown and centred.</summary>
-        protected override void OnLoad(EventArgs e)
-        {
-            if (DpiRescueApplicable()) Size = new Size(Width, Height + Px(RescueRow));
-            base.OnLoad(e);
-        }
-
-        private const int RescueRow = 34;
-
         /// <summary>Step 3.2: the corner pill and the Settings button re-measure themselves on a DPI change; put them back.</summary>
         protected override void OnDpiChanged(int oldDpi, int newDpi)
         {
@@ -209,6 +189,7 @@ namespace TelegArm.UI
             PlaceCorners();
         }
 
+        /// <summary>The proxy pill bottom-left and Settings bottom-right, inside Content (their height can change).</summary>
         private void PlaceCorners()
         {
             int m = Px(14), w = Content.ClientSize.Width, h = Content.ClientSize.Height;
@@ -455,50 +436,6 @@ namespace TelegArm.UI
             if (_proxyPill != null) { _proxyPill.Visible = true; _proxyPill.BringToFront(); }
             if (_settingsBtn != null) { _settingsBtn.Visible = true; _settingsBtn.BringToFront(); }
             PlaceCorners();
-
-            // DPI-rescue affordance: only on the safe root views (Qr/Phone), only when warranted. Its own row ABOVE the
-            // bottom corners (BATCH-TA-16f/F1: centred across the window it collided with the pill and lost its clicks to
-            // it; step 2.4: squeezed between the pill and the bottom-right Settings button it was clipped at both ends).
-            bool showRescue = DpiRescueApplicable() && (v == View.Qr || v == View.Phone);
-            _dpiRescueLink.Visible = showRescue;
-            if (showRescue)
-            {
-                int m = Px(14), top = Content.ClientSize.Height - m;
-                if (_proxyPill != null) top = Math.Min(top, _proxyPill.Top);
-                if (_settingsBtn != null) top = Math.Min(top, _settingsBtn.Top);
-                _dpiRescueLink.SetBounds(m, top - Px(8) - _dpiRescueLink.Height, Content.ClientSize.Width - 2 * m, _dpiRescueLink.Height);
-                _dpiRescueLink.BringToFront();
-            }
-        }
-
-        /// <summary>The DPI-rescue affordance applies only on a FIRST-LAUNCH login (not add-account), while the
-        /// app is still system-aware (DpiUnaware false) AND the display is scaled to at least 125% (systemDpi
-        /// >= 120) — the case where the system-aware window renders too small. On RT/100% or when already
-        /// unaware it never shows (avoids confusing noise).</summary>
-        private bool DpiRescueApplicable()
-        {
-            return !AddMode && !AppSettings.Instance.DpiUnaware && Program.SystemDpi >= 120;
-        }
-
-        /// <summary>Persists the proportional (DPI-unaware) preference and relaunches so it takes effect pre-UI.
-        /// Safe here: pre-login there is no session/QR state to lose (StopQr first). The relaunch passes
-        /// "--restarted" so the new instance waits for this one to release the single-instance mutex.</summary>
-        private void ApplyProportionalAndRestart()
-        {
-            try
-            {
-                StopQr();
-                AppSettings.Instance.DpiMode = "Unaware";   // STEP 0.4: the source of truth; Save mirrors DpiUnaware
-                AppSettings.Instance.Save();   // synchronous flush; settings.json is under the user-writable data root
-                Logger.Diag("[DPI] rescue -> DpiMode=Unaware persisted; relaunching (--restarted)");   // R7: visible in a Release log
-                System.Diagnostics.Process.Start(Application.ExecutablePath, "--restarted");
-                Application.Exit();
-            }
-            catch (Exception ex)
-            {
-                Logger.Diag("[DPI] rescue restart FAILED: " + ex.Message);
-                try { ThemedDialog.Show(this, "TelegArm", "Couldn't restart automatically - please close and reopen TelegArm to apply the larger UI.", "OK"); } catch { }
-            }
         }
 
         private void OnBack()

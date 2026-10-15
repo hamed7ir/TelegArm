@@ -558,7 +558,7 @@ namespace TelegArm.UI
             del.Click += (s, e) => BeginInvoke((Action)(() => OnDelete(index)));
             menu.Items.Add(del);
             menu.Closed += (s, e) => BeginInvoke((Action)menu.Dispose);
-            menu.Show(screenPt);
+            menu.ShowAt(screenPt);
         }
 
         protected override void Dispose(bool disposing)

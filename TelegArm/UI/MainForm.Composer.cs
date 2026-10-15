@@ -358,11 +358,13 @@ namespace TelegArm.UI
         private void OpenEmojiPicker()
         {
             if (_selectedChat == null) return;
-            var picker = new EmojiPicker(_service, _dark, _accent);
+            // Step 3.1: a popup takes the DPI of WHERE IT OPENS (the anchor), not this window's; it is built at that DPI.
+            var p = _emojiButton.PointToScreen(Point.Empty);
+            int dpi = Dpi.ForPopup(p);
+            var picker = new EmojiPicker(_service, _dark, _accent, dpi: dpi);
             picker.Picked += InsertEmoji;
             picker.DocumentPicked += SendDocument;
-            var p = _emojiButton.PointToScreen(new Point(0, 0));
-            picker.Location = new Point(p.X - picker.Width + _emojiButton.Width, p.Y - picker.Height - Px(4)); // above the button (step 3.4: logical gap)
+            picker.Location = new Point(p.X - picker.Width + _emojiButton.Width, p.Y - picker.Height - Dpi.Px(4, dpi)); // above the button (logical gap at the popup's DPI)
             picker.Show(this);
             picker.Activate();
         }

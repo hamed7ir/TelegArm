@@ -80,13 +80,17 @@ namespace TelegArm.UI
         /// <summary>Opens the downloads-manager popup under the header indicator (DOWNLOAD-UX Part 4).</summary>
         private void OpenDownloadsPanel()
         {
-            var p = new DownloadsPanel(_service, _dark, _accent);
-            var anchor = _dlIndicator != null   // step 3.4: logical offsets; the work-area clamp below stays raw
-                ? _dlIndicator.PointToScreen(new Point(_dlIndicator.Width - p.Width, _dlIndicator.Height + Px(2)))
-                : PointToScreen(new Point(ClientSize.Width - p.Width - Px(8), Px(64)));
+            // `at` = the panel's top-RIGHT corner (step 3.4: logical offsets; the work-area clamp below stays raw).
+            var at = _dlIndicator != null
+                ? _dlIndicator.PointToScreen(new Point(_dlIndicator.Width, _dlIndicator.Height + Px(2)))
+                : PointToScreen(new Point(ClientSize.Width - Px(8), Px(64)));
             var wa = Screen.FromControl(this).WorkingArea;
-            p.Location = new Point(Math.Max(wa.Left, Math.Min(anchor.X, wa.Right - p.Width)),
-                                   Math.Max(wa.Top, Math.Min(anchor.Y, wa.Bottom - p.Height)));
+            // Step 3.3: the panel is built at the DPI of WHERE IT OPENS. It is clamped into `wa` below, so that DPI is read
+            // at the anchor clamped into `wa` too (the right edge is exclusive, hence the - 1).
+            var p = new DownloadsPanel(_service, _dark, _accent,
+                Dpi.ForPopup(new Point(Math.Max(wa.Left, Math.Min(at.X - 1, wa.Right - 1)), Math.Max(wa.Top, Math.Min(at.Y, wa.Bottom - 1)))));
+            p.Location = new Point(Math.Max(wa.Left, Math.Min(at.X - p.Width, wa.Right - p.Width)),
+                                   Math.Max(wa.Top, Math.Min(at.Y, wa.Bottom - p.Height)));
             p.Show(this);   // borderless popup; closes on Deactivate/Esc (rows unsubscribe on close)
         }
 

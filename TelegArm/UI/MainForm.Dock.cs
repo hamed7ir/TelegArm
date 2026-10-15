@@ -112,7 +112,7 @@ namespace TelegArm.UI
         private void EnsureDockEmoji()
         {
             if (_dockEmoji != null || _dockBody == null || _service == null) return;
-            var p = new EmojiPicker(_service, _dark, _accent, embedded: true)
+            var p = new EmojiPicker(_service, _dark, _accent, embedded: true, dpi: WindowDpiValue)   // step 3.1: the host's DPI
             {
                 TopLevel = false,                      // embed: it becomes an ordinary child control
                 FormBorderStyle = FormBorderStyle.None,

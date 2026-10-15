@@ -770,7 +770,7 @@ namespace TelegArm.UI
                 MenuItem(menu, LeaveLabel(), LeaveChat);
             }
             menu.Closed += (s, e) => BeginInvoke((Action)menu.Dispose);
-            menu.Show(anchor, new Point(x: 0, y: anchor.Height));
+            menu.ShowAt(anchor, new Point(x: 0, y: anchor.Height));
         }
 
         private void MenuItem(ContextMenuStrip menu, string text, Action action, bool danger = false)
@@ -1506,7 +1506,7 @@ namespace TelegArm.UI
             MenuItem(menu, "Set new photo…", SetProfilePhotoFlow);
             if (_avatar != null) MenuItem(menu, "Remove current photo", RemoveProfilePhotoFlow);
             menu.Closed += (s, e) => BeginInvoke((Action)menu.Dispose);
-            menu.Show(_pic, new Point(_pic.Width / 2 - Px(48), _pic.Height));
+            menu.ShowAt(_pic, new Point(_pic.Width / 2 - Px(48), _pic.Height));
         }
 
         private async void SetProfilePhotoFlow()
@@ -2235,7 +2235,7 @@ namespace TelegArm.UI
                     MenuItem(menu, "Delete", () => DeleteEntry(e));
                 }
                 menu.Closed += (s, ev) => BeginInvoke((Action)menu.Dispose);
-                menu.Show(screenPt);
+                menu.ShowAt(screenPt);
             }
 
             private void MenuItem(ContextMenuStrip menu, string text, Action action)

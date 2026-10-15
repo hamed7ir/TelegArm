@@ -26,18 +26,23 @@ namespace TelegArm.Helpers
         private static readonly Dictionary<string, ZipArchiveEntry> _entries = LoadEntries();
         private static readonly object _zipLock = new object();
         private static readonly Dictionary<string, Image> _cache = new Dictionary<string, Image>();
-        private static readonly Dictionary<string, Image> _scaled = new Dictionary<string, Image>();
+        // Step 3.5: the scaled images, bucketed by PIXEL size, so a DPI change can drop the sizes no window uses any more
+        // (TrimScaled). UI thread only, like every caller. _logicalSizes = the logical sizes GetScaledAt was asked for.
+        private static readonly Dictionary<int, Dictionary<string, Image>> _scaled = new Dictionary<int, Dictionary<string, Image>>();
+        private static readonly HashSet<int> _logicalSizes = new HashSet<int>();
 
         public static bool Available => _entries != null && _entries.Count > 0;
 
         /// <summary>An emoji rendered to a crisp <paramref name="size"/>px bitmap (cached; null if unavailable)
-        /// — for UI glyphs (menu/drawer/reply icons) so they look good + consistent on RT instead of a font glyph.</summary>
+        /// — for UI glyphs (menu/drawer/reply icons) so they look good + consistent on RT instead of a font glyph.
+        /// ⚠ Draw it and let it go: <see cref="TrimScaled"/> disposes sizes no open window uses after a DPI change.</summary>
         public static Image GetScaled(string emoji, int size)
         {
             if (size <= 0) return null;
-            string key = KeyOf(emoji) + "@" + size;
-            if (string.IsNullOrEmpty(key)) return null;
-            if (_scaled.TryGetValue(key, out var cached)) return cached;
+            string key = KeyOf(emoji);
+            Dictionary<string, Image> bucket;
+            if (!_scaled.TryGetValue(size, out bucket)) _scaled[size] = bucket = new Dictionary<string, Image>();
+            if (bucket.TryGetValue(key, out var cached)) return cached;
             Image scaled = null;
             try
             {
@@ -55,8 +60,48 @@ namespace TelegArm.Helpers
                 }
             }
             catch { scaled = null; }
-            _scaled[key] = scaled;   // cache null too
+            bucket[key] = scaled;   // cache null too
             return scaled;
+        }
+
+        /// <summary>Step 3.5 — <see cref="GetScaled"/> at a LOGICAL size on a <paramref name="dpi"/> window (exactly
+        /// GetScaled(emoji, logicalSize) at 96). Records the logical size, so a DPI change keeps its pixel size at every
+        /// open window's DPI (DpiCaches.AfterDpiChange).</summary>
+        public static Image GetScaledAt(string emoji, int logicalSize, int dpi)
+        {
+            if (logicalSize <= 0) return null;
+            _logicalSizes.Add(logicalSize);
+            return GetScaled(emoji, Dpi.Px(logicalSize, dpi));
+        }
+
+        /// <summary>The logical sizes <see cref="GetScaledAt"/> has been asked for (a copy).</summary>
+        internal static int[] LogicalSizes { get { return _logicalSizes.ToArray(); } }
+
+        /// <summary>How many scaled images are cached, all sizes (cached misses included).</summary>
+        public static int ScaledCount
+        {
+            get { int n = 0; foreach (var b in _scaled.Values) n += b.Count; return n; }
+        }
+
+        /// <summary>Step 3.5 — drops AND disposes every scaled image whose pixel size is not in <paramref name="keepSizes"/>;
+        /// returns how many were dropped. Safe because no GetScaled caller keeps the image past its paint (verified: the
+        /// reply strip, MainForm.Drawer.DrawReplyStrip, and the picker grid, EmojiPicker.Canvas.OnPaint). Null: no-op.</summary>
+        public static int TrimScaled(ICollection<int> keepSizes)
+        {
+            if (keepSizes == null) return 0;
+            int dropped = 0;
+            foreach (int size in _scaled.Keys.ToArray())
+            {
+                if (keepSizes.Contains(size)) continue;
+                var bucket = _scaled[size];
+                _scaled.Remove(size);
+                foreach (var img in bucket.Values)
+                {
+                    dropped++;
+                    if (img != null) { try { img.Dispose(); } catch { } }
+                }
+            }
+            return dropped;
         }
 
         private static Dictionary<string, ZipArchiveEntry> LoadEntries()
@@ -434,6 +479,7 @@ namespace TelegArm.Helpers
         /// with VS16 (FE0F) stripped (matches the keys built from the zip entries).</summary>
         private static string KeyOf(string s)
         {
+            if (string.IsNullOrEmpty(s)) return "";   // step 3.5: null-guarded
             var sb = new StringBuilder();
             for (int i = 0; i < s.Length;)
             {

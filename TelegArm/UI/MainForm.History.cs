@@ -588,7 +588,7 @@ namespace TelegArm.UI
                 AddMenuItem(menu, "⚑   About this ad", () => ReportSponsored(sm, ""));
             if (menu.Items.Count == 0) { menu.Dispose(); return; }
             menu.Closed += (s, e) => BeginInvoke((Action)menu.Dispose);
-            menu.Show(screenPt);
+            menu.ShowAt(screenPt);
         }
 
         private void ShowSponsorInfo(SponsoredMessage sm)

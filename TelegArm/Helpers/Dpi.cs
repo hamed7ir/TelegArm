@@ -12,7 +12,7 @@ namespace TelegArm.Helpers
     /// later step uses to size things.
     ///
     /// Modes (<see cref="AppSettings.DpiMode"/>, overridden by the environment variable TELEGARM_DPI for testing):
-    ///   ""        build default — SYSTEM-aware until step 3.7 flips it (1.x's exact call on 8.1+, see Declare)
+    ///   ""        build default — PER-MONITOR since redesign step 3.7 (PMv1; was system-aware, 1.x's call)
     ///   "System"  system-aware: one DPI for the whole process, set at logon
     ///   "Auto"    per-monitor (PMv1, the same semantics on RT 8.1 and Windows 11)
     ///   "Unaware" Windows stretches the whole UI (the "proportional scaling" rescue)
@@ -216,9 +216,11 @@ namespace TelegArm.Helpers
             Logger.Diag("[DPI] " + ProbeSummary);
         }
 
-        /// <summary>The build default — SYSTEM until redesign step 3.7 makes it "pmv1". Changing it changes every
-        /// user who never chose, because AppSettings stores "" for them (step 0.4).</summary>
-        private const string BuildDefault = "system";
+        /// <summary>The build default — "pmv1" since redesign step 3.7 (it was "system"). It changes every user who never
+        /// chose, because AppSettings stores "" for them (step 0.4); Settings > Advanced > "Display scaling mode" is the
+        /// off-switch (System, or Compatibility = unaware). Where per-monitor is unavailable (RT 8.0, Windows 7), Declare
+        /// falls back to system-aware.</summary>
+        private const string BuildDefault = "pmv1";
 
         private static string Requested(out string source)
         {
@@ -228,8 +230,7 @@ namespace TelegArm.Helpers
             {
                 string e = env.Trim().ToLowerInvariant();
                 if (e == "unaware" || e == "system" || e == "pmv1" || e == "pmv2") { source = "TELEGARM_DPI"; return e; }
-                source = "build default; TELEGARM_DPI=" + env + " not understood";
-                return BuildDefault;
+                Logger.Diag("[DPI] TELEGARM_DPI=" + env + " not understood: using the setting");   // falls through (step 3.7)
             }
             string mode = "";
             try { mode = AppSettings.Instance.DpiMode ?? ""; } catch { }

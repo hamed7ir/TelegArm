@@ -73,6 +73,33 @@ namespace TelegArm.Helpers
         public static Font ForAt(string text, float pt, int dpi, FontStyle style = FontStyle.Regular)
             => IsPersian(text) ? PersianAt(pt + 2f, dpi, style) : UiAt(pt, dpi, style);
 
+        private static string _menuFamily;
+        private static float _menuPt;
+        private static FontStyle _menuStyle;
+
+        /// <summary>Step 3.1 — the shared menu font at <paramref name="dpi"/>: the SYSTEM menu font's family, point size and
+        /// style (SystemFonts.MenuFont — what an unstyled ToolStrip shows; read once), in pixels for that DPI. The same
+        /// size at 96 as the default menu font (Segoe UI 9 pt on the dev box). Shared: never dispose.</summary>
+        public static Font MenuAt(int dpi)
+        {
+            if (_menuFamily == null)
+            {
+                string family = "Segoe UI";
+                float pt = 9f;
+                FontStyle style = FontStyle.Regular;
+                try
+                {
+                    using (var f = SystemFonts.MenuFont)
+                        if (f != null) { family = f.FontFamily.Name; pt = f.SizeInPoints; style = f.Style; }
+                }
+                catch { }
+                _menuPt = pt;
+                _menuStyle = style;
+                _menuFamily = family;   // last: it marks the read as done
+            }
+            return FontCache.Get(_menuFamily, _menuPt, _menuStyle, dpi);
+        }
+
         private static readonly System.Collections.Generic.Dictionary<string, FontFamily> _families =
             new System.Collections.Generic.Dictionary<string, FontFamily>(StringComparer.OrdinalIgnoreCase);
 

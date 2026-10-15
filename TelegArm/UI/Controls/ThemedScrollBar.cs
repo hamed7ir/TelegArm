@@ -184,8 +184,11 @@ namespace TelegArm.UI.Controls
             if (thumb >= len) return Rectangle.Empty;
             int off = (int)((long)(len - thumb) * value / maxVal);
             if (_restyled) return RestyledThumbRect(off, thumb);
-            return _horz ? new Rectangle(off, 2, thumb, Height - 4)
-                         : new Rectangle(2, off, Width - 4, thumb);
+            // Step 3.3: the 1.x 2 px inset on each side, at the bar's DPI (2 at 96). Twice ONE rounded inset, not Px(4), so
+            // both margins stay equal at every DPI (125%: 3 + 3, where Px(4) = 5 would leave 3 + 2).
+            int inset = Dpi.Px(2, this);
+            return _horz ? new Rectangle(off, inset, thumb, Height - 2 * inset)
+                         : new Rectangle(inset, off, Width - 2 * inset, thumb);
         }
 
         /// <summary>The 2.x thumb: <see cref="RestyledThumb"/> logical px across the lane, centred in it, running

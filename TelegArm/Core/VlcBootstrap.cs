@@ -250,19 +250,23 @@ namespace TelegArm.Core
             public PrepForm(Action work)
             {
                 _work = work;
+                // Step 3.3: shown at startup before any other window but after Dpi.Init (Program declares the awareness
+                // first), so the effective system DPI is the right one. Every length is logical (96-DPI) px through Px at
+                // it, and the fonts are SHARED (FontCache: never dispose) — at 96 all of it is the 1.x numbers exactly.
+                int dpi = Dpi.ForPopup(Cursor.Position);   // review of 3.7: CenterScreen with no owner opens under the mouse
                 FormBorderStyle = FormBorderStyle.None;
                 StartPosition = FormStartPosition.CenterScreen;
-                ClientSize = new Size(380, 132);
+                ClientSize = new Size(Dpi.Px(380, dpi), Dpi.Px(132, dpi));
                 TopMost = true; ShowInTaskbar = false; ControlBox = false;
 
                 bool dark = ThemeHelper.IsDark;
                 Color accent = ThemeHelper.GetWindowsAccentColor();
                 BackColor = dark ? Color.FromArgb(40, 40, 44) : Color.FromArgb(248, 248, 250);
 
-                var bar = new Panel { Left = 0, Top = 0, Width = 380, Height = 6, BackColor = accent };
-                var title = new Label { Left = 20, Top = 28, Width = 340, Height = 32, Text = "Preparing media components…", TextAlign = ContentAlignment.MiddleCenter, ForeColor = dark ? Color.White : Color.FromArgb(20, 20, 20), Font = new Font("Segoe UI", 11.5f, FontStyle.Bold) };
-                var sub = new Label { Left = 20, Top = 62, Width = 340, Height = 24, Text = "Setting up audio and video. This happens only once.", TextAlign = ContentAlignment.MiddleCenter, ForeColor = dark ? Color.FromArgb(160, 160, 160) : Color.FromArgb(110, 110, 110), Font = new Font("Segoe UI", 9f) };
-                var pb = new ProgressBar { Left = 30, Top = 98, Width = 320, Height = 16, Style = ProgressBarStyle.Marquee, MarqueeAnimationSpeed = 30 };
+                var bar = new Panel { Left = 0, Top = 0, Width = Dpi.Px(380, dpi), Height = Dpi.Px(6, dpi), BackColor = accent };
+                var title = new Label { Left = Dpi.Px(20, dpi), Top = Dpi.Px(28, dpi), Width = Dpi.Px(340, dpi), Height = Dpi.Px(32, dpi), Text = "Preparing media components…", TextAlign = ContentAlignment.MiddleCenter, ForeColor = dark ? Color.White : Color.FromArgb(20, 20, 20), Font = FontCache.Get("Segoe UI", 11.5f, FontStyle.Bold, dpi) };   // shared: never dispose
+                var sub = new Label { Left = Dpi.Px(20, dpi), Top = Dpi.Px(62, dpi), Width = Dpi.Px(340, dpi), Height = Dpi.Px(24, dpi), Text = "Setting up audio and video. This happens only once.", TextAlign = ContentAlignment.MiddleCenter, ForeColor = dark ? Color.FromArgb(160, 160, 160) : Color.FromArgb(110, 110, 110), Font = FontCache.Get("Segoe UI", 9f, FontStyle.Regular, dpi) };   // shared: never dispose
+                var pb = new ProgressBar { Left = Dpi.Px(30, dpi), Top = Dpi.Px(98, dpi), Width = Dpi.Px(320, dpi), Height = Dpi.Px(16, dpi), Style = ProgressBarStyle.Marquee, MarqueeAnimationSpeed = 30 };
                 Controls.AddRange(new Control[] { bar, title, sub, pb });
             }
 

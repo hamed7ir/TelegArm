@@ -164,21 +164,21 @@ namespace TelegArm.UI.Controls
         private void ShowSelectionMenu(Point screenPt)
         {
             if (!_sel.HasSelection && !_sel.HasText) return;
-            var menu = new TelegArm.UI.ThemedContextMenuStrip();
+            var menu = new TelegArm.UI.ThemedContextMenuStrip { FontPt = 9.75f };   // step 3.1: the label's 9.75 pt, at the open point's DPI
             if (_sel.HasSelection)
             {
-                var copy = new ToolStripMenuItem("Copy Selected Text") { Font = Font };
+                var copy = new ToolStripMenuItem("Copy Selected Text");
                 copy.Click += (s, e) => { try { Clipboard.SetText(_sel.SelectedText ?? ""); } catch { } _sel.Clear(); };
                 menu.Items.Add(copy);
             }
             else
             {
-                var all = new ToolStripMenuItem("Select All") { Font = Font };
+                var all = new ToolStripMenuItem("Select All");
                 all.Click += (s, e) => _sel.SelectAll();
                 menu.Items.Add(all);
             }
             menu.Closed += (s, e) => BeginInvoke((Action)menu.Dispose);
-            menu.Show(screenPt);
+            menu.ShowAt(screenPt);
         }
 
         protected override void Dispose(bool disposing)

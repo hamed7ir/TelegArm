@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using TelegArm.Helpers;
 using TelegArm.UI.Controls;
@@ -14,17 +15,25 @@ namespace TelegArm.UI
     /// intentionally NOT offered here — its correct_answers↔option wire encoding could not be verified
     /// in this build environment (see the POLL-BTN batch report); received quizzes still render fully.
     /// </summary>
-    public sealed class CreatePollForm : Form
+    public sealed class CreatePollForm : Form, IDpiHost
     {
         private const int MaxOptions = 10;
         private readonly bool _dark;
         private readonly Color _accent;
         private readonly Color _bg, _fg, _field, _sub;
 
+        /// <summary>Step 3.3 — the EFFECTIVE DPI this dialog lays out at: its owner's (the caller passes Dpi.Of(owner); the
+        /// dialog opens centred on it), re-set by WM_DPICHANGED. Its controls read it through Dpi.Of (IDpiHost). Every
+        /// length here is LOGICAL (96-DPI) px through P() = Dpi.Px at this DPI, so at 96 nothing moves by a pixel.</summary>
+        private int _dpi;
+        int IDpiHost.Dpi { get { return _dpi; } }
+        private int P(int n) { return Dpi.Px(n, _dpi); }
+
+        private readonly Label _questionLabel, _optionsLabel;
         private readonly TextBox _question;
         private readonly Panel _optionsPanel;
         private readonly List<TextBox> _optionBoxes = new List<TextBox>();
-        private readonly Button _addBtn;
+        private readonly Button _addBtn, _ok, _cancel;
         private readonly CheckBox _anon, _multi;
 
         public string Question { get; private set; }
@@ -32,9 +41,11 @@ namespace TelegArm.UI
         public bool Anonymous { get; private set; }
         public bool Multiple { get; private set; }
 
-        public CreatePollForm(bool dark, Color accent)
+        /// <param name="dpi">Step 3.3 — the DPI to lay out at: the owner's (Dpi.Of(owner)). 0 = <see cref="Dpi.DefaultDpi"/>.</param>
+        public CreatePollForm(bool dark, Color accent, int dpi = 0)
         {
             _dark = dark; _accent = accent;
+            _dpi = dpi > 0 ? dpi : Dpi.DefaultDpi;
             _bg = dark ? Color.FromArgb(36, 36, 38) : Color.FromArgb(245, 245, 247);
             _fg = dark ? Color.FromArgb(235, 235, 235) : Color.FromArgb(20, 20, 20);
             _field = dark ? Color.FromArgb(54, 54, 58) : Color.White;
@@ -46,67 +57,120 @@ namespace TelegArm.UI
             StartPosition = FormStartPosition.CenterParent;
             MaximizeBox = false; MinimizeBox = false; ShowInTaskbar = false;
             BackColor = _bg; ForeColor = _fg;
-            Font = FontHelper.Ui(9.5f);
-            ClientSize = new Size(360, 460);
 
-            int x = 16, w = ClientSize.Width - 32;
-
-            Controls.Add(MakeLabel("Question", 14));
-            _question = MakeField(34, w, 56);
+            // Step 3.3: the controls are built bare, in the 1.x order (so the tab order is unchanged), and ApplyMetrics
+            // SETS the font, the size and every bound at _dpi — before Show (CenterParent centres by the size), and again
+            // on WM_DPICHANGED.
+            _questionLabel = MakeLabel("Question");
+            Controls.Add(_questionLabel);
+            _question = MakeField();
             _question.Multiline = true;
             Controls.Add(_question);
 
-            Controls.Add(MakeLabel("Options", 100));
-            _optionsPanel = new Panel { Left = x, Top = 120, Width = w, Height = 180, BackColor = _bg, AutoScroll = true };
+            _optionsLabel = MakeLabel("Options");
+            Controls.Add(_optionsLabel);
+            _optionsPanel = new Panel { BackColor = _bg, AutoScroll = true };
             Controls.Add(_optionsPanel);
             TelegArm.UI.Controls.TouchScroller.Enable(_optionsPanel, horizontal: false);   // finger-pan the options list (RT touch)
-            AddOption(); AddOption();   // start with two
 
             _addBtn = new RoundedButton
             {
-                Text = "+ Add option", Left = x, Top = 306, Width = 140, Height = 28,
+                Text = "+ Add option",
                 Kind = RoundedButtonKind.Secondary
             };
             _addBtn.Click += (s, e) => { AddOption(); };
             Controls.Add(_addBtn);
 
-            _anon = MakeCheck("Anonymous voting", 344); _anon.Checked = true;
-            _multi = MakeCheck("Multiple answers", 372);
+            _anon = MakeCheck("Anonymous voting"); _anon.Checked = true;
+            _multi = MakeCheck("Multiple answers");
             // Multiple-choice + (the deferred) quiz are mutually exclusive in Telegram; with quiz absent,
             // Multiple stands alone. Kept simple here.
             Controls.Add(_anon); Controls.Add(_multi);
 
-            var ok = new RoundedButton { Text = "Create", Width = 100, Height = 32, Left = ClientSize.Width - 222, Top = 410, Kind = RoundedButtonKind.Primary };
-            ok.Click += OnCreate;
-            var cancel = new RoundedButton { Text = "Cancel", Width = 100, Height = 32, Left = ClientSize.Width - 116, Top = 410, Kind = RoundedButtonKind.Secondary, DialogResult = DialogResult.Cancel };
-            Controls.Add(ok); Controls.Add(cancel);
-            AcceptButton = ok; CancelButton = cancel;
+            _ok = new RoundedButton { Text = "Create", Kind = RoundedButtonKind.Primary };
+            _ok.Click += OnCreate;
+            _cancel = new RoundedButton { Text = "Cancel", Kind = RoundedButtonKind.Secondary, DialogResult = DialogResult.Cancel };
+            Controls.Add(_ok); Controls.Add(_cancel);
+            AcceptButton = _ok; CancelButton = _cancel;
+
+            ApplyMetrics();
+            AddOption(); AddOption();   // start with two (after ApplyMetrics: a row takes the options panel's width)
         }
 
-        private Label MakeLabel(string text, int top)
+        /// <summary>Step 3.3 — SETS the form's font and size and every control's bounds from LOGICAL values at _dpi (never
+        /// multiplies), so the first layout and a re-layout after WM_DPICHANGED are one code path. At 96 these are the 1.x
+        /// numbers exactly. Fonts are SHARED (FontCache): never dispose.</summary>
+        private void ApplyMetrics()
         {
-            return new Label { Text = text, Left = 16, Top = top, Width = 200, Height = 18, ForeColor = _sub, Font = FontHelper.Ui(8.5f, FontStyle.Bold) };
+            Font = FontHelper.UiAt(9.5f, _dpi);   // shared: never dispose (the fields, checks and buttons inherit it)
+            ClientSize = new Size(P(360), P(460));
+
+            int x = P(16), w = ClientSize.Width - P(32);
+
+            PlaceLabel(_questionLabel, P(14));
+            _question.Bounds = new Rectangle(x, P(34), w, P(56));
+            PlaceLabel(_optionsLabel, P(100));
+            _optionsPanel.Bounds = new Rectangle(x, P(120), w, P(180));
+            _addBtn.Bounds = new Rectangle(x, P(306), P(140), P(28));
+            _anon.Bounds = new Rectangle(x, P(344), P(300), P(22));
+            _multi.Bounds = new Rectangle(x, P(372), P(300), P(22));
+            _ok.Bounds = new Rectangle(ClientSize.Width - P(222), P(410), P(100), P(32));
+            _cancel.Bounds = new Rectangle(ClientSize.Width - P(116), P(410), P(100), P(32));
+
+            // The option rows (none yet on the first call): scrolled home first — Relayout places them in client
+            // coordinates — then each re-sized to the panel and re-placed, with the panel's layout held so its scrollbar
+            // cannot come or go part-way and give the rows two widths.
+            _optionsPanel.AutoScrollPosition = Point.Empty;
+            _optionsPanel.SuspendLayout();
+            try
+            {
+                foreach (var tb in _optionBoxes) SizeRow(tb);
+                Relayout();
+            }
+            finally { _optionsPanel.ResumeLayout(true); }
         }
 
-        private TextBox MakeField(int top, int width, int height)
+        private Label MakeLabel(string text)
+        {
+            return new Label { Text = text, ForeColor = _sub };
+        }
+
+        /// <summary>A section label at <paramref name="top"/> (px at _dpi) in the shared bold 8.5 pt font.</summary>
+        private void PlaceLabel(Label label, int top)
+        {
+            label.Font = FontHelper.UiAt(8.5f, _dpi, FontStyle.Bold);   // shared: never dispose
+            label.Bounds = new Rectangle(P(16), top, P(200), P(18));
+        }
+
+        private TextBox MakeField()
         {
             return new TextBox
             {
-                Left = 16, Top = top, Width = width, Height = height,
                 BackColor = _field, ForeColor = _fg, BorderStyle = BorderStyle.FixedSingle
             };
         }
 
-        private CheckBox MakeCheck(string text, int top)
+        private CheckBox MakeCheck(string text)
         {
-            return new CheckBox { Text = text, Left = 16, Top = top, Width = 300, Height = 22, ForeColor = _fg, BackColor = _bg };
+            return new CheckBox { Text = text, ForeColor = _fg, BackColor = _bg };
+        }
+
+        /// <summary>One option row's size at _dpi: the field spans the options panel less P(40) (the remove button and its
+        /// gap), measured NOW — as in 1.x, a row added after the panel grew its scrollbar is that much narrower.</summary>
+        private void SizeRow(TextBox tb)
+        {
+            tb.Size = new Size(_optionsPanel.ClientSize.Width - P(40), P(26));
+            var del = tb.Tag as Button;
+            if (del != null) del.Size = new Size(P(26), P(24));
         }
 
         private void AddOption()
         {
             if (_optionBoxes.Count >= MaxOptions) return;
-            var tb = new TextBox { Width = _optionsPanel.ClientSize.Width - 40, Height = 26, BackColor = _field, ForeColor = _fg, BorderStyle = BorderStyle.FixedSingle };
-            var del = new RoundedButton { Width = 26, Height = 24, Text = "✕", Kind = RoundedButtonKind.Neutral, Radius = 6 };
+            var tb = new TextBox { BackColor = _field, ForeColor = _fg, BorderStyle = BorderStyle.FixedSingle };
+            var del = new RoundedButton { Text = "✕", Kind = RoundedButtonKind.Neutral, Radius = 6 };
+            tb.Tag = del;   // first: SizeRow reads it
+            SizeRow(tb);
             del.Click += (s, e) =>
             {
                 if (_optionBoxes.Count <= 2) return;   // keep at least two
@@ -118,21 +182,51 @@ namespace TelegArm.UI
             _optionBoxes.Add(tb);
             _optionsPanel.Controls.Add(tb);
             _optionsPanel.Controls.Add(del);
-            tb.Tag = del;
             Relayout();
             if (_addBtn != null) _addBtn.Enabled = _optionBoxes.Count < MaxOptions;
         }
 
         private void Relayout()
         {
-            int y = 4;
+            int y = P(4);
             foreach (var tb in _optionBoxes)
             {
-                tb.Left = 4; tb.Top = y;
+                tb.Left = P(4); tb.Top = y;
                 var del = tb.Tag as Button;
-                if (del != null) { del.Left = tb.Right + 6; del.Top = y; }
-                y += 32;
+                if (del != null) { del.Left = tb.Right + P(6); del.Top = y; }
+                y += P(32);
             }
+        }
+
+        /// <summary>Step 3.3 — WM_DPICHANGED (per-monitor only: never sent while the process is system-aware, the build
+        /// default). Swallowed — Result 0, no base: WinForms' own handling must not scale this plain Form — then re-laid
+        /// out from logical values at the new effective DPI (<see cref="ApplyMetrics"/>), at the top-left Windows suggests
+        /// (its rectangle keeps a window dragged across monitors on the one it entered). Nothing is rebuilt: what the user
+        /// typed survives.</summary>
+        protected override void WndProc(ref System.Windows.Forms.Message m)
+        {
+            if (m.Msg == WindowDpi.WM_DPICHANGED)
+            {
+                m.Result = IntPtr.Zero;
+                int raw = (int)(m.WParam.ToInt64() & 0xFFFF);
+                int nw = raw > 0 ? Dpi.Effective(raw) : 0;
+                if (nw > 0 && nw != _dpi && !IsDisposed)
+                {
+                    int old = _dpi;
+                    _dpi = nw;   // first: P() and Dpi.Of(child) must already see it
+                    SuspendLayout();
+                    try { ApplyMetrics(); }
+                    finally { ResumeLayout(true); }
+                    if (m.LParam != IntPtr.Zero)
+                    {
+                        int left = Marshal.ReadInt32(m.LParam), top = Marshal.ReadInt32(m.LParam, 4);   // RECT.left, RECT.top
+                        Location = new Point(left, top);
+                    }
+                    Logger.Diag("[DPI] win=CreatePollForm old=" + old + " new=" + nw + " mon=" + raw + " applied=" + Bounds);
+                }
+                return;
+            }
+            base.WndProc(ref m);
         }
 
         private void OnCreate(object sender, EventArgs e)

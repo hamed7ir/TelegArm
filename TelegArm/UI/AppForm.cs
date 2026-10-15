@@ -348,14 +348,44 @@ namespace TelegArm.UI
         {
             base.OnHandleCreated(e);
             if (CustomChrome) ApplyDwmAttributes();
-            if (!IsPane) _windowDpi.Resync("handle");
+            if (!IsPane)
+            {
+                int before = _windowDpi.Dpi;
+                _windowDpi.Resync("handle");
+                // Review of step 3.7: a CenterScreen / CenterParent window was centred for its SYSTEM-DPI size before its
+                // handle existed; under the per-monitor default the handle-time resync rescales it about its top-left on
+                // another-DPI monitor. Centre it again, at the new size, before it is first shown.
+                if (_windowDpi.Dpi != before && !_shownOnce && WindowState == FormWindowState.Normal) Recenter();
+            }
             UpdateCompact();
         }
 
         protected override void OnShown(EventArgs e)
         {
+            _shownOnce = true;
             base.OnShown(e);
             if (CustomChrome && !_selfChecked) { _selfChecked = true; SelfCheck(); }
+        }
+
+        private bool _shownOnce;
+
+        /// <summary>Centres the window on its owner (CenterParent) or its monitor's work area (CenterScreen), kept inside the
+        /// work area; any other StartPosition is left alone.</summary>
+        private void Recenter()
+        {
+            try
+            {
+                var wa = Screen.FromHandle(Handle).WorkingArea;
+                Rectangle area;
+                if (StartPosition == FormStartPosition.CenterParent && Owner != null && !Owner.IsDisposed) area = Owner.Bounds;
+                else if (StartPosition == FormStartPosition.CenterScreen || StartPosition == FormStartPosition.CenterParent) area = wa;
+                else return;
+                int x = area.Left + (area.Width - Width) / 2, y = area.Top + (area.Height - Height) / 2;
+                x = Math.Max(wa.Left, Math.Min(x, wa.Right - Width));
+                y = Math.Max(wa.Top, Math.Min(y, wa.Bottom - Height));
+                Location = new Point(x, y);
+            }
+            catch { }
         }
 
         protected override void OnActivated(EventArgs e) { base.OnActivated(e); if (!IsPane) _windowDpi.Resync("activated"); }

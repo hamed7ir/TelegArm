@@ -16,13 +16,20 @@ namespace TelegArm.UI
     /// (the user's favorite + recent stickers from the API), and GIFs (saved GIFs). Emoji raise
     /// <see cref="Picked"/>; stickers/GIFs raise <see cref="DocumentPicked"/> with the document.
     /// Sticker/GIF lists load lazily on first open.
+    ///
+    /// Step 3.1: every length is LOGICAL (96-DPI) through Px at the picker's own DPI; fonts are shared FontCache fonts
+    /// (never disposed). A POPUP lays out at the DPI of where it opens (the caller passes Dpi.ForPopup(anchor)), is an
+    /// IDpiHost so its controls read that DPI, and closes on WM_DPICHANGED. EMBEDDED it takes its host window's DPI and
+    /// MainForm's rescale reaches it as IDpiAware: ApplyMetrics SETS everything from logical values, never multiplies.
+    /// At 96 DPI every value is exactly the 1.x one.
     /// </summary>
-    public class EmojiPicker : Form
+    public class EmojiPicker : Form, IDpiHost, IDpiAware
     {
         private readonly TelegramService _service;
         private readonly bool _dark;
         private readonly Color _accent;
         private readonly bool _embedded;   // TA-23/D3: docked pane rather than floating popup
+        private int _dpi;                  // step 3.1: the DPI this picker lays out at (popup: where it opened; embedded: its host's)
 
         public event Action<string> Picked;
         public event Action<Document> DocumentPicked;
@@ -32,6 +39,17 @@ namespace TelegArm.UI
         private FlowLayoutPanel _stickerFlow, _gifFlow, _stickerPackBar;
         private TextBox _stickerSearch;
         private bool _stickersLoaded, _gifsLoaded;
+
+        // Step 3.1: what ApplyMetrics re-sizes on a DPI change.
+        private Panel _tabBar, _catHost, _packHost;
+        private FlowLayoutPanel _catBar;
+        private Controls.NoNativeScrollPanel _emojiHost;
+        private Canvas _canvas;
+        private readonly List<KeyValuePair<Label, string>> _catButtons = new List<KeyValuePair<Label, string>>();   // button → its first emoji
+
+        private int Px(int n) { return Dpi.Px(n, _dpi); }
+
+        int IDpiHost.Dpi { get { return _dpi; } }
 
         // Decoded previews kept across panel opens so reopening / switching packs is instant.
         private static readonly Dictionary<long, Image> _previewCache = new Dictionary<long, Image>();
@@ -47,17 +65,20 @@ namespace TelegArm.UI
         /// dock LITERALLY the same type, and it converts back into a proper extraction later without
         /// touching a single line of the content. The cost is that this class now has two modes, which is
         /// what every guard below is for.
-        /// The host does: `new EmojiPicker(svc, dark, accent, embedded: true) { TopLevel = false,
+        /// The host does: `new EmojiPicker(svc, dark, accent, embedded: true, dpi: WindowDpiValue) { TopLevel = false,
         /// Dock = DockStyle.Fill }`, adds it, then calls Show().</param>
-        public EmojiPicker(TelegramService service, bool dark, Color accent, bool embedded = false)
+        /// <param name="dpi">Step 3.1 — the DPI to lay out at: a popup's Dpi.ForPopup(anchor), an embedded pane's host
+        /// window DPI. 0 = <see cref="Dpi.DefaultDpi"/>.</param>
+        public EmojiPicker(TelegramService service, bool dark, Color accent, bool embedded = false, int dpi = 0)
         {
             _service = service; _dark = dark; _accent = accent; _embedded = embedded;
+            _dpi = dpi > 0 ? dpi : Dpi.DefaultDpi;
 
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.Manual;
             ShowInTaskbar = false;
             TelegArm.Helpers.AppIcon.Set(this);   // app icon in Alt-Tab
-            Size = new Size(380, 380);
+            Size = new Size(Px(380), Px(380));   // a popup is sized at its DPI BEFORE it is shown (the caller positions by it)
             BackColor = dark ? Color.FromArgb(40, 40, 43) : Color.FromArgb(245, 245, 247);
             if (!embedded)
             {
@@ -76,23 +97,105 @@ namespace TelegArm.UI
             ShowTab(0);
         }
 
+        // ── DPI (step 3.1) ───────────────────────────────────────────────────────────────────────────────────
+
+        /// <summary>EMBEDDED: MainForm's rescale reaches the pane (children first, then this). DpiScaler has already
+        /// ratio-scaled bounds, Padding, Margin and explicit fonts; ApplyMetrics re-SETS them from logical values.</summary>
+        void IDpiAware.OnDpiChanged(int oldDpi, int newDpi)
+        {
+            if (newDpi <= 0) return;
+            _dpi = newDpi;
+            ApplyMetrics();
+        }
+
+        /// <summary>EMBEDDED: adopt the host window's DPI once parented, should it differ from the one the host passed.</summary>
+        protected override void OnParentChanged(EventArgs e)
+        {
+            base.OnParentChanged(e);
+            if (!_embedded || TopLevel || Parent == null) return;
+            int d = Dpi.Of(this);
+            if (d > 0 && d != _dpi) { _dpi = d; ApplyMetrics(); }
+        }
+
+        /// <summary>A POPUP does not rescale: when its monitor's DPI changes under it, it swallows WM_DPICHANGED (WinForms'
+        /// own handling must not scale it) and closes; the next open is sized where it opens. Embedded it is a child
+        /// window, which never receives the message.</summary>
+        protected override void WndProc(ref System.Windows.Forms.Message m)
+        {
+            if (m.Msg == WindowDpi.WM_DPICHANGED && !_embedded)
+            {
+                m.Result = IntPtr.Zero;
+                try { Close(); } catch { }
+                return;
+            }
+            base.WndProc(ref m);
+        }
+
+        /// <summary>The emoji grid takes the scroll host's width (Px(2) short, as the 1.x 2 px).</summary>
+        private void RelayoutCanvas()
+        {
+            if (_canvas == null || _emojiHost == null) return;
+            _canvas.SetWidth(_emojiHost.ClientSize.Width - Px(2));
+        }
+
+        /// <summary>SETS every DPI-dependent length, font and image from its logical value at the current DPI — never
+        /// multiplies, so it is safe after DpiScaler's generic pass and when nothing was scaled at all.</summary>
+        private void ApplyMetrics()
+        {
+            SuspendLayout();
+            try
+            {
+                _tabBar.Height = Px(38);
+                foreach (var t in new[] { _tabEmoji, _tabStickers, _tabGifs }) t.Font = FontHelper.UiAt(10.5f, _dpi, FontStyle.Bold);
+                LayoutTabs();
+
+                _catHost.Height = Px(48);
+                _catBar.SuspendLayout();
+                _catBar.Padding = new Padding(Px(4), Px(3), Px(4), 0);
+                foreach (var cb in _catButtons) StyleCatButton(cb.Key, cb.Value);
+                _catBar.ResumeLayout(true);
+
+                _packHost.Height = Px(52);
+                _stickerPackBar.SuspendLayout();
+                _stickerPackBar.Padding = new Padding(Px(4), Px(4), Px(4), 0);
+                foreach (Control c in _stickerPackBar.Controls) { var l = c as Label; if (l != null) SizePackButton(l); }
+                _stickerPackBar.ResumeLayout(true);
+                _stickerSearch.Font = FontHelper.UiAt(9.5f, _dpi);   // shared: never dispose
+
+                foreach (var flow in new[] { _stickerFlow, _gifFlow })
+                {
+                    flow.SuspendLayout();
+                    flow.Padding = new Padding(Px(6));
+                    foreach (Control c in flow.Controls) { var tile = c as MediaTile; if (tile != null) tile.SetDpi(_dpi); }
+                    flow.ResumeLayout(true);
+                }
+            }
+            finally { ResumeLayout(true); }
+            if (_canvas != null) _canvas.SetDpi(_dpi);
+            RelayoutCanvas();
+        }
+
         private void BuildTabs()
         {
-            var bar = new Panel { Dock = DockStyle.Top, Height = 38, BackColor = BackColor };
+            var bar = new Panel { Dock = DockStyle.Top, Height = Px(38), BackColor = BackColor };
+            _tabBar = bar;
             _tabEmoji = MakeTab("Emoji", 0);
             _tabStickers = MakeTab("Stickers", 1);
             _tabGifs = MakeTab("GIFs", 2);
             bar.Controls.Add(_tabEmoji);
             bar.Controls.Add(_tabStickers);
             bar.Controls.Add(_tabGifs);
-            bar.Resize += (s, e) =>
-            {
-                int w = bar.ClientSize.Width / 3;
-                _tabEmoji.SetBounds(0, 0, w, bar.Height);
-                _tabStickers.SetBounds(w, 0, w, bar.Height);
-                _tabGifs.SetBounds(2 * w, 0, bar.ClientSize.Width - 2 * w, bar.Height);
-            };
+            bar.Resize += (s, e) => LayoutTabs();
             Controls.Add(bar);
+        }
+
+        /// <summary>The three tabs in thirds of the bar.</summary>
+        private void LayoutTabs()
+        {
+            int w = _tabBar.ClientSize.Width / 3;
+            _tabEmoji.SetBounds(0, 0, w, _tabBar.Height);
+            _tabStickers.SetBounds(w, 0, w, _tabBar.Height);
+            _tabGifs.SetBounds(2 * w, 0, _tabBar.ClientSize.Width - 2 * w, _tabBar.Height);
         }
 
         private Label MakeTab(string text, int idx)
@@ -102,7 +205,7 @@ namespace TelegArm.UI
                 Text = text,
                 TextAlign = ContentAlignment.MiddleCenter,
                 Cursor = Cursors.Hand,
-                Font = FontHelper.Ui(10.5f, FontStyle.Bold),
+                Font = FontHelper.UiAt(10.5f, _dpi, FontStyle.Bold),   // shared: never dispose
                 ForeColor = _dark ? Color.FromArgb(170, 170, 175) : Color.FromArgb(110, 110, 115)
             };
             lbl.Click += (s, e) => ShowTab(idx);
@@ -112,6 +215,9 @@ namespace TelegArm.UI
         private void BuildEmoji()
         {
             _emojiPanel = new Panel { Dock = DockStyle.Fill, BackColor = BackColor, Visible = false };
+            // Step 3.1 — PARENT BEFORE CHILDREN: the page joins the picker first, so the ThemedScrollBars added below
+            // adopt the picker's DPI when parented. Add order inside every container is unchanged (docking keys on it).
+            Controls.Add(_emojiPanel);
 
             // ⚠ BATCH-TA-39 — THE CATEGORY STRIP USES THE **STICKER PACK BAR'S** SHAPE, NOT A PLAIN
             //   FlowLayoutPanel. It was `new FlowLayoutPanel { AutoScroll = true }` + ScrollbarTheme.Apply,
@@ -126,25 +232,25 @@ namespace TelegArm.UI
             var catBar = new Controls.NoNativeScrollFlowPanel
             {
                 Dock = DockStyle.Fill, WrapContents = false, AutoScroll = true,
-                BackColor = _dark ? Color.FromArgb(34, 34, 37) : Color.FromArgb(236, 236, 240), Padding = new Padding(4, 3, 4, 0)
+                BackColor = _dark ? Color.FromArgb(34, 34, 37) : Color.FromArgb(236, 236, 240), Padding = new Padding(Px(4), Px(3), Px(4), 0)
             };
             var catHost = new Panel
             {
-                Dock = DockStyle.Bottom, Height = 48,
+                Dock = DockStyle.Bottom, Height = Px(48),
                 BackColor = catBar.BackColor
             };
-            catHost.Controls.Add(catBar);   // Fill added first → docks last, taking the remainder
-            catHost.Controls.Add(new Controls.ThemedScrollBar(catBar, _dark, _accent, horizontal: true) { Dock = DockStyle.Bottom });
+            _catBar = catBar; _catHost = catHost;
 
             var host = new Controls.NoNativeScrollPanel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = BackColor };
             ScrollbarTheme.Apply(host, _dark);
-            var canvas = new Canvas(EmojiRenderer.Catalog(), _dark) { BackColor = BackColor };
+            var canvas = new Canvas(EmojiRenderer.Catalog(), _dark, _dpi) { BackColor = BackColor };
+            _emojiHost = host; _canvas = canvas;
             // Embedded, picking must NOT dismiss the pane — the whole value of a dock is picking several
             // in a row without reopening it.
             canvas.Picked += e => { Picked?.Invoke(e); if (!_embedded) Close(); };
             host.Controls.Add(canvas);
 
-            EventHandler relayout = (s, e) => canvas.SetWidth(host.ClientSize.Width - 2);
+            EventHandler relayout = (s, e) => RelayoutCanvas();
             host.Resize += relayout;
             Shown += relayout;
             // ⚠ EMBEDDED, `Shown` IS NOT ENOUGH ON ITS OWN. A docked pane is sized by its parent's layout
@@ -156,16 +262,16 @@ namespace TelegArm.UI
             // Quick-nav: one button per category that scrolls the grid to that section.
             foreach (var cat in canvas.Categories)
             {
-                var b = new Label { AutoSize = false, Size = new Size(34, 34), Margin = new Padding(2), Cursor = Cursors.Hand };
-                var icon = EmojiRenderer.Get(canvas.FirstEmojiOf(cat));
-                if (icon != null) { b.Image = new Bitmap(icon, new Size(24, 24)); b.ImageAlign = ContentAlignment.MiddleCenter; }
-                else
+                var b = new Label { AutoSize = false, Cursor = Cursors.Hand };
+                string first = canvas.FirstEmojiOf(cat);
+                if (EmojiRenderer.Get(first) == null)
                 {
                     b.Text = cat.Length > 0 ? cat.Substring(0, 1) : "?";
                     b.TextAlign = ContentAlignment.MiddleCenter;
-                    b.Font = FontHelper.Ui(10f, FontStyle.Bold);
                     b.ForeColor = _dark ? Color.FromArgb(200, 200, 205) : Color.FromArgb(70, 70, 75);
                 }
+                StyleCatButton(b, first);   // size, margin, and the icon image or the letter's font, at _dpi
+                _catButtons.Add(new KeyValuePair<Label, string>(b, first));
                 string catName = cat;
                 b.Click += (s, e) => { host.AutoScrollPosition = new Point(0, canvas.TopOf(catName)); };
                 catBar.Controls.Add(b);
@@ -173,8 +279,9 @@ namespace TelegArm.UI
 
             _emojiPanel.Controls.Add(host);     // Fill (add first → docks last)
             _emojiPanel.Controls.Add(catHost);   // Bottom — the strip plus its owner-drawn scrollbar
+            catHost.Controls.Add(catBar);   // Fill added first → docks last, taking the remainder
+            catHost.Controls.Add(new Controls.ThemedScrollBar(catBar, _dark, _accent, horizontal: true) { Dock = DockStyle.Bottom });
             AddScrollbar(_emojiPanel, host);    // Right
-            Controls.Add(_emojiPanel);
             TelegArm.UI.Controls.TouchScroller.Enable(host, horizontal: false);      // finger-pan the emoji grid (RT touch)
             TelegArm.UI.Controls.TouchScroller.Enable(catBar, horizontal: true);     // finger-pan the category bar
         }
@@ -183,12 +290,12 @@ namespace TelegArm.UI
         {
             // Tab page = host with a themed scrollbar; the inner scroll panel holds the flow.
             var page = new Panel { Dock = DockStyle.Fill, BackColor = BackColor, Visible = false };
+            Controls.Add(page);            // step 3.1: parent before children (the scrollbar adopts the picker's DPI)
             var scroll = new Controls.NoNativeScrollPanel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = BackColor };
-            flow = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, WrapContents = true, BackColor = BackColor, Padding = new Padding(6) };
+            flow = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, WrapContents = true, BackColor = BackColor, Padding = new Padding(Px(6)) };
             scroll.Controls.Add(flow);
             page.Controls.Add(scroll);     // Fill (add first → docks last)
             AddScrollbar(page, scroll);    // Right
-            Controls.Add(page);
             panel = page;                  // ShowTab toggles this page's visibility
             // Finger-pan the sticker/GIF grid (RT touch); register each tile as it's added so a drag STARTING
             // on a tile still pans the surface (SurfaceOf walks up to 'scroll'), and a tap picks the tile.
@@ -203,26 +310,26 @@ namespace TelegArm.UI
         private void BuildStickerTab()
         {
             _stickerPanel = new Panel { Dock = DockStyle.Fill, BackColor = BackColor, Visible = false };
+            Controls.Add(_stickerPanel);   // step 3.1: parent before children (the scrollbars adopt the picker's DPI)
 
             _stickerPackBar = new Controls.NoNativeScrollFlowPanel
             {
                 Dock = DockStyle.Fill, WrapContents = false, AutoScroll = true,
-                BackColor = _dark ? Color.FromArgb(34, 34, 37) : Color.FromArgb(236, 236, 240), Padding = new Padding(4, 4, 4, 0)
+                BackColor = _dark ? Color.FromArgb(34, 34, 37) : Color.FromArgb(236, 236, 240), Padding = new Padding(Px(4), Px(4), Px(4), 0)
             };
             // Host the pack strip with a themed horizontal scrollbar along the bottom.
             var packHost = new Panel
             {
-                Dock = DockStyle.Bottom, Height = 52,
+                Dock = DockStyle.Bottom, Height = Px(52),
                 BackColor = _stickerPackBar.BackColor
             };
-            packHost.Controls.Add(_stickerPackBar);   // Fill (add first → docks last)
-            packHost.Controls.Add(new Controls.ThemedScrollBar(_stickerPackBar, _dark, _accent, horizontal: true) { Dock = DockStyle.Bottom });
+            _packHost = packHost;
             _stickerSearch = new TextBox
             {
                 Dock = DockStyle.Top, BorderStyle = BorderStyle.FixedSingle,
                 BackColor = _dark ? Color.FromArgb(30, 30, 33) : Color.White,
                 ForeColor = _dark ? Color.White : Color.Black,
-                Font = FontHelper.Ui(9.5f)
+                Font = FontHelper.UiAt(9.5f, _dpi)   // shared: never dispose
             };
             SetCue(_stickerSearch, "Search stickers by emoji…");
             _stickerSearch.KeyDown += async (s, e) =>
@@ -235,16 +342,17 @@ namespace TelegArm.UI
             };
 
             var scrollHost = new Controls.NoNativeScrollPanel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = BackColor };
-            _stickerFlow = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, WrapContents = true, BackColor = BackColor, Padding = new Padding(6) };
+            _stickerFlow = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, WrapContents = true, BackColor = BackColor, Padding = new Padding(Px(6)) };
             scrollHost.Controls.Add(_stickerFlow);
 
             // Docking order is reverse of add order (last added docks first), so the Fill host
             // must be added first to receive the leftover space between the search row and pack bar.
             _stickerPanel.Controls.Add(scrollHost);        // Fill (add first → docks last)
             _stickerPanel.Controls.Add(packHost);          // Bottom (pack strip + its h-scrollbar)
+            packHost.Controls.Add(_stickerPackBar);   // Fill (add first → docks last)
+            packHost.Controls.Add(new Controls.ThemedScrollBar(_stickerPackBar, _dark, _accent, horizontal: true) { Dock = DockStyle.Bottom });
             _stickerPanel.Controls.Add(_stickerSearch);    // Top
             AddScrollbar(_stickerPanel, scrollHost);       // Right
-            Controls.Add(_stickerPanel);
 
             TelegArm.UI.Controls.TouchScroller.Enable(_stickerPackBar, horizontal: true);
         }
@@ -262,15 +370,41 @@ namespace TelegArm.UI
             {
                 Text = label,
                 AutoSize = false,
-                Size = new Size(set == null ? 40 : 84, 34),
+                Tag = set == null ? 40 : 84,   // step 3.1: the LOGICAL width, re-applied by SizePackButton on a DPI change
                 TextAlign = ContentAlignment.MiddleCenter,
                 Cursor = Cursors.Hand,
-                Font = FontHelper.Ui(9f),
-                ForeColor = _dark ? Color.FromArgb(210, 210, 215) : Color.FromArgb(60, 60, 65),
-                Margin = new Padding(2)
+                ForeColor = _dark ? Color.FromArgb(210, 210, 215) : Color.FromArgb(60, 60, 65)
             };
+            SizePackButton(b);
             b.Click += async (s, e) => { if (set == null) await ShowFavedRecent(); else await LoadSet(set); };
             _stickerPackBar.Controls.Add(b);
+        }
+
+        /// <summary>Step 3.1 — a pack button's size, margin and font at the picker's DPI, SET from logical values.</summary>
+        private void SizePackButton(Label b)
+        {
+            int w = b.Tag is int ? (int)b.Tag : 84;
+            b.Size = new Size(Px(w), Px(34));
+            b.Margin = new Padding(Px(2));
+            b.Font = FontHelper.UiAt(9f, _dpi);   // shared: never dispose
+        }
+
+        /// <summary>Step 3.1 — a category button's size and margin, and its icon (an OWNED copy at Px(24): a GetScaled
+        /// image could be disposed by step 3.5's cache trim while the label still shows it) or its letter's font.
+        /// Replaces and disposes the previous icon, so it is safe to call again on a DPI change.</summary>
+        private void StyleCatButton(Label b, string emoji)
+        {
+            b.Size = new Size(Px(34), Px(34));
+            b.Margin = new Padding(Px(2));
+            var icon = EmojiRenderer.Get(emoji);   // the full-size image the renderer's cache owns: copied, never kept
+            if (icon != null)
+            {
+                var old = b.Image;
+                b.Image = new Bitmap(icon, new Size(Px(24), Px(24)));
+                b.ImageAlign = ContentAlignment.MiddleCenter;
+                if (old != null) old.Dispose();
+            }
+            else b.Font = FontHelper.UiAt(10f, _dpi, FontStyle.Bold);   // shared: never dispose
         }
 
         private async System.Threading.Tasks.Task ShowFavedRecent()
@@ -346,7 +480,7 @@ namespace TelegArm.UI
 
         private void AddTile(FlowLayoutPanel flow, Document doc, int size, bool sticker)
         {
-            var tile = new MediaTile(doc, size, _dark) { Margin = new Padding(3) };
+            var tile = new MediaTile(doc, size, _dark, _dpi);   // size is LOGICAL; the tile sets its px size and margin
             tile.Click += (s, e) => { DocumentPicked?.Invoke(doc); if (!_embedded) Close(); };
             flow.Controls.Add(tile);
             LoadPreview(tile, doc, sticker);
@@ -475,21 +609,34 @@ namespace TelegArm.UI
         [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
         private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, string lParam);
 
-        /// <summary>One sticker/GIF cell: shows a downloaded preview (set later), click to send.</summary>
+        /// <summary>One sticker/GIF cell: shows a downloaded preview (set later), click to send.
+        /// Step 3.1: its side is LOGICAL; <see cref="SetDpi"/> SETS the px size, margin and paint inset.</summary>
         private sealed class MediaTile : Control
         {
             private Image _img;
             private readonly bool _dark;
+            private readonly int _logical;   // the side at 96 DPI (72 sticker, 96 GIF)
+            private int _dpi;
             private bool _hover;
 
-            public MediaTile(Document doc, int size, bool dark)
+            public MediaTile(Document doc, int size, bool dark, int dpi)
             {
                 _dark = dark;
-                Size = new Size(size, size);
+                _logical = size;
+                SetDpi(dpi);
                 Cursor = Cursors.Hand;
                 TabStop = false;
                 SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
                          | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            }
+
+            public void SetDpi(int dpi)
+            {
+                _dpi = dpi;
+                int s = Dpi.Px(_logical, dpi);
+                Size = new Size(s, s);
+                Margin = new Padding(Dpi.Px(3, dpi));
+                Invalidate();
             }
 
             public void SetImage(Image img) { _img = img; if (!IsDisposed) Invalidate(); }
@@ -504,7 +651,8 @@ namespace TelegArm.UI
                                : (Parent != null ? Parent.BackColor : BackColor));
                 if (_img == null) return;
                 g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                double scale = Math.Min((double)(Width - 6) / _img.Width, (double)(Height - 6) / _img.Height);
+                int inset = Dpi.Px(6, _dpi);
+                double scale = Math.Min((double)(Width - inset) / _img.Width, (double)(Height - inset) / _img.Height);
                 int w = Math.Max(1, (int)(_img.Width * scale)), h = Math.Max(1, (int)(_img.Height * scale));
                 g.DrawImage(_img, new Rectangle((Width - w) / 2, (Height - h) / 2, w, h));
             }
@@ -517,11 +665,15 @@ namespace TelegArm.UI
         }
 
         // ── Emoji grid (virtualized) ─────────────────────────────────────────
+        /// <summary>Step 3.1: Cell / Pad / HeaderH are LOGICAL, laid out through Px at the DPI the picker gives it
+        /// (<see cref="SetDpi"/>, then a relayout); the emoji image is GetScaled at Px(24) — fetched per paint, never kept.</summary>
         private sealed class Canvas : Control
         {
-            private const int Cell = 34, Pad = 6, HeaderH = 26;
+            private const int Cell = 34, Pad = 6, HeaderH = 26, Glyph = 24;   // logical px
             private readonly List<EmojiRenderer.EmojiCell> _cells;
             private readonly bool _dark;
+            private int _dpi;
+            private int P(int n) { return Dpi.Px(n, _dpi); }
             private readonly List<KeyValuePair<EmojiRenderer.EmojiCell, Rectangle>> _layout = new List<KeyValuePair<EmojiRenderer.EmojiCell, Rectangle>>();
             private readonly List<string> _categories = new List<string>();
             private readonly Dictionary<string, string> _firstEmoji = new Dictionary<string, string>();
@@ -534,13 +686,14 @@ namespace TelegArm.UI
             public string FirstEmojiOf(string header) => _firstEmoji.TryGetValue(header, out var e) ? e : null;
             public int TopOf(string header) => _headerTop.TryGetValue(header, out var y) ? y : 0;
 
-            public Canvas(List<EmojiRenderer.EmojiCell> cells, bool dark)
+            public Canvas(List<EmojiRenderer.EmojiCell> cells, bool dark, int dpi)
             {
                 _cells = cells ?? new List<EmojiRenderer.EmojiCell>();
                 _dark = dark;
+                _dpi = dpi;
                 SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
                          | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
-                Width = 360;
+                Width = P(360);
 
                 string last = null;
                 foreach (var c in _cells)
@@ -550,9 +703,13 @@ namespace TelegArm.UI
                 }
             }
 
+            /// <summary>The DPI to lay out and paint at; the caller relayouts (SetWidth) after.</summary>
+            public void SetDpi(int dpi) { if (dpi > 0) _dpi = dpi; }
+
             public void SetWidth(int w)
             {
-                if (w < Cell + 2 * Pad) w = Cell + 2 * Pad;
+                int min = P(Cell) + 2 * P(Pad);
+                if (w < min) w = min;
                 Width = w;
                 Relayout();
             }
@@ -560,24 +717,25 @@ namespace TelegArm.UI
             private void Relayout()
             {
                 _layout.Clear();
-                int x = Pad, y = Pad;
+                int cell = P(Cell), pad = P(Pad), headerH = P(HeaderH);
+                int x = pad, y = pad;
                 foreach (var c in _cells)
                 {
                     if (c.IsHeader)
                     {
-                        if (x > Pad) { x = Pad; y += Cell; }
+                        if (x > pad) { x = pad; y += cell; }
                         _headerTop[c.Header] = y;
-                        _layout.Add(new KeyValuePair<EmojiRenderer.EmojiCell, Rectangle>(c, new Rectangle(Pad, y, Width - 2 * Pad, HeaderH)));
-                        y += HeaderH; x = Pad;
+                        _layout.Add(new KeyValuePair<EmojiRenderer.EmojiCell, Rectangle>(c, new Rectangle(pad, y, Width - 2 * pad, headerH)));
+                        y += headerH; x = pad;
                     }
                     else
                     {
-                        if (x + Cell > Width - Pad) { x = Pad; y += Cell; }
-                        _layout.Add(new KeyValuePair<EmojiRenderer.EmojiCell, Rectangle>(c, new Rectangle(x, y, Cell, Cell)));
-                        x += Cell;
+                        if (x + cell > Width - pad) { x = pad; y += cell; }
+                        _layout.Add(new KeyValuePair<EmojiRenderer.EmojiCell, Rectangle>(c, new Rectangle(x, y, cell, cell)));
+                        x += cell;
                     }
                 }
-                Height = y + Cell + Pad;
+                Height = y + cell + pad;
                 Invalidate();
             }
 
@@ -588,6 +746,8 @@ namespace TelegArm.UI
                 g.Clear(BackColor);
                 var clip = e.ClipRectangle;
                 Color headerColor = _dark ? Color.FromArgb(170, 170, 175) : Color.FromArgb(120, 120, 125);
+                var headerFont = FontHelper.UiAt(8.5f, _dpi, FontStyle.Bold);   // shared: never dispose
+                int one = P(1), radius = P(6), side = P(Glyph);
 
                 for (int i = 0; i < _layout.Count; i++)
                 {
@@ -596,14 +756,13 @@ namespace TelegArm.UI
                     var c = _layout[i].Key;
                     if (c.IsHeader)
                     {
-                        using (var f = FontHelper.Ui(8.5f, FontStyle.Bold))
-                            TextRenderer.DrawText(g, c.Header.ToUpperInvariant(), f, rect, headerColor,
-                                TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+                        TextRenderer.DrawText(g, c.Header.ToUpperInvariant(), headerFont, rect, headerColor,
+                            TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
                         continue;
                     }
                     if (i == _hover)
                         using (var hb = new SolidBrush(_dark ? Color.FromArgb(60, 60, 64) : Color.FromArgb(225, 225, 230)))
-                        using (var path = DrawHelper.RoundedRect(new Rectangle(rect.X + 1, rect.Y + 1, rect.Width - 2, rect.Height - 2), 6))
+                        using (var path = DrawHelper.RoundedRect(new Rectangle(rect.X + one, rect.Y + one, rect.Width - 2 * one, rect.Height - 2 * one), radius))
                             g.FillPath(hb, path);
 
                     // ⚠ BATCH-TA-23/D1a — PRE-SCALED, NOT RESAMPLED PER PAINT.
@@ -616,15 +775,18 @@ namespace TelegArm.UI
                     // same grid is docked, because a dock repaints on every scroll step, on a Tegra 3.
                     // GetScaled caches by (emoji, size), so the bicubic work happens ONCE per glyph per size
                     // for the life of the process and the paint becomes a 1:1 blit.
-                    int side = rect.Width - 10;
-                    var img = EmojiRenderer.GetScaled(c.Emoji, side);
+                    // Step 3.1: the side is Px(24) at the canvas DPI, centred in the cell (at 96: 24 at +5, as before).
+                    // GetScaledAt records the LOGICAL 24, so step 3.5's trim keeps Px(24) for every open window's DPI; the
+                    // image is fetched per paint and never kept, since TrimScaled disposes the sizes it drops.
+                    int off = (rect.Width - side) / 2;
+                    var img = EmojiRenderer.GetScaledAt(c.Emoji, Glyph, _dpi);
                     if (img != null)
-                        g.DrawImage(img, rect.X + 5, rect.Y + 5, side, side);   // 1:1 — no interpolation
+                        g.DrawImage(img, rect.X + off, rect.Y + off, side, side);   // 1:1 — no interpolation
                     else
                     {
-                        using (var f = new Font("Segoe UI Emoji", 13f))
-                            TextRenderer.DrawText(g, c.Emoji, f, rect, _dark ? Color.White : Color.Black,
-                                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                        // Shared: never dispose. (Pre-existing fallback when the Noto zip is missing — font text.)
+                        TextRenderer.DrawText(g, c.Emoji, FontCache.Get("Segoe UI Emoji", 13f, FontStyle.Regular, _dpi), rect,
+                            _dark ? Color.White : Color.Black, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
                     }
                 }
             }

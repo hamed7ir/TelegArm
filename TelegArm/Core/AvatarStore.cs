@@ -386,7 +386,8 @@ namespace TelegArm.Core
             try { if (File.Exists(path)) File.Delete(path); } catch { }
         }
 
-        /// <summary>Decodes avatar bytes into a small (≤96px) self-contained bitmap (ARM32-safe).</summary>
+        /// <summary>Decodes avatar bytes into a small self-contained bitmap (ARM32-safe). Step 3.5: capped at 96 px at the
+        /// system DPI (so 96 on the RT at 100%, as before), up to 160 px above it.</summary>
         private static Image DecodeAvatar(byte[] bytes)
         {
             try
@@ -394,8 +395,9 @@ namespace TelegArm.Core
                 using (var ms = new MemoryStream(bytes))
                 using (var src = Image.FromStream(ms))
                 {
-                    int side = Math.Min(96, Math.Min(src.Width, src.Height));
-                    if (side <= 0) side = 96;
+                    int cap = Math.Min(160, Math.Max(96, Helpers.Dpi.Px(96, Helpers.Dpi.SystemDpi)));
+                    int side = Math.Min(cap, Math.Min(src.Width, src.Height));
+                    if (side <= 0) side = cap;
                     var bmp = new Bitmap(side, side);
                     using (var g = Graphics.FromImage(bmp))
                     {

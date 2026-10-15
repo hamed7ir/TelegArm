@@ -14,7 +14,7 @@ namespace TelegArm.UI
     /// the legacy balloon consumes, so the two channels cannot describe the same message differently.
     ///
     /// See <see cref="NotificationStack"/> for placement, per-chat identity and the suppression gate.</summary>
-    internal sealed class NotificationWindow : Form
+    internal sealed class NotificationWindow : Form, IDpiHost
     {
         // ══════════════════════════════════════════════════════════════════════════════════════════
         //  W1 — NO FOCUS STEAL.  ⚠⚠ READ THIS BEFORE CHANGING ANY OF THE FOUR LINES BELOW. ⚠⚠
@@ -92,12 +92,15 @@ namespace TelegArm.UI
         public event Action<NotificationWindow> Clicked;
         public event Action<NotificationWindow> Dismissed;
 
-        // ── layout, in DESIGN pixels at 96 dpi; every use is scaled by _scale ─────────────────────
+        // ── layout, in LOGICAL pixels at 96 dpi; every use goes through S() = Dpi.Px at _dpi ──────
         private const int DesignW = 360, DesignH = 84;
         private const int Pad = 12, AvatarD = 44, TitleH = 20, LineH = 18, CloseBox = 18;
         private const int DismissMs = 6000, TickMs = 100;
 
-        private readonly float _scale;
+        /// <summary>Step 3.1 — the EFFECTIVE DPI of the screen this toast opens on, chosen by NotificationStack
+        /// (Dpi.ForPopup) before there is a window, and updated by <see cref="Place"/>. Never read from a Graphics.</summary>
+        private int _dpi;
+        int IDpiHost.Dpi { get { return _dpi; } }
         private readonly bool _dark;
         private readonly Color _accent, _bg, _border, _fg, _sub;
 
@@ -112,13 +115,15 @@ namespace TelegArm.UI
         private Rectangle _closeRect;
 
         public NotificationWindow(NotifyInfo info, bool dark, Color accent)
-            : this(info, dark, accent, 1) { }
+            : this(info, dark, accent, 1, Dpi.DefaultDpi) { }
 
         /// <summary>N3c — <paramref name="initialCount"/> is how many messages this chat has already
         /// accumulated. A window created directly starts at 1; a window PROMOTED OUT OF THE QUEUE starts at
-        /// whatever piled up while it was waiting. See NotificationStack's N3c note for why.</summary>
-        public NotificationWindow(NotifyInfo info, bool dark, Color accent, int initialCount)
+        /// whatever piled up while it was waiting. See NotificationStack's N3c note for why.
+        /// Step 3.1 — <paramref name="dpi"/> is the effective DPI of the TARGET screen (the stack picks it).</summary>
+        public NotificationWindow(NotifyInfo info, bool dark, Color accent, int initialCount, int dpi)
         {
+            _dpi = dpi > 0 ? dpi : Dpi.DefaultDpi;
             AccountId = info.AccountId;
             PeerId = info.PeerId;
             MessageId = info.MessageId;
@@ -147,23 +152,18 @@ namespace TelegArm.UI
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer
                      | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
 
-            // ⚠ SIZE SCALES, PLACEMENT DOES NOT NEED TO. The process is deliberately SYSTEM-DPI aware
-            //   (Helpers/Dpi.cs — per-monitor waits on redesign step 3.7), so Screen.WorkingArea is
-            //   already in the same pixels we position in and the anchor maths is DPI-agnostic. The BOX
-            //   is not: FontHelper returns POINT-sized fonts, which grow with DPI, so a fixed 360x84 at
-            //   200% would clip the text. Reading DpiX from our own Graphics gives the factor the process
-            //   actually sees — and correctly reports 96 when the DPI-unaware rescue is on, because then
-            //   the OS scales the whole window instead.
-            float dpi = 96f;
-            try { using (var g = CreateGraphics()) dpi = g.DpiX; } catch { }
-            _scale = dpi / 96f;
-            Size = new Size(S(DesignW), S(DesignH));
+            // Step 3.1 — sized at the target screen's DPI, with no window yet (the CreateGraphics().DpiX read
+            // that was here also created the handle; Show() creates it now, as in the W1 probes' case D).
+            Size = SizeAt(_dpi);
 
             _timer = new Timer { Interval = TickMs };
             _timer.Tick += OnTick;
         }
 
-        private int S(int designPx) { return (int)Math.Round(designPx * _scale); }
+        /// <summary>Step 3.1 — the box at <paramref name="dpi"/>, for the stack's slot maths before a window exists.</summary>
+        internal static Size SizeAt(int dpi) { return new Size(Dpi.Px(DesignW, dpi), Dpi.Px(DesignH, dpi)); }
+
+        private int S(int logicalPx) { return Dpi.Px(logicalPx, _dpi); }
 
         /// <summary>W2 — a newer message in the SAME chat updates this window instead of opening another.
         /// A busy group sending forty messages produces ONE window, not forty queued windows outliving the
@@ -180,10 +180,11 @@ namespace TelegArm.UI
         }
 
         /// <summary>Shows WITHOUT activating, then raises to topmost WITHOUT activating. Order matters:
-        /// SetWindowPos needs a handle, and Show() is what creates it.</summary>
-        public void ShowNoActivate(Point location)
+        /// SetWindowPos needs a handle, and Show() is what creates it. Step 3.1: position + size in ONE
+        /// Bounds set BEFORE Show, so the visible window never moves or resizes into place.</summary>
+        public void ShowNoActivate(Rectangle bounds)
         {
-            Location = location;
+            Bounds = bounds;
             Show();                       // ShowWithoutActivation => ShowWindow(SW_SHOWNOACTIVATE)
             GoTopMostWithoutActivating();
             _timer.Start();
@@ -201,11 +202,30 @@ namespace TelegArm.UI
             catch { /* placement is cosmetic; never let it kill the notification */ }
         }
 
-        /// <summary>Moves the window without activating it (the stack re-anchors on every show).</summary>
-        public void MoveTo(Point location)
+        /// <summary>Places the window without activating it (the stack re-anchors on every show). Step 3.1: also
+        /// takes the target screen's DPI; position + size in one Bounds set (SetBoundsCore: SWP_NOACTIVATE).</summary>
+        public void Place(int dpi, Rectangle bounds)
         {
-            if (Location != location) Location = location;
+            bool dpiChanged = dpi > 0 && dpi != _dpi;
+            if (dpiChanged) _dpi = dpi;          // first: the repaint the resize causes must already see it
+            if (Bounds != bounds) Bounds = bounds;
             GoTopMostWithoutActivating();
+            if (dpiChanged) Invalidate();
+        }
+
+        /// <summary>Step 3.1 — WM_DPICHANGED (per-monitor only). Swallowed — Result 0, no base, never the suggested
+        /// rectangle — and the STACK re-places every toast at the target screen's DPI, posted (idempotent, so the
+        /// message a move of our own raises settles at once).</summary>
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == WindowDpi.WM_DPICHANGED)
+            {
+                m.Result = IntPtr.Zero;
+                if (!_closing && IsHandleCreated)
+                    try { BeginInvoke((Action)NotificationStack.RelayoutAfterDpiChange); } catch { }
+                return;
+            }
+            base.WndProc(ref m);
         }
 
         // ── W5 — auto-dismiss, PAUSED on hover ───────────────────────────────────────────────────
@@ -301,32 +321,31 @@ namespace TelegArm.UI
             _closeRect = new Rectangle(r.Width - pad - closeW, S(8), closeW, closeW);
             DrawClose(g, _closeRect);
 
+            // Step 3.1 — shared pixel fonts at _dpi (FontCache): never disposed.
             int titleW = _closeRect.Left - textX - S(6);
-            using (var f = FontHelper.For(_title ?? "", 10f, FontStyle.Bold))
-                TextRenderer.DrawText(g, _title ?? "", f, new Rectangle(textX, S(10), titleW, S(TitleH)), _fg,
-                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix
-                    | TextFormatFlags.EndEllipsis);
+            TextRenderer.DrawText(g, _title ?? "", FontHelper.ForAt(_title ?? "", 10f, _dpi, FontStyle.Bold),
+                new Rectangle(textX, S(10), titleW, S(TitleH)), _fg,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix
+                | TextFormatFlags.EndEllipsis);
 
             // W2 — the count, so a burst reads as a burst rather than as one stale message.
             string more = _count > 1 ? "+" + (_count - 1) + " more" : null;
+            var mf = FontHelper.UiAt(8.5f, _dpi, FontStyle.Bold);
             int moreW = 0;
             if (more != null)
-                using (var mf = FontHelper.Ui(8.5f, FontStyle.Bold))
-                    moreW = TextRenderer.MeasureText(g, more, mf).Width + S(8);
+                moreW = TextRenderer.MeasureText(g, more, mf).Width + S(8);
 
             int bodyTop = S(10 + TitleH + 2);
             int bodyH = S(LineH) * 2;
-            using (var f = FontHelper.For(_text ?? "", 9f))
-                TextRenderer.DrawText(g, _text ?? "", f,
-                    new Rectangle(textX, bodyTop, r.Width - textX - pad - moreW, bodyH), _sub,
-                    TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak
-                    | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+            TextRenderer.DrawText(g, _text ?? "", FontHelper.ForAt(_text ?? "", 9f, _dpi),
+                new Rectangle(textX, bodyTop, r.Width - textX - pad - moreW, bodyH), _sub,
+                TextFormatFlags.Left | TextFormatFlags.Top | TextFormatFlags.WordBreak
+                | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
 
             if (more != null)
-                using (var mf = FontHelper.Ui(8.5f, FontStyle.Bold))
-                    TextRenderer.DrawText(g, more, mf,
-                        new Rectangle(r.Width - pad - moreW, bodyTop + S(LineH), moreW, S(LineH)), _accent,
-                        TextFormatFlags.Right | TextFormatFlags.Bottom | TextFormatFlags.NoPrefix);
+                TextRenderer.DrawText(g, more, mf,
+                    new Rectangle(r.Width - pad - moreW, bodyTop + S(LineH), moreW, S(LineH)), _accent,
+                    TextFormatFlags.Right | TextFormatFlags.Bottom | TextFormatFlags.NoPrefix);
         }
 
         /// <summary>The chat-list avatar, exactly: the cached photo clipped to a circle, or the per-peer
@@ -346,19 +365,18 @@ namespace TelegArm.UI
             // Skip the "@ " mention marker so a mention shows the CHAT's initial, not "@".
             if (t.StartsWith("@ ")) t = t.Substring(2);
             string initial = t.Length > 0 ? DrawHelper.Initial(t) : "?";
-            // ⚠ NOT `14f * _scale`. FontHelper sizes are in POINTS, and GDI+ converts points to pixels
-            //   using the device DPI — so the glyph ALREADY grows with DPI. The circle grows because it is
-            //   a pixel box run through S(); multiplying the font too would scale it twice.
-            using (var f = FontHelper.For(initial, 14f, FontStyle.Bold))   // Vazirmatn for a Persian initial: measurable, centred
-                DrawHelper.DrawInitial(g, initial, f, circle, Color.White);   // ink-centred (owner report 2026-10-14)
+            // Step 3.1 — 14 pt at _dpi, the same DPI the circle went through S() at (once each, never twice).
+            // Shared FontCache font: never disposed. Vazirmatn for a Persian initial: measurable, centred.
+            DrawHelper.DrawInitial(g, initial, FontHelper.ForAt(initial, 14f, _dpi, FontStyle.Bold),
+                                   circle, Color.White);   // ink-centred (owner report 2026-10-14)
         }
 
         private void DrawClose(Graphics g, Rectangle box)
         {
             if (_closeHot)
                 using (var b = new SolidBrush(Color.FromArgb(40, _accent))) g.FillEllipse(b, box);
-            int inset = Math.Max(4, box.Width / 3);
-            using (var p = new Pen(_closeHot ? _accent : _sub, Math.Max(1.4f, 1.4f * _scale)))
+            int inset = Math.Max(S(4), box.Width / 3);
+            using (var p = new Pen(_closeHot ? _accent : _sub, Math.Max(1.4f, Dpi.F(1.4f, _dpi))))
             {
                 p.StartCap = System.Drawing.Drawing2D.LineCap.Round;
                 p.EndCap = System.Drawing.Drawing2D.LineCap.Round;

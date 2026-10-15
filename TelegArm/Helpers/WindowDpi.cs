@@ -95,6 +95,7 @@ namespace TelegArm.Helpers
                         + " rescale=" + sw.ElapsedMilliseconds + "ms");
             if (_pending > 0 && Helpers.Dpi.Effective(_pending) != Dpi) { int p = _pending; _pending = 0; Apply(p, null, "pending"); }
             else _pending = 0;
+            DpiCaches.AfterDpiChange();   // step 3.5: trim what no open window can still use (never throws)
         }
 
         /// <summary>The form's bounds rescaled old → new about its top-left, kept inside its monitor's work area.</summary>
