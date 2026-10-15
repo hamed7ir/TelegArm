@@ -32,7 +32,7 @@ namespace TelegArm.Helpers
         {
             _form = form;
             MonitorDpi = Helpers.Dpi.SystemDpi;
-            Dpi = Helpers.Dpi.Effective(MonitorDpi);
+            Dpi = Helpers.Dpi.DefaultDpi;
         }
 
         /// <summary>Step 3.8a — an embedded pane (AppForm.UseAsPane) takes its host's DPI without a rescale of its own.</summary>
@@ -49,10 +49,11 @@ namespace TelegArm.Helpers
             // Back to the DPI the window already has: any change stored while minimised/hidden is void (review 1.3 — it
             // used to survive and be applied on restore, at a DPI the window was no longer on). Compared EFFECTIVE to
             // effective (step 3.8a: Dpi holds the scaled value, the message the raw one).
-            if (Helpers.Dpi.Effective(raw) == Dpi) { MonitorDpi = raw; _pending = 0; return true; }
             var rc = (RECT)Marshal.PtrToStructure(m.LParam, typeof(RECT));
+            var sugg = Rectangle.FromLTRB(rc.Left, rc.Top, rc.Right, rc.Bottom);
+            if (EffectiveFor(raw, sugg) == Dpi) { MonitorDpi = raw; _pending = 0; return true; }
             if (_form.WindowState == FormWindowState.Minimized || !_form.Visible) { _pending = raw; return true; }   // applied on restore
-            Apply(raw, Rectangle.FromLTRB(rc.Left, rc.Top, rc.Right, rc.Bottom), "WM_DPICHANGED");
+            Apply(raw, sugg, "WM_DPICHANGED");
             return true;
         }
 
@@ -65,8 +66,33 @@ namespace TelegArm.Helpers
             if (raw <= 0) raw = _pending;
             _pending = 0;
             if (raw <= 0) return;
-            if (Helpers.Dpi.Effective(raw) != Dpi) Apply(raw, null, why);
+            if (EffectiveFor(raw, null) != Dpi) Apply(raw, null, why);
             else MonitorDpi = raw;
+        }
+
+        /// <summary>Step 3.8b — the user's interface scale changed: rescale to this monitor's DPI at the new scale. A minimised
+        /// or hidden window does it when it comes back (Resync compares the effective DPI).</summary>
+        public void ApplyScale(string why)
+        {
+            if (!_form.IsHandleCreated || _form.IsDisposed || _form.WindowState == FormWindowState.Minimized || !_form.Visible) return;
+            int raw = MonitorDpi > 0 ? MonitorDpi : Helpers.Dpi.ForWindow(_form.Handle);
+            if (EffectiveFor(raw, null) != Dpi) Apply(raw, null, why);
+        }
+
+        /// <summary>Step 3.8b — the effective DPI on this window's screen (or <paramref name="at"/>'s): the user's scale, capped
+        /// so the main window fits that screen. At 100% it is the plain Effective(raw).</summary>
+        private int EffectiveFor(int raw, Rectangle? at)
+        {
+            if (Helpers.Dpi.UserScalePercent <= 100) return Helpers.Dpi.Effective(raw);
+            Rectangle wa;
+            try
+            {
+                wa = at.HasValue ? Screen.FromRectangle(at.Value).WorkingArea
+                   : _form.IsHandleCreated ? Screen.FromHandle(_form.Handle).WorkingArea
+                   : Screen.FromRectangle(_form.Bounds).WorkingArea;
+            }
+            catch { wa = Rectangle.Empty; }
+            return Helpers.Dpi.EffectiveOn(wa, raw);
         }
 
         /// <summary>Rescales to the effective DPI of the RAW monitor DPI <paramref name="raw"/>.</summary>
@@ -74,7 +100,7 @@ namespace TelegArm.Helpers
         {
             if (_busy) { _pending = raw; return; }   // re-entrancy guard: a rescale that moves the window can trigger another
             _busy = true;
-            int old = Dpi, nw = Helpers.Dpi.Effective(raw);
+            int old = Dpi, nw = EffectiveFor(raw, suggested);
             var sw = Stopwatch.StartNew();
             // Maximised: Windows sizes it. Normal with no rectangle from Windows (Resync — created, restored or activated on
             // another-DPI monitor): the FORM must still be resized — DpiScaler never ratio-scales a Form root — or the
@@ -93,7 +119,7 @@ namespace TelegArm.Helpers
                         + " scale=" + Helpers.Dpi.UserScalePercent + "% src=" + source
                         + " sugg=" + (suggested.HasValue ? suggested.Value.ToString() : "-") + " applied=" + _form.Bounds
                         + " rescale=" + sw.ElapsedMilliseconds + "ms");
-            if (_pending > 0 && Helpers.Dpi.Effective(_pending) != Dpi) { int p = _pending; _pending = 0; Apply(p, null, "pending"); }
+            if (_pending > 0 && EffectiveFor(_pending, null) != Dpi) { int p = _pending; _pending = 0; Apply(p, null, "pending"); }
             else _pending = 0;
             DpiCaches.AfterDpiChange();   // step 3.5: trim what no open window can still use (never throws)
         }

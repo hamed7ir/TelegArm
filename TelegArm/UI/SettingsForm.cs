@@ -254,6 +254,70 @@ namespace TelegArm.UI
                 AppSettings.Instance.Save();
             };
             page.Section("Look", theme, accent);
+
+            // Step 3.8b: the interface scale — applied LIVE to every window when the thumb is released, then a 10 s
+            // "keep this size?" that reverts; capped per screen so the main window always fits (the setting keeps its value).
+            // Dragging redraws only the sample bubble under it.
+            _scaleRow = new SliderRow("Interface scale", 50, 200, 25, Dpi.UserScalePercent);
+            _scalePreview = new ScalePreviewRow();
+            _scaleRow.ValueChanged += (snd, ev) => ChangeInterfaceScale();
+            _scaleRow.Previewing += (snd, ev) => _scalePreview.PreviewPercent = _scaleRow.ShownValue;
+            UpdateScaleLimit();
+            page.Section("Size", _scaleRow, _scalePreview);
+        }
+
+        private SliderRow _scaleRow;
+        private ScalePreviewRow _scalePreview;
+        private bool _scaleBusy;
+
+        /// <summary>Another screen has another fit cap (and so another current effective scale): re-read both, after the
+        /// rescale pass (a row cannot refit while Dpi.Busy).</summary>
+        protected override void OnDpiChanged(int oldDpi, int newDpi)
+        {
+            base.OnDpiChanged(oldDpi, newDpi);
+            try { BeginInvoke((Action)UpdateScaleLimit); } catch { }
+        }
+
+        private void ChangeInterfaceScale()
+        {
+            if (_scaleBusy || _scaleRow == null) return;
+            int old = Dpi.UserScalePercent, now = _scaleRow.Value;
+            if (now == old) return;
+            _scaleBusy = true;
+            try
+            {
+                AppForm.ApplyInterfaceScale(now);
+                UpdateScaleLimit();   // the preview's "current" is the new scale while the question is up
+                if (KeepScaleDialog.Ask(this, old))
+                {
+                    AppSettings.Instance.InterfaceScale = now;
+                    AppSettings.Instance.Save();
+                }
+                else
+                {
+                    AppForm.ApplyInterfaceScale(old);
+                    _scaleRow.SetValue(old, false);
+                }
+            }
+            finally { _scaleBusy = false; }
+            UpdateScaleLimit();
+        }
+
+        /// <summary>The slider cannot pick past this screen's fit cap; the subtitle says when the setting is above it.</summary>
+        private void UpdateScaleLimit()
+        {
+            if (_scaleRow == null) return;
+            Rectangle wa;
+            try { wa = Screen.FromControl(this).WorkingArea; } catch { wa = Screen.PrimaryScreen.WorkingArea; }
+            int cap = Dpi.FitCap(wa, MonitorDpiValue);
+            _scaleRow.Limit = cap < 200 ? cap : 0;
+            if (_scalePreview != null)
+            {
+                _scalePreview.SetRange(Dpi.ScaleOn(wa, MonitorDpiValue), Math.Min(_scaleRow.Maximum, cap));
+                _scalePreview.PreviewPercent = Math.Min(_scaleRow.Value, cap);
+            }
+            _scaleRow.Subtitle = Dpi.UserScalePercent > cap ? "Limited to " + cap + "% on this screen"
+                                                            : "Every window, live · Ctrl+0 resets";
         }
 
         /// <summary>Applies a theme live (raises ThemeChanged so every form recolors) and persists it.</summary>

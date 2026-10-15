@@ -409,8 +409,37 @@ namespace TelegArm.UI
                 case Keys.Escape:                     // clear an active search
                     if (!string.IsNullOrEmpty(_searchBox.Text)) { _searchBox.Text = ""; return true; }
                     break;
+                // Step 3.8b: the interface scale from the keyboard (the safety net when a size is unusable).
+                case Keys.Control | Keys.Oemplus:
+                case Keys.Control | Keys.Shift | Keys.Oemplus:
+                case Keys.Control | Keys.Add:
+                    StepInterfaceScale(+25); return true;
+                case Keys.Control | Keys.OemMinus:
+                case Keys.Control | Keys.Subtract:
+                    StepInterfaceScale(-25); return true;
+                case Keys.Control | Keys.D0:
+                case Keys.Control | Keys.NumPad0:
+                    SetInterfaceScale(100); return true;
             }
             return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        /// <summary>Step 3.8b — one detent up or down, within 50% and this screen's fit cap.</summary>
+        private void StepInterfaceScale(int delta)
+        {
+            Rectangle wa;
+            try { wa = Screen.FromHandle(Handle).WorkingArea; } catch { wa = Screen.PrimaryScreen.WorkingArea; }
+            int cap = Dpi.FitCap(wa, MonitorDpiValue);
+            int now = Dpi.UserScalePercent, next = Math.Max(50, Math.Min(Math.Max(100, cap), now + delta));
+            if (next != now) SetInterfaceScale(next);
+        }
+
+        private void SetInterfaceScale(int pct)
+        {
+            if (pct == Dpi.UserScalePercent) return;
+            if (!AppForm.ApplyInterfaceScale(pct)) return;
+            AppSettings.Instance.InterfaceScale = pct;
+            AppSettings.Instance.Save();
         }
 
     }

@@ -30,6 +30,8 @@ namespace TelegArm.SelfTest
             Add(t, "scale: Effective is exact for 7 monitor DPIs x 7 detents (50-200%)", EffectiveExact);
             Add(t, "scale: --scale, then TELEGARM_SCALE, then the setting; anything invalid is ignored", ScaleResolution);
             Add(t, "scale: 144 -> 150% (216) -> 144 and 96 -> 50% (48) -> 96 return every value exactly", ScaleRoundTrips);
+            Add(t, "scale: FitCap keeps the main window on screen (RT 1366x728 @96 -> 150%, 1920x1040 @144 -> 125%)", FitCapCases);
+            Add(t, "scale: ScaleOn caps only above 100% (never below it); SetUserScale refuses off-step values", ScaleOnCases);
         }
 
         private sealed class Thrower : Panel, IDpiAware
@@ -152,6 +154,33 @@ namespace TelegArm.SelfTest
             Check.Equal(100, Dpi.ResolveScale(new[] { "--scale=110" }, "250", 130, out src), "off-step and out-of-range values are ignored");
             Check.Equal("default", src, "source");
             Check.Equal(200, Dpi.ResolveScale(new[] { "--scale=200%" }, null, 100, out src), "a trailing % is accepted");
+        }
+
+        private static void FitCapCases()
+        {
+            Check.Equal(150, Dpi.FitCap(new Rectangle(0, 0, 1366, 728), 96), "Surface RT 1366x728 at 96");
+            Check.Equal(125, Dpi.FitCap(new Rectangle(0, 0, 1920, 1040), 144), "1920x1040 at 144");
+            Check.Equal(200, Dpi.FitCap(new Rectangle(0, 0, 3840, 2080), 96), "4K at 96");
+            Check.Equal(100, Dpi.FitCap(new Rectangle(0, 0, 800, 560), 96), "a small screen never caps below 100");
+            Check.Equal(200, Dpi.FitCap(Rectangle.Empty, 96), "no screen: no cap");
+        }
+
+        private static void ScaleOnCases()
+        {
+            int old = Dpi.UserScalePercent;
+            try
+            {
+                var rt = new Rectangle(0, 0, 1366, 728);
+                Check.True(Dpi.SetUserScale(200), "SetUserScale(200)");
+                Check.Equal(150, Dpi.ScaleOn(rt, 96), "200% on the RT's screen is capped at 150%");
+                Check.Equal(144, Dpi.EffectiveOn(rt, 96), "so its effective DPI is 144");
+                Check.True(Dpi.SetUserScale(75), "SetUserScale(75)");
+                Check.Equal(75, Dpi.ScaleOn(rt, 96), "below 100% is never capped");
+                Check.Equal(72, Dpi.EffectiveOn(rt, 96), "75% of 96");
+                Check.True(!Dpi.SetUserScale(110), "an off-step value is refused");
+                Check.Equal(75, Dpi.UserScalePercent, "and changes nothing");
+            }
+            finally { Dpi.SetUserScale(old); }
         }
 
         private static void ScaleRoundTrips()

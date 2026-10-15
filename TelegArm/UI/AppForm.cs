@@ -128,6 +128,25 @@ namespace TelegArm.UI
         /// <summary>This window's current DPI.</summary>
         public int WindowDpiValue { get { return CurrentDpi; } }
 
+        /// <summary>Step 3.8b — sets the interface scale LIVE: every open AppForm (DialogForms included) rescales through the
+        /// same path as a monitor move; panes follow their host; a hidden or minimised window catches up when it comes back.
+        /// Popups take the new scale when they next open. False for a value outside 50-200 in 25% steps.</summary>
+        public static bool ApplyInterfaceScale(int pct)
+        {
+            if (!Dpi.SetUserScale(pct)) return false;
+            var forms = new System.Collections.Generic.List<Form>();
+            foreach (Form f in Application.OpenForms) forms.Add(f);
+            foreach (var f in forms)
+            {
+                var a = f as AppForm;
+                if (a == null || a.IsDisposed || a.IsPane) continue;
+                try { a._windowDpi.ApplyScale("scale " + pct + "%"); }
+                catch (Exception ex) { Logger.Diag("[DPI] scale " + pct + "% failed on " + a.GetType().Name + ": " + ex.Message); }
+            }
+            Logger.Diag("[DPI] interface scale -> " + pct + "% (" + forms.Count + " open windows)");
+            return true;
+        }
+
         /// <summary>The RAW DPI of this window's monitor (step 3.8a), for what must stay physical.</summary>
         public int MonitorDpiValue { get { return _windowDpi.MonitorDpi; } }
 
@@ -410,6 +429,13 @@ namespace TelegArm.UI
             e.Graphics.Clear(p.Window);
             if (CustomChrome && WindowState != FormWindowState.Maximized)
                 using (var pen = new Pen(p.Divider)) e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
+        }
+
+        /// <summary>Step 3.9: Ctrl+Alt+Shift+D in any window toggles the DPI diagnostics overlay.</summary>
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            if (keyData == (Keys.Control | Keys.Alt | Keys.Shift | Keys.D)) { DpiOverlay.Toggle(this); return true; }
+            return base.ProcessCmdKey(ref msg, keyData);
         }
 
         protected override void WndProc(ref Message m)

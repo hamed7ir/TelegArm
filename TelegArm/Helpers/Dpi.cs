@@ -81,7 +81,57 @@ namespace TelegArm.Helpers
 
         /// <summary>The effective DPI of a window that tracks none (unparented controls, plain Forms): the system DPI
         /// at the user's scale.</summary>
-        public static int DefaultDpi { get { return Effective(SystemDpi); } }
+        public static int DefaultDpi
+        {
+            get { return UserScalePercent <= 100 ? Effective(SystemDpi) : EffectiveOn(WorkAreaOf(Point.Empty, true), SystemDpi); }
+        }
+
+        // ── step 3.8b: the live scale and its per-screen fit cap ────────────────────────────────────────────────────
+
+        /// <summary>The logical size the main window needs (MainForm.LogicalMinimumSize). The fit cap keeps it on screen.</summary>
+        public static readonly Size FitSize = new Size(720, 480);
+
+        /// <summary>The largest scale (a 25% detent, never under 100) at which <see cref="FitSize"/> still fits
+        /// <paramref name="workArea"/> on a <paramref name="rawDpi"/> monitor — 150% on the Surface RT's 1366 x 728 at 96.
+        /// It never overwrites the setting; it limits what a screen shows (plan 3.8b).</summary>
+        public static int FitCap(Rectangle workArea, int rawDpi)
+        {
+            if (rawDpi <= 0 || workArea.Width <= 0 || workArea.Height <= 0) return 200;
+            int cap = 100;
+            for (int p = 125; p <= 200; p += 25)
+            {
+                int d = Effective(rawDpi, p);
+                if (Px(FitSize.Width, d) <= workArea.Width && Px(FitSize.Height, d) <= workArea.Height) cap = p;
+                else break;
+            }
+            return cap;
+        }
+
+        /// <summary>The scale in force on a screen: the user's, capped by <see cref="FitCap"/> above 100% (never under 100).</summary>
+        public static int ScaleOn(Rectangle workArea, int rawDpi)
+        {
+            int pct = UserScalePercent;
+            return pct > 100 ? Math.Max(100, Math.Min(pct, FitCap(workArea, rawDpi))) : pct;
+        }
+
+        /// <summary>The effective DPI of a window on <paramref name="workArea"/> (raw monitor DPI <paramref name="rawDpi"/>).</summary>
+        public static int EffectiveOn(Rectangle workArea, int rawDpi) { return Effective(rawDpi, ScaleOn(workArea, rawDpi)); }
+
+        /// <summary>Sets the user's scale LIVE (50-200 in 25% steps; anything else is refused). The caller rescales the open
+        /// windows (AppForm.ApplyInterfaceScale) and persists the setting.</summary>
+        public static bool SetUserScale(int pct)
+        {
+            if (!ValidScale(pct)) return false;
+            UserScalePercent = pct;
+            ScaleSource = "live";
+            return true;
+        }
+
+        private static Rectangle WorkAreaOf(Point p, bool primary)
+        {
+            try { return primary ? Screen.PrimaryScreen.WorkingArea : Screen.FromPoint(p).WorkingArea; }
+            catch { return Rectangle.Empty; }   // no screen: FitCap answers 200 (no cap)
+        }
 
         /// <summary>50-200 in 25% steps (the slider's detents, plan 3.8b).</summary>
         internal static bool ValidScale(int pct) { return pct >= 50 && pct <= 200 && pct % 25 == 0; }
@@ -153,7 +203,11 @@ namespace TelegArm.Helpers
         }
 
         /// <summary>THE entry point for a popup's DPI: the EFFECTIVE DPI (monitor × user scale) at the point it opens.</summary>
-        public static int ForPopup(Point screen) { return Effective(ForPoint(screen)); }
+        public static int ForPopup(Point screen)
+        {
+            int raw = ForPoint(screen);
+            return UserScalePercent <= 100 ? Effective(raw) : EffectiveOn(WorkAreaOf(screen, false), raw);
+        }
 
         /// <summary>The DPI of the monitor <paramref name="hwnd"/> is on, AS THIS PROCESS SEES IT: the real per-monitor
         /// value when per-monitor aware, the system DPI otherwise (Windows virtualizes it — measured in step 1.1).

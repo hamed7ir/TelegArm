@@ -515,7 +515,9 @@ namespace TelegArm.UI
 
                     f.CheckChatKitAt(f.WindowDpiValue, "chat rows at " + f.WindowDpiValue + " DPI", check, s => log.AppendLine("INFO  " + s));   // step 3.2, every mode
                     ProbeDpiMove(f, check, s => log.AppendLine("INFO  " + s + ": " + where()), s => log.AppendLine("INFO  " + s));
+                    ProbeLiveScale(f, check, s => log.AppendLine("INFO  " + s + ": " + where()), s => log.AppendLine("INFO  " + s));   // step 3.8b: the interface scale, live and back
                     ProbeCreateOnOtherDpi(check, s => log.AppendLine("INFO  " + s));
+                    DpiOverlay.RunProbe(f, check, s => log.AppendLine("INFO  " + s), Path.ChangeExtension(file, ".overlay.png"));   // step 3.9
                     DialogProbe.Run(f, check, s => log.AppendLine("INFO  " + s));   // step 1.4: the dialogs' keyboard tests
                     TextBoxProbe.Run(check, s => log.AppendLine("INFO  " + s));      // step 1.5: ThemedTextBox's contract
                     SettingsProbe.Run(f, check, s => log.AppendLine("INFO  " + s));  // step 2.6: Settings' apply models
@@ -573,6 +575,73 @@ namespace TelegArm.UI
             for (int i = 0; i < kitHome.Length && i < f._chatKit.Count; i++)
                 check(f._chatKit[i].Ctl.Bounds == kitHome[i], "chat rows back home: " + f._chatKit[i].Name + " on the same pixels",
                       f._chatKit[i].Ctl.Bounds + " vs " + kitHome[i]);
+        }
+
+        /// <summary>Step 3.8b: the interface scale applied LIVE and back. The window is first sized to fit the bigger scale (so
+        /// the work area cannot clamp the round trip); it must rescale through the monitor-move path, the title bar and the
+        /// chat-row kit with it, and come back to the same pixels.</summary>
+        private static void ProbeLiveScale(DesignGalleryForm f, Action<bool, string, string> check, Action<string> info, Action<string> note)
+        {
+            int old = Dpi.UserScalePercent;
+            var homeBounds = f.Bounds;
+            try
+            {
+                f.Size = new Size(f.Px(560), f.Px(420));
+                Pump(300);
+                var wa = Screen.FromHandle(f.Handle).WorkingArea;
+                int cap = Dpi.FitCap(wa, f.MonitorDpiValue);
+                if (cap < 125) { check(true, "live scale skipped (this screen is capped at 100%)", null); return; }
+                int target = Math.Min(150, cap);
+                var before = f.Bounds; int home = f.WindowDpiValue, barHome = f.Bar.Height;
+                var kitHome = f._chatKit.Select(k => k.Ctl.Bounds).ToArray();
+
+                AppForm.ApplyInterfaceScale(target);
+                Pump(600);
+                int want = Dpi.EffectiveOn(Screen.FromHandle(f.Handle).WorkingArea, f.MonitorDpiValue);
+                info("interface scale " + target + "% (effective " + want + " DPI)");
+                check(f.WindowDpiValue == want, "interface scale " + target + "%: the window rescaled live", "dpi " + f.WindowDpiValue + ", want " + want);
+                check(f.Bar.Height == Dpi.Px(f.Bar.Compact ? TitleBar.CompactHeight : TitleBar.FullHeight, want), "title bar at the new scale", f.Bar.Height + " px");
+                f.CheckChatKitAt(want, "chat rows at " + target + "%", check, note);
+
+                AppForm.ApplyInterfaceScale(old);
+                Pump(600);
+                check(f.WindowDpiValue == home, "back at " + old + "%: the window's DPI", f.WindowDpiValue + " vs " + home);
+                check(f.Size == before.Size, "back at " + old + "%: the window size exactly", f.Size + " vs " + before.Size);
+                check(f.Bar.Height == barHome, "back at " + old + "%: the title bar", f.Bar.Height + " vs " + barHome);
+                for (int i = 0; i < kitHome.Length && i < f._chatKit.Count; i++)
+                    check(f._chatKit[i].Ctl.Bounds == kitHome[i], "back at " + old + "%: " + f._chatKit[i].Name + " on the same pixels",
+                          f._chatKit[i].Ctl.Bounds + " vs " + kitHome[i]);
+
+                // G3: a live change while MAXIMISED — rescaled in place, still maximised; restore comes back at the old size.
+                f.WindowState = FormWindowState.Maximized; Pump(400);
+                AppForm.ApplyInterfaceScale(target); Pump(600);
+                check(f.WindowDpiValue == want && f.WindowState == FormWindowState.Maximized, "maximised, " + target + "%: rescaled live, still maximised",
+                      f.WindowDpiValue + " " + f.WindowState);
+                check(f.Bar.Height == Dpi.Px(f.Bar.Compact ? TitleBar.CompactHeight : TitleBar.FullHeight, want), "maximised, " + target + "%: the title bar", f.Bar.Height + " px");
+                AppForm.ApplyInterfaceScale(old); Pump(600);
+                f.WindowState = FormWindowState.Normal; Pump(500);
+                check(f.WindowDpiValue == home && f.Size == before.Size, "maximised round trip: restores at " + old + "% and the same size",
+                      f.WindowDpiValue + " " + f.Size + " vs " + before.Size);
+
+                // G3: a live change while MINIMISED — nothing until it is restored; then it lands at the new scale.
+                f.WindowState = FormWindowState.Minimized; Pump(400);
+                AppForm.ApplyInterfaceScale(target); Pump(400);
+                check(f.WindowDpiValue == home, "minimised, " + target + "%: the change waits for the restore", "dpi " + f.WindowDpiValue);
+                f.WindowState = FormWindowState.Normal; Pump(600);
+                var scaled = new Size((int)Math.Round(before.Width * (double)want / home), (int)Math.Round(before.Height * (double)want / home));
+                check(f.WindowDpiValue == want, "restored: it lands at " + target + "%", "dpi " + f.WindowDpiValue + ", want " + want);
+                check(Math.Abs(f.Width - scaled.Width) <= 1 && Math.Abs(f.Height - scaled.Height) <= 1, "restored: its normal size rescaled with it (±1 px)",
+                      f.Size + " vs " + scaled);
+                AppForm.ApplyInterfaceScale(old); Pump(600);
+                check(f.WindowDpiValue == home && Math.Abs(f.Width - before.Width) <= 1 && Math.Abs(f.Height - before.Height) <= 1,
+                      "and back at " + old + "%: the same size (±1 px)", f.WindowDpiValue + " " + f.Size + " vs " + before.Size);
+            }
+            finally
+            {
+                if (Dpi.UserScalePercent != old) AppForm.ApplyInterfaceScale(old);
+                f.Bounds = homeBounds;
+                Pump(300);
+            }
         }
 
         /// <summary>The review-1.3 defects, each on the real window: the gutter as the DEEPEST window sees it, restore keeping
