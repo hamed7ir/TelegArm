@@ -40,4 +40,4 @@ using System.Runtime.InteropServices;
 // version, "2.0.0-alpha.N", which the package names and Copy diagnostics show. Drop the suffix to release.
 [assembly: AssemblyVersion("2.0.0.0")]
 [assembly: AssemblyFileVersion("2.0.0.0")]
-[assembly: AssemblyInformationalVersion("2.0.0-alpha.3")]
+[assembly: AssemblyInformationalVersion("2.0.0-alpha.4")]

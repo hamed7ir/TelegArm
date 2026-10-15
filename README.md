@@ -42,7 +42,10 @@ before any of its own code runs), so install .NET first if you are using it.
 - Record and send voice notes (OGG/Opus — pure-managed, ARM32-safe) and round video notes
 - Message actions: reply (quoted), forward, copy, multi-select, delete (for me / for everyone), retry
 - Pinned messages, folders, reactions, polls, inline keyboards & bots, group/channel admin
-- Follow-system / Light / Dark theming that tracks the **Windows accent color live** (no restart)
+- Its own window frame (Windows 11 rounded corners, touch-resizable edges) — no MaterialSkin
+- Follow-system / Light / Dark themes and a chosen or **Windows-following accent colour**, applied live (no restart)
+- A colour-emoji composer that grows to 13 lines, with an "Edit in a window" editor and formatting
+- **Per-monitor DPI** and a live **interface scale** (50–200%, Ctrl+= / Ctrl+- / Ctrl+0): sharp at any display scale
 - Configurable media auto-download and a managed cache folder; notifications with mute
 - Touch panning, momentum scrolling, and the on-screen keyboard handled for tablet use
 
