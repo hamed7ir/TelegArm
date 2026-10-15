@@ -275,11 +275,52 @@ namespace TelegArm.Core
         /// re-entrancy guard means a reconnect already in flight simply wins.
         /// ⚠ THE WARM POOL IS THE CALLER'S PROBLEM, not this method's: warm clients were built with the
         ///   OLD transport and must be torn down and re-warmed by MainForm (see ApplyProxyChangeAsync
-        ///   there). This method only owns the ACTIVE client.</summary>
+        ///   there). This method only owns the ACTIVE client.
+        /// Step 4.2 — THE MEDIA ROUTE TOO: WTC's secondary-DC clients (media/file downloads) copy MTProxyUrl when they are
+        ///   created (Client.cs:141, cloning ctor) and ResetAsync(false,false) leaves them connected, so media kept the OLD
+        ///   route after a switch. Here the reconnect drops them (ResetAsync(false,true): their auth keys stay in the
+        ///   session; WTC rebuilds each client, with the new proxy, on its next use). That aborts a running download, so
+        ///   running downloads are PAUSED first (the .part and resume sidecar are kept) and resumed after the reconnect —
+        ///   each resume re-acquires its DC client (DownloadHandle raw loop → GetClientForDC), i.e. on the new route.</summary>
         public async Task ApplyProxyChangeAsync()
         {
             ApplyProxyTo(Client, "apply-live");   // takes effect on the reconnect below, not before
-            await ForceReconnectAsync().ConfigureAwait(false);
+            var moving = PauseRunningDownloads();
+            await ForceReconnectAsync(dropAltDc: true).ConfigureAwait(false);
+            await ResumeAfterRerouteAsync(moving).ConfigureAwait(false);
+        }
+
+        /// <summary>Pauses every download that is transferring now; returns them, to resume on the new route.</summary>
+        private List<DownloadHandle> PauseRunningDownloads()
+        {
+            var running = new List<DownloadHandle>();
+            lock (_dlGate)
+                foreach (var h in _downloads.Values)
+                    if (h.State == DownloadHandle.DState.Downloading) running.Add(h);
+            foreach (var h in running) h.Pause();
+            if (running.Count > 0) Logger.Diag("[PROXY] paused " + running.Count + " download(s) for the route change");
+            return running;
+        }
+
+        /// <summary>Resumes the downloads paused for a route change once each pause has landed (a pause completes when its
+        /// in-flight request returns or is aborted). Gives up after 10 s: what is still not paused stays resumable by hand.</summary>
+        private async Task ResumeAfterRerouteAsync(List<DownloadHandle> handles)
+        {
+            if (handles == null || handles.Count == 0) return;
+            var left = new List<DownloadHandle>(handles);
+            int resumed = 0;
+            for (int waited = 0; left.Count > 0 && waited <= 10000; waited += 100)
+            {
+                for (int i = left.Count - 1; i >= 0; i--)
+                {
+                    var h = left[i];
+                    if (h.State == DownloadHandle.DState.Paused) { h.Resume(); resumed++; left.RemoveAt(i); }
+                    else if (h.State != DownloadHandle.DState.Downloading) left.RemoveAt(i);   // finished, failed or cancelled meanwhile
+                }
+                if (left.Count > 0) await Task.Delay(100).ConfigureAwait(false);
+            }
+            Logger.Diag("[PROXY] resumed " + resumed + " of " + handles.Count + " download(s) on the new route"
+                        + (left.Count > 0 ? "; " + left.Count + " did not settle (resumable by hand)" : ""));
         }
 
         // ── TEARDOWN-HYGIENE: expected teardown races must not pollute crash.log ──
@@ -944,8 +985,10 @@ namespace TelegArm.Core
         /// keeps the logged-in user + secondary sessions; ConnectAsync() re-establishes the home-DC connection.
         /// The UpdateManager re-hooks the same client and resyncs (getDifference) as updates resume, so messages
         /// missed during the outage arrive. Retries with back-off until the VPN is back. One attempt-set at a time.
+        /// <paramref name="dropAltDc"/> (step 4.2): also dispose the secondary-DC clients — ONLY for a proxy change, never
+        /// from the watchdog, where it would abort every download on each VPN flap.
         /// </summary>
-        private async Task ForceReconnectAsync()
+        private async Task ForceReconnectAsync(bool dropAltDc = false)
         {
             if (Interlocked.CompareExchange(ref _reconnectingFlag, 1, 0) != 0) return;   // already reconnecting
             var handler = ReconnectingChanged; if (handler != null) handler(true);
@@ -957,8 +1000,8 @@ namespace TelegArm.Core
                     if (client == null) break;
                     try
                     {
-                        System.Diagnostics.Debug.WriteLine("[UM] reconnect attempt " + attempt + ": ResetAsync(false,false)+ConnectAsync");
-                        await client.ResetAsync(false, false).ConfigureAwait(false);   // drop dead socket, KEEP user+session
+                        System.Diagnostics.Debug.WriteLine("[UM] reconnect attempt " + attempt + ": ResetAsync(false," + dropAltDc + ")+ConnectAsync");
+                        await client.ResetAsync(false, dropAltDc).ConfigureAwait(false);   // drop dead socket, KEEP user+session (+ media clients unless dropAltDc)
                         // ConnectAsync can ALSO hang if the VPN is still down → bound it with the same timeout.
                         var connect = client.ConnectAsync();                           // fresh connection, same session
                         var done = await Task.WhenAny(connect, Task.Delay(ConnectAttemptTimeoutMs)).ConfigureAwait(false);
@@ -1833,7 +1876,45 @@ namespace TelegArm.Core
 
         /// <summary>Joins a chat/channel by invite hash; the chat then resolves via CheckInviteAsync.</summary>
         public Task<UpdatesBase> JoinInviteAsync(string hash)
-            => Client.Messages_ImportChatInvite(hash);
+            => JoinedAsync(Client.Messages_ImportChatInvite(hash));
+
+        /// <summary>WTelegramClient 4.4.9: a join answers Messages_ChatInviteJoinResult — Ok (the updates, as 4.4.6 returned
+        /// them) or WebView (Telegram wants a bot web view first; TelegArm has none, so the join fails with a message saying
+        /// where to finish it). Null stays null.
+        /// ⚠ 4.4.9's Client.CheckRaiseOwnUpdates does not unwrap this result (src/Client.cs:816-825 at tag 4.4.9), so the
+        ///   join's own updates — which 4.4.6 handed to the UpdateManager (the new chat's entity, its pts) — would be dropped.
+        ///   They are raised here through the same private Client.RaiseOwnUpdates WTC uses, on a pool thread as WTC does.</summary>
+        private async Task<UpdatesBase> JoinedAsync(Task<Messages_ChatInviteJoinResult> join)
+        {
+            var r = await join;
+            if (r is Messages_ChatInviteJoinResultOk ok)
+            {
+                RaiseOwnUpdates(ok.updates);
+                return ok.updates;
+            }
+            if (r is Messages_ChatInviteJoinResultWebView)
+                throw new InvalidOperationException("This chat asks you to finish joining in a bot window, which TelegArm doesn't have. Finish joining in an official Telegram app.");
+            return null;
+        }
+
+        private static readonly System.Reflection.MethodInfo RaiseOwnUpdatesMethod = typeof(WTelegram.Client).GetMethod("RaiseOwnUpdates",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic, null, new[] { typeof(UpdatesBase) }, null);
+
+        /// <summary>The WTelegramClient in use still has the private RaiseOwnUpdates(UpdatesBase) the join path relies on
+        /// (the gallery probe checks it, so a library bump that renames it fails a check instead of silently losing updates).</summary>
+        internal static bool CanRaiseOwnUpdates { get { return RaiseOwnUpdatesMethod != null; } }
+
+        private void RaiseOwnUpdates(UpdatesBase updates)
+        {
+            var client = Client;
+            if (updates == null || client == null) return;
+            if (RaiseOwnUpdatesMethod == null) { Logger.Diag("[WTC] Client.RaiseOwnUpdates not found: a join's own updates were not raised"); return; }
+            Task.Run(() =>
+            {
+                try { RaiseOwnUpdatesMethod.Invoke(client, new object[] { updates }); }
+                catch (Exception ex) { Logger.Diag("[WTC] RaiseOwnUpdates failed: " + ex.Message); }
+            });
+        }
 
         /// <summary>Resolves a public @username to its User/ChatBase (null if not found).</summary>
         public async Task<IPeerInfo> ResolveUsernameAsync(string username)
@@ -1996,7 +2077,7 @@ namespace TelegArm.Core
 
         /// <summary>Joins a channel/supergroup (channels.joinChannel). Returns the updates.</summary>
         public Task<UpdatesBase> JoinChannelAsync(InputPeerChannel peer)
-            => Client.Channels_JoinChannel(new InputChannel(peer.channel_id, peer.access_hash));
+            => JoinedAsync(Client.Channels_JoinChannel(new InputChannel(peer.channel_id, peer.access_hash)));
 
         /// <summary>Full user info (for the composer-footer "blocked" flag); null on failure.</summary>
         public async Task<UserFull> GetUserFullAsync(User u)

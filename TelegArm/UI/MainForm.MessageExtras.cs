@@ -286,30 +286,38 @@ namespace TelegArm.UI
         /// <summary>Renders message.reply_markup (ReplyInlineMarkup) as a button grid under the bubble.</summary>
         private void ApplyInlineKeyboard(MessageBubbleControl mb, Message m)
         {
-            var markup = m.reply_markup as ReplyInlineMarkup;
-            if (markup == null || markup.rows == null || markup.rows.Length == 0) return;
+            var rows = InlineKeyboardRows(m.reply_markup as ReplyInlineMarkup);
+            if (rows.Count == 0) return;
+            mb.KbButtonTapped += vm => OnKbButtonTapped(m, vm);
+            mb.SetInlineKeyboard(rows);
+            System.Diagnostics.Debug.WriteLine("[BTN] inline keyboard rows=" + rows.Count + " msg=" + m.ID);
+        }
+
+        /// <summary>The button grid of an inline keyboard (pure; the gallery probe feeds it every WTC 4.4.9 button type).</summary>
+        internal static List<List<MessageBubbleControl.KbButtonVM>> InlineKeyboardRows(ReplyInlineMarkup markup)
+        {
             var rows = new List<List<MessageBubbleControl.KbButtonVM>>();
+            if (markup == null || markup.rows == null) return rows;
             foreach (var row in markup.rows)
             {
                 if (row == null || row.buttons == null) continue;
                 var cells = new List<MessageBubbleControl.KbButtonVM>();
                 foreach (var btn in row.buttons)
                 {
-                    var fld = btn.GetType().GetField("text");
-                    var vm = new MessageBubbleControl.KbButtonVM { Label = fld != null ? fld.GetValue(btn) as string : "" };
-                    if (btn is KeyboardButtonCallback cb) { vm.Kind = MessageBubbleControl.KbKind.Callback; vm.Data = cb.data; }
-                    else if (btn is KeyboardButtonUrl ub) { vm.Kind = MessageBubbleControl.KbKind.Url; vm.Url = ub.url; }
-                    else if (btn is KeyboardButtonSwitchInline si) { vm.Kind = MessageBubbleControl.KbKind.SwitchInline; vm.Query = si.query; vm.SamePeer = (si.flags & KeyboardButtonSwitchInline.Flags.same_peer) != 0; }
-                    else if (btn is KeyboardButtonUrlAuth ua) { vm.Kind = MessageBubbleControl.KbKind.UrlAuth; vm.Url = ua.url; }
-                    else vm.Kind = MessageBubbleControl.KbKind.Unsupported;
+                    if (btn == null) continue;
+                    // WTC 4.4.9: one KeyboardInlineButton { text, type }; the kind is the InlineButtonType (never null).
+                    var vm = new MessageBubbleControl.KbButtonVM { Label = btn.text ?? "" };
+                    var t = btn.type;
+                    if (t is InlineButtonTypeCallback cb) { vm.Kind = MessageBubbleControl.KbKind.Callback; vm.Data = cb.data; }
+                    else if (t is InlineButtonTypeUrl ub) { vm.Kind = MessageBubbleControl.KbKind.Url; vm.Url = ub.url; }
+                    else if (t is InlineButtonTypeSwitchInline si) { vm.Kind = MessageBubbleControl.KbKind.SwitchInline; vm.Query = si.query; vm.SamePeer = (si.flags & InlineButtonTypeSwitchInline.Flags.same_peer) != 0; }
+                    else if (t is InlineButtonTypeUrlAuth ua) { vm.Kind = MessageBubbleControl.KbKind.UrlAuth; vm.Url = ua.url; }
+                    else vm.Kind = MessageBubbleControl.KbKind.Unsupported;   // game, buy, web view, copy, profile, disabled
                     cells.Add(vm);
                 }
                 if (cells.Count > 0) rows.Add(cells);
             }
-            if (rows.Count == 0) return;
-            mb.KbButtonTapped += vm => OnKbButtonTapped(m, vm);
-            mb.SetInlineKeyboard(rows);
-            System.Diagnostics.Debug.WriteLine("[BTN] inline keyboard rows=" + rows.Count + " msg=" + m.ID);
+            return rows;
         }
 
         private async void OnKbButtonTapped(Message m, MessageBubbleControl.KbButtonVM vm)

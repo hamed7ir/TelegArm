@@ -498,29 +498,39 @@ namespace TelegArm.UI
         }
 
         /// <summary>Applies a message's reply markup to the chat: show/replace the reply keyboard, hide it, or force a reply.</summary>
+        /// <summary>The rows of a reply keyboard (pure; the gallery probe feeds it every WTC 4.4.9 button type).</summary>
+        internal static List<List<ReplyKeyboardControl.RKButton>> ReplyKeyboardRows(ReplyKeyboardMarkup rk)
+        {
+            var rows = new List<List<ReplyKeyboardControl.RKButton>>();
+            if (rk == null || rk.rows == null) return rows;
+            foreach (var row in rk.rows)
+            {
+                if (row == null || row.buttons == null) continue;
+                var cells = new List<ReplyKeyboardControl.RKButton>();
+                foreach (var btn in row.buttons)
+                {
+                    if (btn == null) continue;
+                    // WTC 4.4.9: one KeyboardButton { text, type }; type == null is a plain text button.
+                    var b = new ReplyKeyboardControl.RKButton { Label = btn.text ?? "" };
+                    var t = btn.type;
+                    if (t is ButtonTypeRequestPhone) b.Kind = ReplyKeyboardControl.RKKind.RequestPhone;
+                    else if (t is ButtonTypeRequestGeoLocation) b.Kind = ReplyKeyboardControl.RKKind.RequestGeo;
+                    else if (t is ButtonTypeRequestPeer) b.Kind = ReplyKeyboardControl.RKKind.RequestPeer;
+                    else if (t is ButtonTypeRequestPoll) b.Kind = ReplyKeyboardControl.RKKind.RequestPoll;
+                    else if (t is ButtonTypeSimpleWebView) b.Kind = ReplyKeyboardControl.RKKind.WebView;
+                    else b.Kind = ReplyKeyboardControl.RKKind.Text;
+                    cells.Add(b);
+                }
+                if (cells.Count > 0) rows.Add(cells);
+            }
+            return rows;
+        }
+
         private void ApplyChatReplyMarkup(ReplyMarkup markup)
         {
             if (markup is ReplyKeyboardMarkup rk && rk.rows != null)
             {
-                var rows = new List<List<ReplyKeyboardControl.RKButton>>();
-                foreach (var row in rk.rows)
-                {
-                    if (row == null || row.buttons == null) continue;
-                    var cells = new List<ReplyKeyboardControl.RKButton>();
-                    foreach (var btn in row.buttons)
-                    {
-                        var fld = btn.GetType().GetField("text");
-                        var b = new ReplyKeyboardControl.RKButton { Label = (fld != null ? fld.GetValue(btn) as string : null) ?? "" };
-                        if (btn is KeyboardButtonRequestPhone) b.Kind = ReplyKeyboardControl.RKKind.RequestPhone;
-                        else if (btn is KeyboardButtonRequestGeoLocation) b.Kind = ReplyKeyboardControl.RKKind.RequestGeo;
-                        else if (btn is KeyboardButtonRequestPeer) b.Kind = ReplyKeyboardControl.RKKind.RequestPeer;
-                        else if (btn is KeyboardButtonRequestPoll) b.Kind = ReplyKeyboardControl.RKKind.RequestPoll;
-                        else if (btn is KeyboardButtonSimpleWebView || btn is KeyboardButtonWebView) b.Kind = ReplyKeyboardControl.RKKind.WebView;
-                        else b.Kind = ReplyKeyboardControl.RKKind.Text;
-                        cells.Add(b);
-                    }
-                    if (cells.Count > 0) rows.Add(cells);
-                }
+                var rows = ReplyKeyboardRows(rk);
                 _replyKb.SetButtons(rows);
                 _replyKbSingleUse = (rk.flags & ReplyKeyboardMarkup.Flags.single_use) != 0;
                 if ((rk.flags & ReplyKeyboardMarkup.Flags.has_placeholder) != 0 && !string.IsNullOrEmpty(rk.placeholder))

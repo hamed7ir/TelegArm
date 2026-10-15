@@ -18,7 +18,7 @@ example noto-emoji.zip), that copy is retained there as well.
 COMPONENTS
 --------------------------------------------------------------------------------
 
- 1. WTelegramClient  4.4.6
+ 1. WTelegramClient  4.4.9
     The pure-C# MTProto / Telegram client library that TelegArm is built on.
     Copyright (c) Olivier Marcoux (Wizou / wiz0u)
     License: MIT

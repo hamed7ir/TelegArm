@@ -517,6 +517,8 @@ namespace TelegArm.UI
                     ProbeDpiMove(f, check, s => log.AppendLine("INFO  " + s + ": " + where()), s => log.AppendLine("INFO  " + s));
                     ProbeLiveScale(f, check, s => log.AppendLine("INFO  " + s + ": " + where()), s => log.AppendLine("INFO  " + s));   // step 3.8b: the interface scale, live and back
                     ProbeCreateOnOtherDpi(check, s => log.AppendLine("INFO  " + s));
+                    ProbeKeyboards(check);   // step 4.1: WTC 4.4.9's button types
+                    check(TelegramService.CanRaiseOwnUpdates, "WTC: Client.RaiseOwnUpdates(UpdatesBase) exists (a join's own updates reach the UpdateManager)", null);   // step 4.1
                     DpiOverlay.RunProbe(f, check, s => log.AppendLine("INFO  " + s), Path.ChangeExtension(file, ".overlay.png"));   // step 3.9
                     DialogProbe.Run(f, check, s => log.AppendLine("INFO  " + s));   // step 1.4: the dialogs' keyboard tests
                     TextBoxProbe.Run(check, s => log.AppendLine("INFO  " + s));      // step 1.5: ThemedTextBox's contract
@@ -575,6 +577,54 @@ namespace TelegArm.UI
             for (int i = 0; i < kitHome.Length && i < f._chatKit.Count; i++)
                 check(f._chatKit[i].Ctl.Bounds == kitHome[i], "chat rows back home: " + f._chatKit[i].Name + " on the same pixels",
                       f._chatKit[i].Ctl.Bounds + " vs " + kitHome[i]);
+        }
+
+        /// <summary>Step 4.1: WTelegramClient 4.4.9 rewrote the keyboard classes (one button class, the kind in its type). Every
+        /// button type through both mappings, with the fields TelegArm acts on.</summary>
+        private static void ProbeKeyboards(Action<bool, string, string> check)
+        {
+            Func<string, TL.InlineButtonType, TL.KeyboardInlineButton> ib = (text, type) => new TL.KeyboardInlineButton { text = text, type = type };
+            var inline = new TL.ReplyInlineMarkup
+            {
+                rows = new[]
+                {
+                    new TL.KeyboardInlineButtonRow { buttons = new[]
+                    {
+                        ib("cb", new TL.InlineButtonTypeCallback { data = new byte[] { 7, 9 } }),
+                        ib("url", new TL.InlineButtonTypeUrl { url = "https://t.me/x" }),
+                        ib("si", new TL.InlineButtonTypeSwitchInline { query = "q", flags = TL.InlineButtonTypeSwitchInline.Flags.same_peer }),
+                        null,
+                    } },
+                    new TL.KeyboardInlineButtonRow { buttons = null },
+                    new TL.KeyboardInlineButtonRow { buttons = new[]
+                    {
+                        ib("auth", new TL.InlineButtonTypeUrlAuth { url = "https://a.example" }),
+                        ib("game", new TL.InlineButtonTypeGame()),
+                        ib("off", new TL.InlineButtonTypeDisabled()),
+                    } },
+                },
+            };
+            var rows = MainForm.InlineKeyboardRows(inline);
+            var got = string.Join(" | ", rows.Select(r => string.Join(",", r.Select(v => v.Label + "=" + v.Kind))));
+            check(got == "cb=Callback,url=Url,si=SwitchInline | auth=UrlAuth,game=Unsupported,off=Unsupported",
+                  "inline keyboard (4.4.9): every button type maps, empty rows and null buttons skipped", got);
+            var c = rows[0];
+            check(c[0].Data != null && c[0].Data.Length == 2 && c[0].Data[1] == 9 && c[1].Url == "https://t.me/x" && c[2].Query == "q" && c[2].SamePeer
+                  && rows[1][0].Url == "https://a.example", "inline keyboard (4.4.9): data, url, query, same_peer carried", null);
+
+            Func<string, TL.ButtonType, TL.KeyboardButton> rb = (text, type) => new TL.KeyboardButton { text = text, type = type };
+            var reply = new TL.ReplyKeyboardMarkup
+            {
+                rows = new[]
+                {
+                    new TL.KeyboardButtonRow { buttons = new[] { rb("hi", null), rb("phone", new TL.ButtonTypeRequestPhone()), rb("geo", new TL.ButtonTypeRequestGeoLocation()) } },
+                    new TL.KeyboardButtonRow { buttons = new[] { rb("peer", new TL.ButtonTypeRequestPeer()), rb("poll", new TL.ButtonTypeRequestPoll()), rb("web", new TL.ButtonTypeSimpleWebView { url = "https://w" }) } },
+                },
+            };
+            var rr = MainForm.ReplyKeyboardRows(reply);
+            got = string.Join(" | ", rr.Select(r => string.Join(",", r.Select(v => v.Label + "=" + v.Kind))));
+            check(got == "hi=Text,phone=RequestPhone,geo=RequestGeo | peer=RequestPeer,poll=RequestPoll,web=WebView",
+                  "reply keyboard (4.4.9): a null type is text, every request type maps", got);
         }
 
         /// <summary>Step 3.8b: the interface scale applied LIVE and back. The window is first sized to fit the bigger scale (so
