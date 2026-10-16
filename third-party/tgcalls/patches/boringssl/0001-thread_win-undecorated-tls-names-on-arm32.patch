@@ -1,0 +1,14 @@
+diff --git a/crypto/thread_win.cc b/crypto/thread_win.cc
+index 855b1b0..87e078c 100644
+--- a/crypto/thread_win.cc
++++ b/crypto/thread_win.cc
+@@ -121,7 +121,8 @@ static void NTAPI thread_local_destructor(PVOID module, DWORD reason,
+ // Note, in the prefixed build, |p_thread_callback_boringssl| may be a macro.
+ #define STRINGIFY(x) #x
+ #define EXPAND_AND_STRINGIFY(x) STRINGIFY(x)
+-#ifdef _WIN64
++// ARM32 Windows is 32-bit but, like x64/ARM64, uses undecorated C names.
++#if defined(_WIN64) || defined(_M_ARM)
+ __pragma(comment(linker, "/INCLUDE:_tls_used")) __pragma(comment(
+     linker, "/INCLUDE:" EXPAND_AND_STRINGIFY(p_thread_callback_boringssl)))
+ #else

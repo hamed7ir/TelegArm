@@ -1,0 +1,4 @@
+--target=i686-pc-windows-msvc
+-vctoolsdir "D:/Program Files/vs22buildtools/VC/Tools/MSVC/14.44.35207"
+-winsdkdir "D:/Windows Kits/10"
+-winsdkversion 10.0.19041.0

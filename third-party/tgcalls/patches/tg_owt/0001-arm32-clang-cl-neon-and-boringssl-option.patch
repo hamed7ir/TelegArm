@@ -1,0 +1,51 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 30ddea65..b7ef662b 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -23,6 +23,7 @@ cmake_dependent_option(TG_OWT_USE_X11 "Use X11 for desktop capture." ON "UNIX; N
+ cmake_dependent_option(TG_OWT_USE_PIPEWIRE "Use pipewire for desktop capture." ON "UNIX; NOT APPLE" OFF)
+ cmake_dependent_option(TG_OWT_DLOPEN_PIPEWIRE "dlopen pipewire for desktop capture." ${not_packaged_build} TG_OWT_USE_PIPEWIRE OFF)
+ option(TG_OWT_BUILD_AUDIO_BACKENDS "Build webrtc audio backends." OFF)
++option(TG_OWT_USE_BORINGSSL "TG_OWT_OPENSSL_INCLUDE_PATH points at BoringSSL (compile rtc_base/boringssl_*.cc like upstream WebRTC)." OFF)
+ 
+ if (BUILD_SHARED_LIBS)
+     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+@@ -2597,6 +2598,24 @@ else()
+     )
+ endif()
+ 
++if (TG_OWT_USE_BORINGSSL)
++    # Same split as upstream WebRTC's rtc_base/BUILD.gn (rtc_build_ssl): with BoringSSL headers
++    # (OPENSSL_IS_BORINGSSL) the code refers to BoringSSLCertificate/BoringSSLIdentity.
++    remove_target_sources(tg_owt ${webrtc_loc}
++        rtc_base/openssl_certificate.cc
++        rtc_base/openssl_certificate.h
++        rtc_base/openssl_identity.cc
++        rtc_base/openssl_identity.h
++    )
++    nice_target_sources(tg_owt ${webrtc_loc}
++    PRIVATE
++        rtc_base/boringssl_certificate.cc
++        rtc_base/boringssl_certificate.h
++        rtc_base/boringssl_identity.cc
++        rtc_base/boringssl_identity.h
++    )
++endif()
++
+ if (APPLE)
+     remove_target_sources(tg_owt ${webrtc_loc}
+         modules/audio_coding/codecs/isac/empty.cc
+diff --git a/cmake/arch.cmake b/cmake/arch.cmake
+index c15d36b3..8aa6a4d1 100644
+--- a/cmake/arch.cmake
++++ b/cmake/arch.cmake
+@@ -137,6 +137,8 @@ endif() # aarch64
+ endif() # x86
+ endif() # x64
+ 
+-if (MSVC)
++# cl.exe cannot build the NEON sources (GNU inline asm in libyuv); clang-cl can, and NEON is mandatory on
++# Windows on ARM (thumbv7-windows-msvc defaults to cortex-a9 +neon).
++if (MSVC AND NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+     set(arm_use_neon 0)
+ endif()

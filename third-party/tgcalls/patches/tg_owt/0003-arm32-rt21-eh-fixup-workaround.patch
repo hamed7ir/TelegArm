@@ -1,0 +1,23 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 30ddea65..0f72df23 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -2597,6 +2597,18 @@ else()
+     )
+ endif()
+ 
++if (is_arm AND MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
++    # rt2.1 (LLVM 23.1.1 + ARM32 C++ EH funclets) workaround: with /EHsc /O2 the constant pool of
++    # OveruseFrameDetector::CreateProcessingUsage lands after the destructor funclets (each re-allocates the
++    # parent frame) and a vldr cannot reach it -> "error: out of range pc-relative fixup value" (loud, MC checks
++    # every fixup). The file has no try/catch/throw and upstream/Chromium build WebRTC without EH, so compile
++    # these TUs without EH funclets.
++    set(tg_owt_arm32_no_eh_sources
++        ${webrtc_loc}/video/adaptation/overuse_frame_detector.cc
++    )
++    set_source_files_properties(${tg_owt_arm32_no_eh_sources} PROPERTIES COMPILE_OPTIONS "/EHs-c-")
++endif()
++
+ if (APPLE)
+     remove_target_sources(tg_owt ${webrtc_loc}
+         modules/audio_coding/codecs/isac/empty.cc

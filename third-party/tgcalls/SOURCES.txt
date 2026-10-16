@@ -1,0 +1,27 @@
+Source trees in this snapshot (working trees as built, .git removed). Extract to D:\ so paths become D:\tgcalls\...
+
+path             origin                                             commit                                     state
+tg_owt           https://github.com/desktop-app/tg_owt.git          d1cf250ea73de26c4c1f0a3c8173eb2648efbb04   patched:tg_owt/0001,0002(libyuv),0003
+tgcalls          https://github.com/TelegramMessenger/tgcalls.git   1c236c09f8d8569fead14bd68000618a52051225   pristine
+deps/boringssl   https://boringssl.googlesource.com/boringssl       a0cb538b0d0d08371d3bd5712bbc8d474d28090a   patched:boringssl/0001
+deps/opus        https://github.com/xiph/opus.git                   ddbe48383984d56acd9e1ab6a090c54ca6b735a6   pristine(v1.5.2)
+deps/libvpx      https://github.com/webmproject/libvpx.git          12f3a2ac603e8f10742105519e0cd03c3b8f71dd   pristine(v1.14.1)
+deps/openh264    https://github.com/cisco/openh264.git              652bdb7719f30b52b08e506645a7322ff1b2cc6f   pristine(v2.6.0;res/_omitted)
+deps/mozjpeg     https://github.com/mozilla/mozjpeg.git             6c9f0897afa1c2738d7222a0a9ab49e8b536a267   pristine(v4.1.5)
+deps/zlib        https://github.com/madler/zlib.git                 e3dc0a85b7032e98380dec011bc8f2c2ee0d8fca   pristine
+deps/rnnoise     https://github.com/desktop-app/rnnoise.git         d8ea2b0ec6a88f8a68d6904d75e33b4f09cb2987   pristine
+deps/ffmpeg-rt   https://github.com/hamed7ir/ffmpeg-rt.git          60d58463ed1406fb89c27bee1115463d6b198d55   pristine(+deps/ffmpeg-8.1.2.tar.xz;generated_cross/*.rsp)
+meta/cmake_helpers https://github.com/desktop-app/cmake_helpers.git   699262e441dbc6270f0ba6cc74f2e7a8e4c7e422   reference
+meta/patches     https://github.com/desktop-app/patches.git         aec474953ff7ee9b6e4cd9b8658288ea86d124f3   reference
+
+tg_owt submodules:
+ d7aaad83b488fd62bd51c81ecf16cd938532cc0a src/third_party/abseil-cpp (20240116.2)
+ 21fc8ef30415a635e7351ffa0e5d5367943d4a94 src/third_party/crc32c/src (1.1.2-2-g21fc8ef)
+ e991355c02b93fe17713efe04cbc2e278e00fdbd src/third_party/crc32c/src/third_party/benchmark (v1.5.5)
+ 56523194b3ce1212414c93d55f31832e94677f55 src/third_party/crc32c/src/third_party/glog (v0.4.0-218-g5652319)
+ 3b49be074d5c1340eeb447e6a8e78427051e675a src/third_party/crc32c/src/third_party/googletest (release-1.8.0-2819-g3b49be07)
+ a566a9cfcd619e8327784aa7cff4a1276dc1e895 src/third_party/libsrtp (v2.5)
+ 04821d1e7d60845525e8db55c7bcd41ef5be9406 src/third_party/libyuv (heads/master-196-g04821d1e)
+
+deps/nasm: copy of Chromium third_party/nasm (NASM 3.01 / 19fd1bb434f2fed19b0eb82b1b42c5608b601134), unmodified
+meta/prepare.py, meta/lib_tgcalls.cmake, meta/gitmodules: tdesktop v7.3.1 (6fed91ffab9861771a75f29df65031b3c80b6941) files, reference

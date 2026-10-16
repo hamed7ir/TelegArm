@@ -1,0 +1,16 @@
+diff --git a/src/third_party/libyuv/source/cpu_id.cc b/src/third_party/libyuv/source/cpu_id.cc
+index 0c4a1581..ee8d8e7e 100644
+--- a/src/third_party/libyuv/source/cpu_id.cc
++++ b/src/third_party/libyuv/source/cpu_id.cc
+@@ -343,8 +343,10 @@ static SAFEBUFFERS int GetCpuFlags(void) {
+ #endif
+ #if defined(__aarch64__)
+   cpu_info = kCpuHasNEON;
+-#else
++#elif defined(__linux__)
+   // Linux arm parse text file for neon detect.
++  // (Not on Windows ARM32: no /proc, and UCRT's fopen() rejects the "e" mode
++  // with a fast-fail. NEON was set above for !__linux__, as in newer libyuv.)
+   cpu_info = ArmCpuCaps("/proc/cpuinfo");
+ #endif
+   cpu_info |= kCpuHasARM;

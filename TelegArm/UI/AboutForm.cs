@@ -13,7 +13,7 @@ namespace TelegArm.UI
     /// <summary>
     /// The "About TelegArm" screen — app identity + version, a PROMINENTLY FEATURED acknowledgment of
     /// WTelegramClient and its author Wizou (wiz0u) — the pure-C# MTProto library the whole app is built on —
-    /// plus the Open-RT thanks, the source/license links and the open-source credits. Links open in the browser
+    /// plus the source/license links and the open-source credits. Links open in the browser
     /// (RT-safe: Process.Start wrapped in try/catch), except the Telegram group, which is handed to the caller
     /// (<see cref="PendingInAppLink"/>) to open IN-APP.
     ///
@@ -62,13 +62,6 @@ namespace TelegArm.UI
                 .Add(Part.Link("@WTelegramClient — Telegram group", GlyphKind.Arrow, () => OpenInApp(WtcGroupUrl), 0))
                 .Add(Part.Link("Support Wizou — GitHub Sponsors", GlyphKind.Heart, () => OpenUrl(SponsorUrl), 0));
 
-            // ── Open-RT community tribute (mirrors the WTC card's layout; adds the openrt.png logo) ──
-            var openRt = new Block(BlockStyle.Card, "Open-RT Community", 16, 16, 16, 14)
-                .WithSideImage(LoadImageFile("openrt.png", 144))   // shipped next to the exe (Content, PreserveNewest)
-                .Add(Part.Line("Open-RT Community", 12f, FontStyle.Bold, LabelRole.Accent, 0))
-                .Add(Part.Line("Thanks to the Open-RT community for bringing TelegArm to Windows RT:", 9f, FontStyle.Regular, LabelRole.Dim, 4))
-                .Add(Part.Line("samyryu · RHLM fan · Artus100 · Keith · jeybee · die Oberfläche knacken", 9.5f, FontStyle.Bold, LabelRole.Body, 6));
-
             // ── Source + license ──
             var meta = new Block(BlockStyle.Card, "Source code and license", 16, 0, 0, 14)
                 .Add(Part.Row("Source code", 9.5f, "github.com/hamed7ir/TelegArm", 9.5f, FontStyle.Bold, LabelRole.Accent, () => OpenUrl(RepoUrl), 0, 46, 0))
@@ -100,6 +93,13 @@ namespace TelegArm.UI
                 new[] { "Roboto (Regular/Bold)", "SIL OFL 1.1" },
                 new[] { "Roboto (Medium)", "Apache-2.0" },
                 new[] { "Noto Emoji", "SIL OFL 1.1" },
+                // 2026-10-16: the call library (tgcalls_native.dll, statically linked; THIRD-PARTY-NOTICES component 18)
+                new[] { "tgcalls", "LGPL-3.0" },
+                new[] { "WebRTC (tg_owt)", "BSD-3-Clause" },
+                new[] { "Opus (native)", "BSD-3-Clause" },
+                new[] { "libvpx", "BSD-3-Clause" },
+                new[] { "OpenH264", "BSD-2-Clause" },
+                new[] { "BoringSSL", "OpenSSL / ISC" },
             };
             var cr = new Block(BlockStyle.Card, "Open-source credits", 16, 12, 10, 14)
                 .Add(Part.Line("OPEN-SOURCE CREDITS", 8.25f, FontStyle.Bold, LabelRole.Accent, 0));
@@ -118,7 +118,7 @@ namespace TelegArm.UI
                 .Add(Part.Line("Full license texts: LICENSE.txt and THIRD-PARTY-NOTICES.txt, beside the app.", 8.25f, FontStyle.Regular, LabelRole.Dim, 0, HorizontalAlignment.Center))
                 .Add(Part.Line("© 2026 TelegArm · Licensed under GPL-3.0-only", 8.25f, FontStyle.Regular, LabelRole.Dim, 2, HorizontalAlignment.Center));
 
-            PopulateBody(header, wtc, openRt, meta, cr, foot);
+            PopulateBody(header, wtc, meta, cr, foot);
 
             // Close is both the Esc and the Enter button. Its result is Cancel: a plain close is what 1.x returned (a tap on
             // the in-app group link is the only OK, set in OpenInApp), and the caller reads PendingInAppLink, not the result.
@@ -183,31 +183,6 @@ namespace TelegArm.UI
             }
             catch { }
             try { using (var ic = Icon.ExtractAssociatedIcon(Application.ExecutablePath)) return ic?.ToBitmap(); }
-            catch { return null; }
-        }
-
-        /// <summary>Loads a PNG shipped next to the exe (Content/PreserveNewest) scaled to <paramref name="size"/>px
-        /// (32bpp). Same mechanism as <see cref="LoadAppImage"/> but returns null (not the app icon) when absent —
-        /// the caller simply shows no image. RT-safe: any failure → null.</summary>
-        private static Image LoadImageFile(string fileName, int size)
-        {
-            try
-            {
-                string p = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, fileName);
-                if (!File.Exists(p)) return null;
-                using (var fs = File.OpenRead(p))
-                using (var src = Image.FromStream(fs))
-                {
-                    var bmp = new Bitmap(size, size, PixelFormat.Format32bppArgb);
-                    using (var g = Graphics.FromImage(bmp))
-                    {
-                        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                        g.DrawImage(src, new Rectangle(Point.Empty, new Size(size, size)));
-                    }
-                    return bmp;
-                }
-            }
             catch { return null; }
         }
 
@@ -303,7 +278,7 @@ namespace TelegArm.UI
                 return this;
             }
 
-            /// <summary>A picture in a column at the left of the card's text (the Open-RT logo). The block owns it.</summary>
+            /// <summary>A picture in a column at the left of the card's text. The block owns it.</summary>
             public Block WithSideImage(Image img)
             {
                 _sideImage = img;

@@ -1,0 +1,5 @@
+--target=i686-pc-windows-msvc
+-Xmicrosoft-visualc-tools-root "D:/Program Files/vs22buildtools/VC/Tools/MSVC/14.44.35207"
+-Xmicrosoft-windows-sdk-root "D:/Windows Kits/10"
+-Xmicrosoft-windows-sdk-version 10.0.19041.0
+-fms-runtime-lib=static

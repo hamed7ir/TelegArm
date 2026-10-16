@@ -435,10 +435,6 @@
       <Link>TelegArm.png</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="..\img-icon\openrt.png">
-      <Link>openrt.png</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
     <!-- 2026-10-16: media is FFmpeg (ffmpeg-rt 8.1.2) + TelegArm's tgav shim (native\tgav), per arch; loaded by
          Core\Media\Tgav from ffmpeg\<arch>\ (staged there by native\tgav\build.ps1). Replaced the libVLC zips. -->
     <Content Include="ffmpeg\ARM\*.dll">

@@ -3,8 +3,8 @@
 
 A lightweight, **pure-managed C# Telegram client** built to run on **jailbroken Windows RT 8.1**
 and **Windows 10 ARM32** — hardware the official Telegram apps abandoned. It talks MTProto
-directly (via WTelegramClient) with no native Telegram dependency, so a single AnyCPU build
-runs everywhere from a Surface RT to a modern x64 desktop.
+directly (via WTelegramClient); calls and voice chats use Telegram's own call library (tgcalls),
+built for ARM32 and x86. A single AnyCPU build runs everywhere from a Surface RT to a modern x64 desktop.
 
 ## Runs on
 
@@ -34,9 +34,10 @@ before any of its own code runs), so install .NET first if you are using it.
 ## Features
 
 - Phone + 2FA login with silent session resume; QR login; multiple accounts
+- **Voice calls, video calls and group voice chats** (Telegram's tgcalls; the Surface RT's camera included)
 - Chat list and conversations with live updates, bidirectional paging, and combined search (chats + global messages)
 - RTL-aware message bubbles (Persian / Arabic), emoji, and animated stickers (.tgs via rlottie)
-- Photos with thumbnails + disk cache and a zoom/pan viewer; inline video / GIF (bundled VLC) with a system-player fallback
+- Photos with thumbnails + disk cache and a zoom/pan viewer; inline video / GIF (FFmpeg) with a system-player fallback
 - Documents: file cards, open, Save / Save As, with background downloads (pause / resume / manager)
 - Send media: attach or drag-and-drop photos, videos, and files — Compress / Send-as-file, caption, per-file progress, correct dimensions + poster thumbnails
 - Record and send voice notes (OGG/Opus — pure-managed, ARM32-safe) and round video notes
@@ -61,8 +62,8 @@ Requirements: **Visual Studio 2017**, **.NET Framework 4.7**, C# **7.3**.
    - Without it the project still builds (placeholders in `ApiCredentials.cs`), but it will **not authenticate**.
 3. Build the solution (Debug or Release, `AnyCPU`). NuGet restores the package dependencies.
 
-Everything the app needs at runtime — the bundled libVLC (per-arch), rlottie, Noto Emoji, and
-fonts — is carried in the project and copied next to the executable on build, so no manual
+Everything the app needs at runtime — FFmpeg and the call library (per-arch), rlottie, Noto Emoji,
+and fonts — is carried in the project and copied next to the executable on build, so no manual
 codec/DLL setup is required.
 
 ## Continuing development (docs)
