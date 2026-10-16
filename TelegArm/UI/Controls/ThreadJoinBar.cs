@@ -138,13 +138,6 @@ namespace TelegArm.UI.Controls
             }
         }
 
-        private static bool IsRtl(string s)
-        {
-            if (string.IsNullOrEmpty(s)) return false;
-            foreach (char ch in s)
-                if ((ch >= 0x0590 && ch <= 0x08FF) || (ch >= 0xFB1D && ch <= 0xFDFF) || (ch >= 0xFE70 && ch <= 0xFEFF))
-                    return true;
-            return false;
-        }
+        private static bool IsRtl(string s) { return TextDirection.FirstStrongIsRtl(s); }   // the first strong letter decides (owner 2026-10-16: as the composer)
     }
 }

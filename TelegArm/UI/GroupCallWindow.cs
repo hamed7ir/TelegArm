@@ -20,8 +20,9 @@ namespace TelegArm.UI
     {
         private const int W = 380, H = 520;   // logical
 
-        private readonly GroupCallManager _calls;
+        private GroupCallManager _calls;
         private GroupCallSession _s;
+        private bool _anySpeaking;   // the last levels repaint showed someone speaking
         private readonly Func<long, Image> _avatar;
         private readonly GroupStage _stage;
         private readonly RoundedButton _mute, _hand, _leave, _close;
@@ -52,11 +53,34 @@ namespace TelegArm.UI
             Apply();
         }
 
-        /// <summary>Points the window at another voice chat.</summary>
-        public void Bind(GroupCallSession s) { _s = s; _endedTick = 0; _stage.ScrollTo(0); Apply(); }
+        /// <summary>The voice chat this window shows.</summary>
+        public GroupCallSession Session { get { return _s; } }
+
+        /// <summary>Points the window at another voice chat (a new one while this window still shows the last one ending),
+        /// of this or another account's manager.</summary>
+        public void Bind(GroupCallManager calls, GroupCallSession s)
+        {
+            if (!ReferenceEquals(calls, _calls))
+            {
+                _calls.Changed -= OnChanged; _calls.LevelsChanged -= OnLevels;
+                _calls = calls;
+                _calls.Changed += OnChanged; _calls.LevelsChanged += OnLevels;
+            }
+            _s = s; _endedTick = 0; _stage.ScrollTo(0); Apply();
+        }
 
         private void OnChanged(GroupCallSession s) { if (ReferenceEquals(s, _s) && !IsDisposed) Apply(); }
-        private void OnLevels(GroupCallSession s) { if (ReferenceEquals(s, _s) && !IsDisposed) _stage.Invalidate(); }
+
+        /// <summary>Repaints for the levels only while someone speaks (or just stopped): tgcalls reports every 100 ms even in
+        /// silence, and the list is not worth redrawing ten times a second on the Surface for nothing (review 2026-10-16).</summary>
+        private void OnLevels(GroupCallSession s)
+        {
+            if (!ReferenceEquals(s, _s) || IsDisposed) return;
+            bool any = s.MeSpeaking;
+            if (!any) foreach (var p in s.Participants.All) if (p.Speaking) { any = true; break; }
+            if (any || _anySpeaking) _stage.Invalidate();
+            _anySpeaking = any;
+        }
 
         private async System.Threading.Tasks.Task LeaveAsync()
         {
@@ -125,6 +149,8 @@ namespace TelegArm.UI
                 _calls.Changed -= OnChanged;
                 _calls.LevelsChanged -= OnLevels;
                 _tick.Dispose();
+                foreach (var p in _icons.Values) p.Dispose();
+                _icons.Clear();
             }
             base.Dispose(disposing);
         }
@@ -158,11 +184,56 @@ namespace TelegArm.UI
                 g.FillPath(b, p);
         }
 
+        // The list's icons, parsed once per size (at the origin) and moved into place: no re-parse per row per paint.
+        private readonly System.Collections.Generic.Dictionary<string, GraphicsPath> _icons = new System.Collections.Generic.Dictionary<string, GraphicsPath>();
+
+        private void FillListIcon(Graphics g, string path, RectangleF box, Color color)
+        {
+            string key = path.Length + ":" + path.GetHashCode() + ":" + box.Width.ToString("0.0") + "x" + box.Height.ToString("0.0");
+            GraphicsPath p;
+            if (!_icons.TryGetValue(key, out p)) { p = SvgPath.Parse(path, 24f, new RectangleF(0, 0, box.Width, box.Height)); _icons[key] = p; }
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            var state = g.Save();
+            try
+            {
+                g.TranslateTransform(box.X, box.Y);
+                using (var b = new SolidBrush(color)) g.FillPath(b, p);
+            }
+            finally { g.Restore(state); }
+        }
+
+        /// <summary>One line of a name, title or bio: colour emoji through EmojiRenderer (astral glyphs are boxes in RT 8.1's
+        /// GDI fonts), the rest through TextRenderer; ellipsis; right-aligned when it reads right to left.</summary>
+        private static void DrawLine(Graphics g, string text, Font font, Color ink, Rectangle r)
+        {
+            if (string.IsNullOrEmpty(text) || r.Width < 1 || r.Height < 1) return;
+            text = text.Replace("\r\n", " ").Replace('\n', ' ').Replace('\r', ' ');
+            bool rtl = TextDirection.FirstStrongIsRtl(text);
+            if (EmojiRenderer.ContainsEmoji(text))
+            {
+                try
+                {
+                    var old = g.TextRenderingHint;
+                    g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+                    int x = r.X;
+                    if (rtl) { int w = EmojiRenderer.MeasureLineWidth(g, text, font); if (w < r.Width) x = r.Right - w; }
+                    EmojiRenderer.DrawLine(g, text, font, ink, new Rectangle(x, r.Y, r.Right - x, r.Height));
+                    g.TextRenderingHint = old;
+                    return;
+                }
+                catch { }
+            }
+            TextRenderer.DrawText(g, text, font, r, ink, TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine
+                                  | (rtl ? TextFormatFlags.Right | TextFormatFlags.RightToLeft : TextFormatFlags.Left));
+        }
+
         /// <summary>The chat and status on top, then the participants (wheel-scrolled, a drawn thumb: no native scroll bar).</summary>
         private sealed class GroupStage : Control
         {
             private readonly GroupCallWindow _w;
             private int _scroll, _contentH, _listTop, _hover = -1;
+            private int _dragY = -1, _dragScroll;
+            private bool _dragging;
 
             public GroupStage(GroupCallWindow w)
             {
@@ -173,7 +244,17 @@ namespace TelegArm.UI
 
             public void ScrollTo(int y) { _scroll = Math.Max(0, Math.Min(y, Math.Max(0, _contentH - (Height - _listTop)))); Invalidate(); }
 
-            protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); Focus(); }
+            // the wheel needs focus, but only within the voice chat window when it is already active: never take the keyboard
+            // from the main window's message box just because the pointer crossed the list (review 2026-10-16)
+            protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); if (ReferenceEquals(Form.ActiveForm, _w)) Focus(); }
+
+            // a finger (or the mouse) drags the list: touch arrives as mouse messages on the Surface
+            protected override void OnMouseDown(MouseEventArgs e)
+            {
+                base.OnMouseDown(e);
+                if (e.Button == MouseButtons.Left && e.Y >= _listTop) { _dragY = e.Y; _dragScroll = _scroll; _dragging = false; }
+            }
+            protected override void OnMouseUp(MouseEventArgs e) { base.OnMouseUp(e); _dragY = -1; _dragging = false; }
             protected override void OnMouseWheel(MouseEventArgs e)
             {
                 base.OnMouseWheel(e);
@@ -182,10 +263,15 @@ namespace TelegArm.UI
             protected override void OnMouseMove(MouseEventArgs e)
             {
                 base.OnMouseMove(e);
+                if (_dragY >= 0 && (e.Button & MouseButtons.Left) != 0)
+                {
+                    if (!_dragging && Math.Abs(e.Y - _dragY) > Dpi.Px(8, _w.WindowDpiValue)) _dragging = true;
+                    if (_dragging) { ScrollTo(_dragScroll - (e.Y - _dragY)); if (_hover != -1) { _hover = -1; } return; }
+                }
                 int row = e.Y < _listTop ? -1 : (e.Y - _listTop + _scroll) / Math.Max(1, Dpi.Px(56, _w.WindowDpiValue));
                 if (row != _hover) { _hover = row; Invalidate(); }
             }
-            protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); if (_hover != -1) { _hover = -1; Invalidate(); } }
+            protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); _dragY = -1; _dragging = false; if (_hover != -1) { _hover = -1; Invalidate(); } }
 
             protected override void OnPaint(PaintEventArgs e)
             {
@@ -201,8 +287,7 @@ namespace TelegArm.UI
                 // the chat and what is happening
                 string title = string.IsNullOrEmpty(s.Title) ? "Voice chat" : s.Title;
                 var titleRect = new Rectangle(Px(16), Px(10), Width - Px(32), Px(26));
-                TextRenderer.DrawText(g, title, FontHelper.ForAt(title, 13f, dpi, FontStyle.Bold), titleRect, p.Text,
-                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+                DrawLine(g, title, FontHelper.ForAt(title, 13f, dpi, FontStyle.Bold), p.Text, titleRect);
                 var stRect = new Rectangle(Px(16), titleRect.Bottom, Width - Px(32), Px(20));
                 TextRenderer.DrawText(g, _w.StatusText(), FontHelper.UiAt(9.5f, dpi, FontStyle.Regular), stRect, s.Ended ? p.TextDim : p.Accent,
                     TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
@@ -266,8 +351,7 @@ namespace TelegArm.UI
                 }
                 int textX = ar.Right + Px(12), iconW = Px(22), textW = r.Right - textX - iconW - Px(20);
                 string name = (x.Name ?? "Participant") + (x.IsSelf ? " (you)" : "");
-                TextRenderer.DrawText(g, name, FontHelper.ForAt(name, 10.5f, dpi, FontStyle.Bold), new Rectangle(textX, r.Y + Px(9), textW, Px(20)), p.Text,
-                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+                DrawLine(g, name, FontHelper.ForAt(name, 10.5f, dpi, FontStyle.Bold), p.Text, new Rectangle(textX, r.Y + Px(9), textW, Px(20)));
                 string state;
                 Color stateColor = p.TextDim;
                 bool muted = x.IsSelf ? s.Muted : x.Muted;
@@ -278,12 +362,11 @@ namespace TelegArm.UI
                 else if (forced) state = "muted by admin";
                 else if (!string.IsNullOrEmpty(x.About) && !x.IsSelf) state = x.About;
                 else state = muted ? "listening" : "can speak";
-                TextRenderer.DrawText(g, state, FontHelper.ForAt(state, 9.25f, dpi, FontStyle.Regular), new Rectangle(textX, r.Y + Px(29), textW, Px(18)), stateColor,
-                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+                DrawLine(g, state, FontHelper.ForAt(state, 9.25f, dpi, FontStyle.Regular), stateColor, new Rectangle(textX, r.Y + Px(29), textW, Px(18)));
                 var ib = new RectangleF(r.Right - Px(16) - iconW, r.Y + (r.Height - iconW) / 2f, iconW, iconW);
                 bool hand = x.IsSelf ? s.HandRaised : x.HandRaised;
-                if (hand) FillIcon(g, HandPath, RectangleF.Inflate(ib, -Px(2), -Px(2)), p.Accent);
-                else FillIcon(g, muted ? MicOffPath : MicPath, ib, speaking ? p.Success : forced ? p.Danger : p.TextDim);
+                if (hand) _w.FillListIcon(g, HandPath, RectangleF.Inflate(ib, -Px(2), -Px(2)), p.Accent);
+                else _w.FillListIcon(g, muted ? MicOffPath : MicPath, ib, speaking ? p.Success : forced ? p.Danger : p.TextDim);
             }
         }
     }

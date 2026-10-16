@@ -372,31 +372,12 @@ namespace TelegArm.UI.Controls
             }
         }
 
-        /// <summary>True if the text contains Hebrew/Arabic/Persian letters (→ right-align the line).</summary>
-        private static bool IsRtl(string s)
-        {
-            if (string.IsNullOrEmpty(s)) return false;
-            foreach (char c in s)
-                if ((c >= 0x0590 && c <= 0x08FF) || (c >= 0xFB1D && c <= 0xFDFF) || (c >= 0xFE70 && c <= 0xFEFF))
-                    return true;
-            return false;
-        }
+        /// <summary>Right-to-left when the first strong letter is (TextDirection; as the composer and the bubbles).</summary>
+        private static bool IsRtl(string s) { return TextDirection.FirstStrongIsRtl(s); }   // the first strong letter decides (owner 2026-10-16: as the composer)
 
         /// <summary>Dominant direction by the FIRST strong-directional char (emoji/digits/punctuation are
         /// neutral and skipped): strong RTL → true, strong LTR → false, none → false (LTR).</summary>
-        private static bool IsRtlDominant(string s)
-        {
-            if (string.IsNullOrEmpty(s)) return false;
-            foreach (char c in s)
-            {
-                if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-                    (c >= 0x00C0 && c <= 0x024F) || (c >= 0x0370 && c <= 0x03FF) || (c >= 0x0400 && c <= 0x04FF))
-                    return false;   // strong LTR (Latin / Greek / Cyrillic)
-                if ((c >= 0x0590 && c <= 0x08FF) || (c >= 0xFB1D && c <= 0xFDFF) || (c >= 0xFE70 && c <= 0xFEFF))
-                    return true;    // strong RTL (Hebrew / Arabic / Persian)
-            }
-            return false;
-        }
+        private static bool IsRtlDominant(string s) { return TextDirection.FirstStrongIsRtl(s); }   // the first strong letter decides (owner 2026-10-16: as the composer)
 
         /// <summary>Clean Telegram-like pin/tack: round head + straight needle. Drawn for a 14 px box; scales with it.</summary>
         private static void DrawPinIcon(Graphics g, Rectangle r, Color color)

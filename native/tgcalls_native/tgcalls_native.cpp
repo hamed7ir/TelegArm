@@ -154,7 +154,7 @@ class WinmmCapture {
     ev_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     WAVEFORMATEX f = Format();
     MMRESULT r = waveInOpen(&h_, WAVE_MAPPER, &f, (DWORD_PTR)ev_, 0, CALLBACK_EVENT);
-    if (r != MMSYSERR_NOERROR) { Log("tgn: waveInOpen failed " + std::to_string(r)); h_ = nullptr; return false; }
+    if (r != MMSYSERR_NOERROR) { Log("tgn: waveInOpen failed " + std::to_string(r)); h_ = nullptr; CloseHandle(ev_); ev_ = nullptr; return false; }
     for (int i = 0; i < kBuffers; ++i) {
       bufs_[i].assign(kFrame * 2 * kChannels, 0);
       std::memset(&hdr_[i], 0, sizeof(WAVEHDR));
@@ -220,7 +220,7 @@ class WinmmPlayback {
     ev_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     WAVEFORMATEX f = Format();
     MMRESULT r = waveOutOpen(&h_, WAVE_MAPPER, &f, (DWORD_PTR)ev_, 0, CALLBACK_EVENT);
-    if (r != MMSYSERR_NOERROR) { Log("tgn: waveOutOpen failed " + std::to_string(r)); h_ = nullptr; return false; }
+    if (r != MMSYSERR_NOERROR) { Log("tgn: waveOutOpen failed " + std::to_string(r)); h_ = nullptr; CloseHandle(ev_); ev_ = nullptr; return false; }
     for (int i = 0; i < kBuffers; ++i) {
       bufs_[i].assign(kFrame * 2 * kChannels, 0);
       std::memset(&hdr_[i], 0, sizeof(WAVEHDR));
@@ -323,7 +323,10 @@ class CallAudio : public std::enable_shared_from_this<CallAudio> {
       return f;
     }
     if (!micAllowed_) { f.num_samples = 0; return f; }
-    if (!capStarted_) { capStarted_ = true; capture_.Start(); }
+    if (!capStarted_) {   // review 2026-10-16: a failed open (device busy / missing) is retried once a second, not given up for the call
+      auto now = std::chrono::steady_clock::now();
+      if (now >= capRetry_) { capStarted_ = capture_.Start(); if (!capStarted_) capRetry_ = now + std::chrono::seconds(1); }
+    }
     if (capRing_.Size() < frame_.size()) { f.num_samples = 0; return f; }
     capRing_.Pop(frame_.data(), frame_.size());
     f.audio_samples = frame_.data();
@@ -359,7 +362,10 @@ class CallAudio : public std::enable_shared_from_this<CallAudio> {
       rmsLast_ = (int)rms;
     }
     if (mode_ == TGN_AUDIO_TEST) return true;
-    if (!playStarted_) { playStarted_ = true; playback_.Start(); }
+    if (!playStarted_) {
+      auto now = std::chrono::steady_clock::now();
+      if (now >= playRetry_) { playStarted_ = playback_.Start(); if (!playStarted_) playRetry_ = now + std::chrono::seconds(1); }
+    }
     std::vector<int16_t> &mono = mono_;
     mono.resize(f.num_samples);
     for (size_t i = 0; i < f.num_samples; ++i) {
@@ -406,7 +412,8 @@ class CallAudio : public std::enable_shared_from_this<CallAudio> {
   std::atomic<int> overruns_{0}, underruns_{0};
   WinmmCapture capture_;
   WinmmPlayback playback_;
-  bool capStarted_ = false, playStarted_ = false;
+  bool capStarted_ = false, playStarted_ = false;   // OPENED (a failed open retries after capRetry_ / playRetry_)
+  std::chrono::steady_clock::time_point capRetry_{}, playRetry_{};
   int64_t phase_ = 0;
   std::chrono::steady_clock::time_point recNext_{}, renNext_{};
   std::atomic<int> recorded_{0}, rendered_{0}, audible_{0};

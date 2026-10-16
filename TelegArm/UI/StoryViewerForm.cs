@@ -609,13 +609,7 @@ namespace TelegArm.UI
         {
             var st = (_storyIdx >= 0 && _storyIdx < _stories.Count) ? _stories[_storyIdx] : null;
             string s = st != null ? st.caption : null;
-            if (string.IsNullOrEmpty(s)) return false;
-            foreach (var c in s)
-            {
-                if (c >= 0x0590 && c <= 0x08FF) return true;      // Hebrew/Arabic/Persian block → RTL
-                if (char.IsLetter(c) && c < 0x0590) return false; // a Latin letter first → LTR
-            }
-            return false;
+            return TextDirection.FirstStrongIsRtl(s);   // the first strong letter decides (owner 2026-10-16)
         }
 
         /// <summary>Routes pointer/mouse taps that land on the native VLC surface (which swallows WinForms mouse

@@ -501,9 +501,8 @@ namespace TelegArm.UI
                 // HAMBURGER-SCRIM-FIX: no backdrop. The drawer is card-width now, so there's no outside region to
                 // dim — the opaque card fill below IS the whole control. (Old full-window snapshot/scrim removed.)
 
-                // Card.
-                using (var cb = new SolidBrush(ThemeHelper.PaletteFor(_dark).DrawerBg))
-                    g.FillRectangle(cb, 0, 0, cardW, Height);
+                // Card: the window backdrop under the drawer colour (RT trip 2026-10-16, owner); the solid colour when it is off.
+                WindowBackdrop.Paint(g, this, new Rectangle(0, 0, cardW, Height), ThemeHelper.PaletteFor(_dark).DrawerBg);
 
                 // Header: avatar + name + subtitle. (Fonts below are shared FontCache fonts: never dispose.)
                 g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;

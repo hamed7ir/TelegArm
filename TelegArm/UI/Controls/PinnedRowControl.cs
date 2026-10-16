@@ -122,13 +122,6 @@ namespace TelegArm.UI.Controls
                 g.DrawLine(p, x, Height - 1, Width, Height - 1);
         }
 
-        private static bool IsRtl(string s)
-        {
-            if (string.IsNullOrEmpty(s)) return false;
-            foreach (char c in s)
-                if ((c >= 0x0590 && c <= 0x08FF) || (c >= 0xFB1D && c <= 0xFDFF) || (c >= 0xFE70 && c <= 0xFEFF))
-                    return true;
-            return false;
-        }
+        private static bool IsRtl(string s) { return TextDirection.FirstStrongIsRtl(s); }   // the first strong letter decides (owner 2026-10-16: as the composer)
     }
 }

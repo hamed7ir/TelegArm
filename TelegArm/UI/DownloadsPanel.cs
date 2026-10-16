@@ -223,6 +223,12 @@ namespace TelegArm.UI
             Controls.Add(_list);
             _list.BringToFront();
             UI.Controls.TouchScroller.Enable(_list, horizontal: false);   // finger-pan on RT
+            // RT trip 2026-10-16 (owner): the window backdrop here too - the panel, its header and footer, and the list
+            // between the rows (the rows themselves are frosted cards, see Row.OnPaint). Off = exactly the solid colours.
+            WindowBackdrop.Attach(this);
+            WindowBackdrop.Attach(header);
+            WindowBackdrop.Attach(footer);
+            WindowBackdrop.Attach(_list);
 
             _service.TransfersChanged += OnTransfers;
             FormClosed += (s, e) =>
@@ -240,7 +246,7 @@ namespace TelegArm.UI
             return new Label
             {
                 Text = text, Location = new Point(Px(x), Px(y)), AutoSize = false, Size = new Size(Px(w), Px(22)),
-                ForeColor = ThemeHelper.PaletteFor(_dark).DownloadsHeaderText,
+                ForeColor = ThemeHelper.PaletteFor(_dark).DownloadsHeaderText, BackColor = Color.Transparent,   // over the backdrop
                 Font = FontHelper.UiAt(bold ? 10f : 8.5f, _dpi, bold ? FontStyle.Bold : FontStyle.Regular)   // shared: never dispose
             };
         }
@@ -380,7 +386,7 @@ namespace TelegArm.UI
             protected override void OnPaint(PaintEventArgs e)
             {
                 var g = e.Graphics;
-                g.Clear(Parent != null ? Parent.BackColor : (ThemeHelper.PaletteFor(_dark).DownloadsHeaderBg));
+                WindowBackdrop.ClearBehind(g, this, Parent, ClientRectangle, ThemeHelper.PaletteFor(_dark).DownloadsHeaderBg);
                 DrawPill(g, new Rectangle(0, 0, Width, Height), Text, _glyph, _primary, _hover, _dark, _accent, _dpi);
             }
         }
@@ -499,7 +505,7 @@ namespace TelegArm.UI
             protected override void OnPaint(PaintEventArgs e)
             {
                 var g = e.Graphics;
-                g.Clear(ThemeHelper.PaletteFor(_dark).DownloadRowBg);
+                WindowBackdrop.Paint(g, this, ClientRectangle, ThemeHelper.PaletteFor(_dark).DownloadRowBg);   // a frosted card (solid when off)
                 var fg = ThemeHelper.PaletteFor(_dark).DownloadRowText;
                 var sub = ThemeHelper.PaletteFor(_dark).DownloadRowSub;
                 var st = St;

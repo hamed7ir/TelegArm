@@ -752,7 +752,29 @@ namespace TelegArm.UI
                 if (ReferenceEquals(_reactionGrid, drop)) _reactionGrid = null;
                 try { if (!IsDisposed && IsHandleCreated) BeginInvoke((Action)drop.Dispose); else drop.Dispose(); } catch { }
             };
-            drop.Show(Cursor.Position);
+            ShowOnMessage(drop, msg);
+        }
+
+        /// <summary>Owner 2026-10-16: the reaction grid opens ON the message (right-click or press-and-hold -> React -> More…),
+        /// not wherever the pointer happens to be: just above the bubble on its side (incoming left, outgoing right), below
+        /// it when there is no room above, inside the work area. The message off screen (or not found): at the pointer.</summary>
+        private void ShowOnMessage(ToolStripDropDown drop, Message msg)
+        {
+            var bubble = msg == null || _messagePanel == null ? null
+                : _messagePanel.Controls.OfType<MessageBubbleControl>().FirstOrDefault(b => b.MessageId == msg.ID && b.Visible && b.IsHandleCreated);
+            var view = bubble == null ? Rectangle.Empty : _messagePanel.RectangleToScreen(_messagePanel.ClientRectangle);
+            var r = bubble == null ? Rectangle.Empty : bubble.RectangleToScreen(bubble.ClientRectangle);
+            if (bubble == null || !view.IntersectsWith(r)) { drop.Show(Cursor.Position); return; }
+            var size = drop.GetPreferredSize(Size.Empty);
+            var wa = Screen.FromRectangle(r).WorkingArea;
+            int gap = Px(6), side = Px(12);
+            int x = bubble.Outgoing ? r.Right - side - size.Width : r.Left + side;
+            int top = Math.Max(r.Top, view.Top);   // the visible part of a tall bubble
+            int y = top - gap - size.Height;
+            if (y < wa.Top) y = Math.Min(Math.Min(r.Bottom, view.Bottom) + gap, wa.Bottom - size.Height);
+            x = Math.Max(wa.Left, Math.Min(x, wa.Right - size.Width));
+            y = Math.Max(wa.Top, y);
+            drop.Show(new Point(x, y));
         }
 
         /// <summary>QUICKWINS-1 PART 2: others' reaction changes arrive live (we render + send, but used to DROP this

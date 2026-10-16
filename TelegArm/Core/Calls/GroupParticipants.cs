@@ -25,7 +25,7 @@ namespace TelegArm.Core.Calls
         public float Level { get; internal set; }
         internal int SpeakingUntil;                       // Environment.TickCount
         internal int AppliedVolume = -1;                  // what tgcalls was told for this ssrc (permille), -1 = nothing yet
-        public bool Speaking { get { return unchecked(SpeakingUntil - Environment.TickCount) > 0; } }
+        public bool Speaking { get { return SpeakingUntil != 0 && unchecked(SpeakingUntil - Environment.TickCount) > 0; } }   // 0 = never (TickCount goes negative after 24.9 days up)
         public bool HandRaised { get { return RaiseHandRating > 0 && Muted && !CanSelfUnmute; } }
     }
 
@@ -52,6 +52,26 @@ namespace TelegArm.Core.Calls
         }
 
         public void Clear() { _byPeer.Clear(); _bySource.Clear(); }
+
+        /// <summary>Takes a freshly loaded list's entries (a reload), keeping what only this side knows for the same person
+        /// on the same ssrc: what tgcalls was told about their volume, and whether they are speaking.</summary>
+        public void ReplaceWith(GroupParticipants fresh)
+        {
+            foreach (var kv in fresh._byPeer)
+            {
+                GroupParticipant old;
+                if (_byPeer.TryGetValue(kv.Key, out old) && old.Source == kv.Value.Source)
+                {
+                    kv.Value.AppliedVolume = old.AppliedVolume;
+                    kv.Value.SpeakingUntil = old.SpeakingUntil;
+                    kv.Value.Level = old.Level;
+                    if (old.IsSelf) kv.Value.IsSelf = true;
+                }
+            }
+            _byPeer.Clear(); _bySource.Clear();
+            foreach (var kv in fresh._byPeer) _byPeer[kv.Key] = kv.Value;
+            foreach (var kv in fresh._bySource) _bySource[kv.Key] = kv.Value;
+        }
 
         public GroupParticipant BySource(int source) { GroupParticipant p; return _bySource.TryGetValue(source, out p) ? p : null; }
         public GroupParticipant ByPeer(long key) { GroupParticipant p; return _byPeer.TryGetValue(key, out p) ? p : null; }

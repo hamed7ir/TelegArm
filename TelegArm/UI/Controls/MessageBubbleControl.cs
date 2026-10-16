@@ -42,7 +42,7 @@ namespace TelegArm.UI.Controls
         // bubble's DPI (step 3.2): never dispose them. Only TextFont follows an album caption's re-derived _rtl; the
         // others keep the script the bubble was BUILT with (_builtRtl) — exactly what the old ctor-made fields did.
         private readonly bool _builtRtl;
-        private Font TextFont => _rtl ? FontHelper.PersianAt(12f, CurDpi) : FontHelper.UiAt(9.75f, CurDpi);
+        private Font TextFont => _persian ? FontHelper.PersianAt(12f, CurDpi) : FontHelper.UiAt(9.75f, CurDpi);
         private Font SenderFont => _builtRtl ? FontHelper.PersianAt(10.5f, CurDpi, FontStyle.Bold) : FontHelper.UiAt(8.5f, CurDpi, FontStyle.Bold);
         private Font TimeFont => FontHelper.UiAt(7.5f, CurDpi);
         private Font ReplyFont => _builtRtl ? FontHelper.PersianAt(10f, CurDpi) : FontHelper.UiAt(8.25f, CurDpi);
@@ -68,7 +68,8 @@ namespace TelegArm.UI.Controls
         private readonly string _sender;
         private readonly bool _outgoing;
         private readonly DateTime _date;
-        private bool _rtl;          // re-derived when an album caption is set (its script may differ)
+        private bool _rtl;          // the DIRECTION: the text's first strong letter (as the composer); re-derived for an album caption
+        private bool _persian;      // the FONTS: the text has right-to-left script anywhere (Vazirmatn sizes, as before)
 
         public Color AccentColor { get; set; } = Color.DodgerBlue;
         public bool IsDark { get; set; }
@@ -792,10 +793,11 @@ namespace TelegArm.UI.Controls
         public void SetCaption(string text, TL.MessageEntity[] entities)
         {
             _text = text ?? "";
-            bool newRtl = IsRtl(_text);
+            _persian = HasRtlScript(_text);   // TextFont follows it (shared fonts — nothing to swap or dispose, step 3.2)
+            bool newRtl = TextDirection.FirstStrongIsRtl(_text);
             if (newRtl != _rtl)
             {
-                _rtl = newRtl;   // TextFont follows _rtl (shared fonts — nothing to swap or dispose, step 3.2)
+                _rtl = newRtl;
                 RightToLeft = _rtl ? RightToLeft.Yes : RightToLeft.No;
             }
             SetEntities(entities);   // rebuilds _useRich/_rich from _text + entities → Measure + Invalidate
@@ -1031,8 +1033,9 @@ namespace TelegArm.UI.Controls
             _sender = sender;
             _outgoing = outgoing;
             _date = date;
-            _rtl = IsRtl(_text);
-            _builtRtl = _rtl;
+            _rtl = TextDirection.FirstStrongIsRtl(_text);   // owner 2026-10-16: "Hello سلام" reads left to right, as typed
+            _persian = HasRtlScript(_text);
+            _builtRtl = _persian;   // the script the bubble was built with: its sender / reply / card fonts
             if (_rtl) RightToLeft = RightToLeft.Yes;
             // (Fonts are the TextFont/SenderFont/TimeFont/ReplyFont properties: shared, per-DPI — step 3.2.)
 
@@ -2197,7 +2200,7 @@ namespace TelegArm.UI.Controls
             Color c = _outgoing ? ThemeHelper.PaletteFor(IsDark).BubbleOutSoftText : SenderNameColor;
             var flags = TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis | TextFormatFlags.VerticalCenter
                         | (_rtl ? TextFormatFlags.Right | TextFormatFlags.RightToLeft : TextFormatFlags.Left);
-            TextRenderer.DrawText(g, label, FontHelper.ForAt(label, _rtl ? 9.5f : 8f, CurDpi, FontStyle.Bold),
+            TextRenderer.DrawText(g, label, FontHelper.ForAt(label, _persian ? 9.5f : 8f, CurDpi, FontStyle.Bold),
                 new Rectangle(x, y, w, FwdH), c, flags);   // shared font: never dispose
         }
 
@@ -2357,8 +2360,9 @@ namespace TelegArm.UI.Controls
             g.InterpolationMode = oldMode;
         }
 
-        /// <summary>True if the text contains Hebrew/Arabic/Persian characters.</summary>
-        private static bool IsRtl(string s)
+        /// <summary>True if the text contains Hebrew/Arabic/Persian characters (picks the fonts; the direction is
+        /// TextDirection.FirstStrongIsRtl).</summary>
+        private static bool HasRtlScript(string s)
         {
             foreach (char c in s)
             {

@@ -120,14 +120,7 @@ namespace TelegArm.UI.Controls
                 g.DrawLine(p, 0, Height - 1, Width, Height - 1);
         }
 
-        /// <summary>True if the text contains Hebrew/Arabic/Persian letters (→ right-align the preview).</summary>
-        private static bool IsRtl(string s)
-        {
-            if (string.IsNullOrEmpty(s)) return false;
-            foreach (char c in s)
-                if ((c >= 0x0590 && c <= 0x08FF) || (c >= 0xFB1D && c <= 0xFDFF) || (c >= 0xFE70 && c <= 0xFEFF))
-                    return true;
-            return false;
-        }
+        /// <summary>Right-to-left when the first strong letter is (TextDirection; as the composer and the bubbles).</summary>
+        private static bool IsRtl(string s) { return TextDirection.FirstStrongIsRtl(s); }   // the first strong letter decides (owner 2026-10-16: as the composer)
     }
 }

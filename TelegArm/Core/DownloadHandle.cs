@@ -52,6 +52,11 @@ namespace TelegArm.Core
         private FileStream _fs;
         private readonly object _gate = new object();
         private bool _cancelRequested, _pauseRequested, _finished, _running, _rawPhase;
+        // RT trip 2026-10-16 ("pause can't be resumed, can't stop or cancel"): Pause / Cancel used to wait for the transfer in
+        // flight to NOTICE a flag - an RPC that never returns (Wi-Fi asleep) froze the row. Now they take effect at once: each
+        // attempt carries the generation it started with, Pause / Cancel / Resume move it on, and a stale attempt that wakes
+        // up later changes nothing.
+        private int _gen;
         private string _cancelReason = "user";
         private long _lastLogPct = -1;
         private DateTime _lastLogAt;
@@ -73,29 +78,43 @@ namespace TelegArm.Core
         /// <summary>First start (fire-and-forget); <paramref name="onDone"/> fires once at a TERMINAL state.</summary>
         internal void Run(WTelegram.Client client, Document doc, Action<DownloadHandle> onDone, Func<Task<Document>> refreshDoc = null)
         {
-            _client = client; _doc = doc; _onDone = onDone; _refreshDoc = refreshDoc;
-            lock (_gate) { _running = true; }
-            Attempt();
+            int gen;
+            lock (_gate)
+            {
+                _client = client; _doc = doc; _onDone = onDone; _refreshDoc = refreshDoc;
+                if (_finished) return;
+                if (_cancelRequested) { TerminalCancelled(); return; }
+                if (State == DState.Paused) return;   // paused before its deferred start: Resume starts it
+                _running = true;
+                gen = ++_gen;
+            }
+            Attempt(gen);
         }
+
+        private bool Stale(int gen) { lock (_gate) return gen != _gen; }
 
         /// <summary>Same-handle resume (DOWNLOAD-RESUME Part 1). Idempotent: no-op unless currently Paused.</summary>
         public void Resume()
         {
+            int gen;
+            bool start;
             lock (_gate)
             {
-                if (_finished || _running || State != DState.Paused) return;   // downloading/terminal/racing → no-op
+                if (_finished || State != DState.Paused) return;   // downloading/terminal → no-op
                 _pauseRequested = false;
                 State = DState.Downloading;
-                _running = true;
+                start = _client != null;   // a deferred start not run yet: it runs by itself
+                _running = start;
+                gen = ++_gen;               // an older attempt still awaiting the network is stale now
             }
+            Log("resume id=" + DocId + T + " got=" + Transmitted + "/" + Total);
             RaiseChanged();
-            Attempt();
+            if (start) Attempt(gen);
         }
 
         /// <summary>Aborts the transfer; the .part is kept but the sidecar is DELETED (a cancel is final).</summary>
         public void Cancel(string reason = "user")
         {
-            bool terminalizeHere;
             lock (_gate)
             {
                 if (_finished) return;
@@ -103,15 +122,18 @@ namespace TelegArm.Core
                 _cancelRequested = true;
                 try { _fs?.Dispose(); } catch { }   // aborts an in-flight write
                 _fs = null;
-                terminalizeHere = !_running;        // paused (no task) → transition right here
+                _gen++;                             // whatever is in flight is stale: the cancel is final NOW
+                _running = false;
             }
-            if (terminalizeHere)
-            {
-                State = DState.Cancelled;
-                TryDelete(Path + ".part" + SidecarExt);
-                if (LogOn) System.Diagnostics.Debug.WriteLine("[DOWNLOAD] CANCELLED id=" + DocId + T + " got=" + Transmitted + "/" + Total + " reason=" + _cancelReason);
-                TerminalFinish();
-            }
+            TerminalCancelled();
+        }
+
+        private void TerminalCancelled()
+        {
+            State = DState.Cancelled;
+            TryDelete(Path + ".part" + SidecarExt);
+            Log("CANCELLED id=" + DocId + T + " got=" + Transmitted + "/" + Total + " reason=" + _cancelReason);
+            TerminalFinish();
         }
 
         /// <summary>PAUSE: aborts the in-flight transfer, keeps the .part, writes the resume sidecar; the
@@ -120,25 +142,34 @@ namespace TelegArm.Core
         {
             lock (_gate)
             {
-                if (_finished || _cancelRequested || _pauseRequested || !_running) return;
+                if (_finished || _cancelRequested || State != DState.Downloading) return;
                 _pauseRequested = true;
-                try { _fs?.Dispose(); } catch { }
+                try { _fs?.Dispose(); } catch { }   // the .part is closed: its length is final for the sidecar
                 _fs = null;
+                _gen++;                             // the attempt in flight no longer decides anything
+                _running = false;
+                State = DState.Paused;
             }
+            WriteSidecar(Path + ".part", _doc != null ? _doc.size : 0);
+            Log("paused id=" + DocId + T + " got=" + Transmitted + "/" + Total + " (part kept)");
+            RaiseChanged();   // NON-terminal: no onDone, Completion stays pending for resume→done
         }
+
+        private static void Log(string s) { if (LogOn) TelegArm.Helpers.Logger.Diag("[DOWNLOAD] " + s); }   // R7: survives Release
 
         // ── the transfer attempt (fresh helper OR raw resume loop) ─────────
 
-        private async void Attempt()
+        private async void Attempt(int gen)
         {
             string part = Path + ".part";
             long expected = _doc != null ? _doc.size : 0;
             try
             {
-                if (_cancelRequested) throw new OperationCanceledException();
+                if (_cancelRequested || Stale(gen)) throw new OperationCanceledException();
                 if (TelegramService.IsFileComplete(Path, expected))
                 {
-                    if (LogOn) System.Diagnostics.Debug.WriteLine("[DOWNLOAD] already complete (verified) id=" + DocId);
+                    Log("already complete (verified) id=" + DocId);
+                    lock (_gate) { if (gen != _gen) return; }
                     State = DState.Done;
                     TryDelete(part + SidecarExt);
                     TerminalFinish();
@@ -149,7 +180,7 @@ namespace TelegArm.Core
                     long onDisk = new FileInfo(Path).Length;
                     if (expected > 0 && onDisk != expected)
                     {
-                        if (LogOn) System.Diagnostics.Debug.WriteLine("[DOWNLOAD] heal id=" + DocId + " onDisk=" + onDisk + " expected=" + expected + " → re-download");
+                        Log("heal id=" + DocId + " onDisk=" + onDisk + " expected=" + expected + " → re-download");
                         File.Delete(Path);
                     }
                 }
@@ -157,30 +188,31 @@ namespace TelegArm.Core
                 long from = SidecarResumePoint(part, expected);
                 if (from > 0)
                 {
-                    if (LogOn) System.Diagnostics.Debug.WriteLine("[DOWNLOAD] resume id=" + DocId + T + " from=" + from + "/" + expected + " via=raw-loop");
+                    Log("resume id=" + DocId + T + " from=" + from + "/" + expected + " via=raw-loop");
                     Transmitted = from; Total = expected;
                     try
                     {
-                        await RawResumeTransfer(part, from).ConfigureAwait(false);
+                        await RawResumeTransfer(part, from, gen).ConfigureAwait(false);
                     }
                     catch (CdnFallbackException)
                     {
                         // We don't hand-roll CDN AES-CTR (yet — frequency data first): full helper refetch.
-                        if (LogOn) System.Diagnostics.Debug.WriteLine("[DOWNLOAD] cdn → full refetch id=" + DocId);
+                        Log("cdn → full refetch id=" + DocId);
                         TryDelete(part + SidecarExt); TryDelete(part);
-                        await HelperTransferWithRefresh(part).ConfigureAwait(false);
+                        await HelperTransferWithRefresh(part, gen).ConfigureAwait(false);
                     }
                 }
                 else
                 {
                     if (File.Exists(part))
                     {
-                        if (LogOn) System.Diagnostics.Debug.WriteLine("[DOWNLOAD] part discarded id=" + DocId + " (no resume sidecar)");
+                        Log("part discarded id=" + DocId + " (no resume sidecar)");
                         File.Delete(part);
                     }
-                    if (LogOn) System.Diagnostics.Debug.WriteLine("[DOWNLOAD] start id=" + DocId + T + " size=" + expected + " path=" + Path);
-                    await HelperTransferWithRefresh(part).ConfigureAwait(false);
+                    Log("start id=" + DocId + T + " size=" + expected + " path=" + Path);
+                    await HelperTransferWithRefresh(part, gen).ConfigureAwait(false);
                 }
+                lock (_gate) { if (gen != _gen) return; }   // paused / cancelled / resumed meanwhile: not this attempt's file any more
 
                 // VERIFIED completion only → rename to final.
                 long written = File.Exists(part) ? new FileInfo(part).Length : -1;
@@ -189,33 +221,29 @@ namespace TelegArm.Core
                 try { if (File.Exists(Path)) File.Delete(Path); } catch { }
                 File.Move(part, Path);
                 TryDelete(part + SidecarExt);
-                if (LogOn) System.Diagnostics.Debug.WriteLine("[DOWNLOAD] done id=" + DocId + T + " wrote=" + written + " expected=" + expected + " match=Y → renamed");
+                Log("done id=" + DocId + T + " wrote=" + written + " expected=" + expected + " match=Y → renamed");
                 State = DState.Done;
                 TerminalFinish();
             }
             catch (Exception ex)
             {
-                lock (_gate) { try { _fs?.Dispose(); } catch { } _fs = null; }
-                if (_pauseRequested && !_cancelRequested)
+                lock (_gate)
                 {
-                    WriteSidecar(part, expected);
-                    State = DState.Paused;
-                    lock (_gate) _running = false;
-                    if (LogOn) System.Diagnostics.Debug.WriteLine("[DOWNLOAD] paused id=" + DocId + T + " got=" + Transmitted + "/" + Total + " (part kept)");
-                    RaiseChanged();   // NON-terminal: no onDone, Completion stays pending for resume→done
-                    return;
+                    if (gen != _gen)   // Pause / Cancel / Resume already decided: this attempt only ends
+                    {
+                        Log("stale attempt ended id=" + DocId + " (" + ex.GetType().Name + ")");
+                        return;
+                    }
+                    try { _fs?.Dispose(); } catch { }
+                    _fs = null;
                 }
                 State = _cancelRequested ? DState.Cancelled : DState.Failed;
                 if (State == DState.Failed) WriteSidecar(part, expected);   // graceful fail → resumable next request
                 else TryDelete(part + SidecarExt);
-                if (LogOn)
-                {
-                    if (State == DState.Cancelled)
-                        System.Diagnostics.Debug.WriteLine("[DOWNLOAD] CANCELLED id=" + DocId + T + " got=" + Transmitted + "/" + Total + " reason=" + _cancelReason);
-                    else
-                        System.Diagnostics.Debug.WriteLine("[DOWNLOAD] FAILED id=" + DocId + T + " got=" + Transmitted + "/" + Total
-                            + " ex=" + ex.GetType().Name + ":" + ex.Message + " part=kept");
-                }
+                if (State == DState.Cancelled)
+                    Log("CANCELLED id=" + DocId + T + " got=" + Transmitted + "/" + Total + " reason=" + _cancelReason);
+                else
+                    Log("FAILED id=" + DocId + T + " got=" + Transmitted + "/" + Total + " ex=" + ex.GetType().Name + ":" + ex.Message + " part=kept");
                 TerminalFinish();
             }
         }
@@ -231,18 +259,18 @@ namespace TelegArm.Core
         private void RaiseChanged() { var h = Changed; if (h != null) { try { h(this); } catch { } } }
 
         /// <summary>Fresh download via the parallel-part helper, with the FILE_REFERENCE retry-once ladder.</summary>
-        private async Task HelperTransferWithRefresh(string part)
+        private async Task HelperTransferWithRefresh(string part, int gen)
         {
             var docNow = _doc; bool refreshed = false;
             _rawPhase = false;
             for (; ; )
             {
-                try { await HelperTransfer(docNow, part).ConfigureAwait(false); return; }
+                try { await HelperTransfer(docNow, part, gen).ConfigureAwait(false); return; }
                 catch (RpcException rex) when (!refreshed && _refreshDoc != null
                                                && rex.Message != null && rex.Message.Contains("FILE_REFERENCE"))
                 {
                     refreshed = true;
-                    if (LogOn) System.Diagnostics.Debug.WriteLine("[DOWNLOAD] FILE_REFERENCE expired id=" + DocId + " → refreshing + retry once");
+                    Log("FILE_REFERENCE expired id=" + DocId + " → refreshing + retry once");
                     var fresh = await _refreshDoc().ConfigureAwait(false);
                     if (fresh == null) throw;
                     docNow = fresh; _doc = fresh;
@@ -251,29 +279,29 @@ namespace TelegArm.Core
             }
         }
 
-        private async Task HelperTransfer(Document doc, string part)
+        private async Task HelperTransfer(Document doc, string part, int gen)
         {
             FileStream fs = File.Create(part);
             lock (_gate)
             {
+                if (gen != _gen || _cancelRequested || _pauseRequested) { try { fs.Dispose(); } catch { } throw new OperationCanceledException(); }
                 _fs = fs;
-                if (_cancelRequested || _pauseRequested) { try { fs.Dispose(); } catch { } _fs = null; throw new OperationCanceledException(); }
             }
             await _client.DownloadFileAsync(doc, fs, (PhotoSizeBase)null, (t, tot) =>
             {
+                if (Stale(gen) || _cancelRequested || _pauseRequested) throw new OperationCanceledException();   // a stale part never moves the bar
                 Transmitted = t; Total = tot;
-                if (_cancelRequested || _pauseRequested) throw new OperationCanceledException();
                 ThrottledProgressLog(t, tot);
                 RaiseChanged();
             }).ConfigureAwait(false);
-            lock (_gate) { _fs = null; }
+            lock (_gate) { if (_fs == fs) _fs = null; }
             fs.Dispose();
-            if (_cancelRequested || _pauseRequested) throw new OperationCanceledException();
+            if (Stale(gen) || _cancelRequested || _pauseRequested) throw new OperationCanceledException();
         }
 
         /// <summary>RESUME path: sequential Upload_GetFile loop appending from <paramref name="from"/> —
         /// slower than the helper's parallel fresh download, but it never repays already-downloaded bytes.</summary>
-        private async Task RawResumeTransfer(string part, long from)
+        private async Task RawResumeTransfer(string part, long from, int gen)
         {
             _rawPhase = true;
             var fs = new FileStream(part, FileMode.Open, FileAccess.Write, FileShare.None);
@@ -281,8 +309,8 @@ namespace TelegArm.Core
             fs.Position = from;
             lock (_gate)
             {
+                if (gen != _gen || _cancelRequested || _pauseRequested) { try { fs.Dispose(); } catch { } throw new OperationCanceledException(); }
                 _fs = fs;
-                if (_cancelRequested || _pauseRequested) { try { fs.Dispose(); } catch { } _fs = null; throw new OperationCanceledException(); }
             }
             var client = _client;
             var docNow = _doc; bool refreshed = false;
@@ -291,7 +319,7 @@ namespace TelegArm.Core
             {
                 while (offset < expected)
                 {
-                    if (_cancelRequested || _pauseRequested) throw new OperationCanceledException();
+                    if (Stale(gen) || _cancelRequested || _pauseRequested) throw new OperationCanceledException();
                     Upload_FileBase res;
                     try
                     {
@@ -300,7 +328,7 @@ namespace TelegArm.Core
                     catch (RpcException rex) when (rex.Message != null && rex.Message.Contains("FILE_REFERENCE") && !refreshed && _refreshDoc != null)
                     {
                         refreshed = true;
-                        if (LogOn) System.Diagnostics.Debug.WriteLine("[DOWNLOAD] FILE_REFERENCE expired id=" + DocId + " → refreshing + retry once (raw)");
+                        Log("FILE_REFERENCE expired id=" + DocId + " → refreshing + retry once (raw)");
                         var fresh = await _refreshDoc().ConfigureAwait(false);
                         if (fresh == null) throw;
                         docNow = fresh; _doc = fresh;
@@ -311,7 +339,7 @@ namespace TelegArm.Core
                         // WTC keeps the literal "_X" in Message; the number rides in RpcException.X (IL-proven).
                         int dc = rex.X;
                         if (dc <= 0) throw;
-                        if (LogOn) System.Diagnostics.Debug.WriteLine("[DOWNLOAD] FILE_MIGRATE id=" + DocId + " → dc" + dc + " (raw loop continues there)");
+                        Log("FILE_MIGRATE id=" + DocId + " → dc" + dc + " (raw loop continues there)");
                         client = await _client.GetClientForDC(dc, true).ConfigureAwait(false);
                         if (client == null) throw;
                         continue;   // retry the same offset on the media DC
@@ -320,6 +348,7 @@ namespace TelegArm.Core
                     var uf = res as Upload_File;
                     if (uf == null || uf.bytes == null || uf.bytes.Length == 0)
                         throw new IOException("empty chunk at offset " + offset);
+                    if (Stale(gen)) throw new OperationCanceledException();   // paused / cancelled while the chunk was in flight
                     fs.Write(uf.bytes, 0, uf.bytes.Length);
                     offset += uf.bytes.Length;
                     Transmitted = offset; Total = expected;
@@ -353,7 +382,7 @@ namespace TelegArm.Core
             if (pct >= _lastLogPct + 10 || (DateTime.UtcNow - _lastLogAt).TotalSeconds >= 2)
             {
                 _lastLogPct = pct; _lastLogAt = DateTime.UtcNow;
-                System.Diagnostics.Debug.WriteLine("[DOWNLOAD] progress id=" + DocId + " got=" + t + "/" + tot);
+                Log("progress id=" + DocId + " got=" + t + "/" + tot);
             }
         }
 

@@ -53,7 +53,22 @@ namespace TelegArm.UI
 
         private void OnGroupCallChanged(GroupCallSession s)
         {
-            if (!s.Ended && (_groupWindow == null || _groupWindow.IsDisposed)) ShowGroupCallWindow(s);
+            if (!s.Ended)
+            {
+                try
+                {
+                    if (_groupWindow == null || _groupWindow.IsDisposed) ShowGroupCallWindow(s);
+                    // a new voice chat while the window still shows the last one ending: rebind it (no Activate - this runs on
+                    // every change)
+                    else if (!ReferenceEquals(_groupWindow.Session, s)) _groupWindow.Bind(GroupCalls, s);
+                }
+                catch (Exception ex)
+                {
+                    // never a voice chat without its window (no way to see it, mute it or leave it)
+                    Logger.Diag("[GCALL] window: " + ex);
+                    var gc = _groupCalls; if (gc != null && ReferenceEquals(gc.Current, s)) { var t = gc.LeaveAsync(); }
+                }
+            }
             OnGroupCallInfoChanged(s.PeerId);
         }
 
@@ -78,7 +93,7 @@ namespace TelegArm.UI
                                                   Math.Max(wa.Top, Math.Min(wa.Top + Px(24), wa.Bottom - _groupWindow.Height)));
                 _groupWindow.Show(this);
             }
-            else _groupWindow.Bind(s);
+            else _groupWindow.Bind(GroupCalls, s);
             try { _groupWindow.Activate(); } catch { }
         }
 
@@ -170,6 +185,21 @@ namespace TelegArm.UI
             bool active, canManage;
             if (!VoiceChatState(e, out active, out canManage)) return;
             AddMenuItem(menu, active ? "Join voice chat" : "Start voice chat", () => JoinVoiceChat(e));
+        }
+
+        /// <summary>Before the active account changes (switch, add, log out): a live voice chat is left and a 1:1 call hung
+        /// up on the OUTGOING account's client while it is still connected - else that account stays in the call, its mic
+        /// live, with no window to leave from (review 2026-10-16). Bounded by <paramref name="waitMs"/> (0 = do not wait:
+        /// both end here at once, only their goodbyes go out in the background).</summary>
+        private async System.Threading.Tasks.Task LeaveCallsForAccountChangeAsync(int waitMs)
+        {
+            var waits = new System.Collections.Generic.List<System.Threading.Tasks.Task>();
+            var gc = _groupCalls; if (gc != null && gc.Busy) waits.Add(gc.LeaveAsync());
+            var c = _calls; if (c != null && c.Busy) waits.Add(c.HangUpAsync());
+            if (waits.Count == 0) return;
+            Logger.Diag("[GCALL] account change: leaving " + waits.Count + " call(s) first");
+            if (waitMs > 0)
+                await System.Threading.Tasks.Task.WhenAny(System.Threading.Tasks.Task.WhenAll(waits), System.Threading.Tasks.Task.Delay(waitMs));
         }
 
         private void ShutdownGroupCalls()

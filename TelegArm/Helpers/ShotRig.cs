@@ -866,6 +866,30 @@ namespace TelegArm.Helpers
                     LiveShot(f, "backdrop-bars-" + (mode == ThemeMode.Dark ? "dark" : "light"));
                     _log.AppendLine("  backdrop " + (WindowBackdrop.Enabled ? "ON" : "off") + ": pinned " + ((Control)Field(f, "_pinnedBar")).Visible
                                     + ", mini " + mini.Visible + ", downloads " + (dl != null && dl.Visible));
+                    string tn = mode == ThemeMode.Dark ? "dark" : "light";
+                    // RT trip 2026-10-16 (owner): the hamburger drawer and the downloads list show it too
+                    Invoke(f, "ShowDrawer");
+                    LivePump(700);
+                    LiveShot(f, "backdrop-drawer-" + tn);
+                    Invoke(f, "CloseDrawer");
+                    LivePump(300);
+                    var svc = (TelegramService)Field(f, "_activeService");
+                    var roster = (System.Collections.IDictionary)typeof(TelegramService).GetField("_roster", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(svc);
+                    var handle = new DownloadHandle(5150, Path.Combine(_dir, "demo.mp4"));
+                    handle.Pause();
+                    roster[5150L] = new TelegramService.TransferInfo { DocId = 5150, FileName = "Engine lecture.mp4", ChatTitle = "Ada Lovelace", Path = Path.Combine(_dir, "demo.mp4"), Handle = handle, Type = "video" };
+                    var panel = new DownloadsPanel(svc, mode == ThemeMode.Dark, ThemeHelper.Palette.Accent, f.WindowDpiValue);
+                    panel.Location = f.PointToScreen(new Point(f.ClientSize.Width - panel.Width - 40, 80));
+                    panel.Show(f);
+                    Invoke(panel, "Rebuild");
+                    LivePump(800);
+                    using (var bmp = new Bitmap(panel.Width, panel.Height))
+                    {
+                        using (var g = Graphics.FromImage(bmp)) g.CopyFromScreen(panel.Location, Point.Empty, panel.Size);
+                        bmp.Save(Path.Combine(_dir, "backdrop-downloads-" + tn + ".png"), ImageFormat.Png);
+                    }
+                    panel.Close();
+                    LivePump(300);
                 }
                 catch (Exception ex) { _log.AppendLine("  FAIL  " + ex.GetType().Name + " " + ex.Message); _failures++; }
                 finally
@@ -1247,6 +1271,98 @@ namespace TelegArm.Helpers
                     }
                     finally { chat.PeerInfo = info; chat.Peer = peer; callBtn.Visible = phoneShown; callBtn.Invalidate(); }
                 }
+                // owner 2026-10-16: bubbles follow the first strong letter, as the composer (fonts still by "has Persian")
+                {
+                    var texts = new[] { "Hello سلام - mixed, Latin first", "سلام hello - Persian first", "123 سلام - digits first" };
+                    var want = new[] { RightToLeft.No, RightToLeft.Yes, RightToLeft.Yes };
+                    var got = new List<string>();
+                    bool dirOk = true;
+                    for (int i = 0; i < texts.Length; i++)
+                    {
+                        var m = new TL.Message { id = 9101 + i, date = DateTime.UtcNow, peer_id = new TL.PeerUser { user_id = 900001 }, message = texts[i],
+                                                 flags = i == 1 ? TL.Message.Flags.out_ : 0 };
+                        Invoke(f, "AddMessageBubble", Field(f, "_selectedChat"), m, null, null);
+                    }
+                    var bubbles = new List<Control>();
+                    Action<Control> find = null;
+                    find = c => { foreach (Control k in c.Controls) { if (k is UI.Controls.MessageBubbleControl) bubbles.Add(k); find(k); } };
+                    find(f);
+                    for (int i = 0; i < texts.Length; i++)
+                    {
+                        var bubble = bubbles.FirstOrDefault(c => (Field(c, "_text") as string) == texts[i]);
+                        var rtl = bubble != null ? bubble.RightToLeft : RightToLeft.Inherit;
+                        got.Add(rtl.ToString());
+                        if (rtl != want[i]) dirOk = false;
+                    }
+                    Invoke(f, "ScrollMessagesToBottom");
+                    LivePump(500);
+                    Capture(f, "keys-bubble-direction");
+                    _log.AppendLine("  " + (dirOk ? "PASS  " : "FAIL  ") + "bubbles: direction by the first strong letter (Latin-first LTR, Persian-first and digits-first RTL: " + string.Join(", ", got) + ")");
+                    if (!dirOk) _failures++;
+                }
+                // RT trip 2026-10-16 ("pause can't be resumed, can't stop or cancel"): the controls act AT ONCE, never waiting for
+                // a transfer in flight (none here: no network) - pause, resume, pause, cancel; and a pause before a deferred start
+                {
+                    var tmp = Path.Combine(_dir, "dl-state.bin");
+                    var h = new DownloadHandle(4711, tmp);
+                    var seen = new List<string>();
+                    h.Changed += x => seen.Add(x.State.ToString());
+                    h.Pause(); string a = h.State.ToString();
+                    h.Resume(); string b = h.State.ToString();
+                    h.Pause(); string c = h.State.ToString();
+                    h.Cancel(); string d = h.State.ToString();
+                    h.Resume(); string e2 = h.State.ToString();   // finished: stays cancelled
+                    bool flow = a == "Paused" && b == "Downloading" && c == "Paused" && d == "Cancelled" && e2 == "Cancelled" && h.Completion.IsCompleted;
+                    var h2 = new DownloadHandle(4712, tmp);
+                    h2.Pause();
+                    Invoke(h2, "Run", null, null, null, null);   // the deferred start arrives while paused: it must not start
+                    bool deferred = h2.State == DownloadHandle.DState.Paused && !h2.Completion.IsCompleted;
+                    h2.Cancel();
+                    deferred = deferred && h2.State == DownloadHandle.DState.Cancelled;
+                    _log.AppendLine("  " + (flow && deferred ? "PASS  " : "FAIL  ") + "downloads: pause / resume / cancel act at once (" + a + " " + b + " " + c + " " + d + " " + e2
+                        + "; paused before its start: " + (deferred ? "stays paused, then cancels" : "WRONG") + "; events " + string.Join(",", seen) + ")");
+                    if (!(flow && deferred)) _failures++;
+                }
+                // owner 2026-10-16: the gallery's scale round trip, on the REAL main window - the interface scale applied live and
+                // back (as Settings does): the chat rows and the bubbles must come back to the same pixels. The window is first
+                // sized so the bigger scale is not clamped by the work area.
+                {
+                    int old = Dpi.UserScalePercent;
+                    var scaleArea = Screen.FromHandle(f.Handle).WorkingArea;
+                    int cap = Dpi.FitCap(scaleArea, f.MonitorDpiValue);
+                    if (cap < 125) _log.AppendLine("  info  scale round trip skipped: this screen is capped at " + cap + "%");
+                    else
+                    {
+                        int target = Math.Min(150, cap);
+                        var before = f.Bounds;
+                        f.Size = new Size(scaleArea.Width * 55 / 100, scaleArea.Height * 60 / 100);
+                        Invoke(f, "ScrollMessagesToBottom");
+                        LivePump(600);
+                        var kit = new List<Control>();
+                        Action<Control> collect = null;
+                        collect = c => { foreach (Control k in c.Controls) { if ((k is UI.Controls.ChatListItemControl || k is UI.Controls.MessageBubbleControl) && k.Visible) kit.Add(k); collect(k); } };
+                        collect(f);
+                        var home = kit.Select(k => k.Bounds).ToArray();
+                        var size = f.Size; int dpi = f.WindowDpiValue;
+                        AppForm.ApplyInterfaceScale(target);
+                        LivePump(900);
+                        int scaled = f.WindowDpiValue;
+                        AppForm.ApplyInterfaceScale(old);
+                        LivePump(900);
+                        Invoke(f, "ScrollMessagesToBottom");
+                        LivePump(400);
+                        var moved = new List<string>();
+                        for (int i = 0; i < kit.Count; i++)
+                            if (!kit[i].IsDisposed && kit[i].Bounds != home[i]) moved.Add(kit[i].GetType().Name + " " + home[i] + " -> " + kit[i].Bounds);
+                        bool same = moved.Count == 0 && f.Size == size && f.WindowDpiValue == dpi && scaled != dpi;
+                        _log.AppendLine("  " + (same ? "PASS  " : "FAIL  ") + "main window: interface scale " + target + "% and back - " + kit.Count + " chat rows / bubbles on the same pixels"
+                            + " (dpi " + dpi + " -> " + scaled + " -> " + f.WindowDpiValue + ", size " + size + " -> " + f.Size + ")");
+                        foreach (var mv in moved.Take(5)) _log.AppendLine("          moved: " + mv);
+                        if (!same) _failures++;
+                        f.Bounds = before;   // back to two columns for the steps below
+                        LivePump(400);
+                    }
+                }
                 // T20: a venue message — its name, address and an "Open in map" link
                 var venueMsg = new TL.Message
                 {
@@ -1319,17 +1435,42 @@ namespace TelegArm.Helpers
                                      "\U0001F92F", "\U0001F631", "\U0001F92C", "\U0001F622", "\U0001F389", "\U0001F929", "\U0001F92E", "\U0001F4A9",
                                      "\U0001F64F", "\U0001F44C", "\U0001F54A", "\U0001F921", "\U0001F971", "\U0001F974", "\U0001F60D", "\U0001F433" };
                 svc.GetType().GetField("_availableReactions", BindingFlags.NonPublic | BindingFlags.Instance).SetValue(svc, seeded);
-                var anchor = f.PointToScreen(new Point(f.ClientSize.Width / 3, f.ClientSize.Height / 4));
-                Cursor.Position = anchor;
-                var firstMsg = ((IEnumerable)Field(f, "_currentChatMessages")).Cast<TL.Message>().FirstOrDefault();
+                // owner 2026-10-16: the grid opens ON its message (as from right-click / hold -> React -> More…), wherever the
+                // pointer is - the pointer is parked far away to prove it
+                var msgPanel = (Control)Field(f, "_messagePanel");
+                if (Field(f, "_selectedChat") == null) { OpenDemoChat(f); LivePump(600); }   // the steps above leave no chat open
+                var reactTo = new TL.Message { id = 9201, date = DateTime.UtcNow, peer_id = new TL.PeerUser { user_id = 900001 }, message = "React to this one" };
+                ((IList)Field(f, "_currentChatMessages")).Add(reactTo);
+                Invoke(f, "AddMessageBubble", Field(f, "_selectedChat"), reactTo, null, null);
+                Invoke(f, "ScrollMessagesToBottom");
+                LivePump(500);
+                var loaded = ((IEnumerable)Field(f, "_currentChatMessages")).Cast<TL.Message>().ToList();
+                var lastBubble = msgPanel.Controls.OfType<UI.Controls.MessageBubbleControl>()
+                                          .Where(b => b.Visible && loaded.Any(m => m.ID == b.MessageId) && msgPanel.ClientRectangle.IntersectsWith(b.Bounds))
+                                          .OrderByDescending(b => b.Top).FirstOrDefault();
+                var firstMsg = lastBubble == null ? null : loaded.First(m => m.ID == lastBubble.MessageId);
+                _log.AppendLine("  info  reaction grid target: " + loaded.Count + " loaded (" + string.Join(",", loaded.Take(8).Select(m => m.ID)) + "), bubbles "
+                    + string.Join(",", msgPanel.Controls.OfType<UI.Controls.MessageBubbleControl>().Take(12).Select(b => b.MessageId + (b.Visible ? "" : "h") + "@" + b.Top)));
+                Cursor.Position = f.PointToScreen(new Point(4, 4));
                 Invoke(f, "ShowReactionGrid", firstMsg);
                 LivePump(800);
-                var grid = new Rectangle(anchor.X - 8, anchor.Y - 8, 420, 180);
-                using (var bmp = new Bitmap(grid.Width, grid.Height))
-                {
-                    using (var g = Graphics.FromImage(bmp)) g.CopyFromScreen(grid.Location, Point.Empty, grid.Size);
-                    bmp.Save(Path.Combine(_dir, "keys-4-reaction-grid.png"), ImageFormat.Png);
-                }
+                var drop = Field(f, "_reactionGrid") as ToolStripDropDown;
+                var bubbleRect = lastBubble != null ? lastBubble.RectangleToScreen(lastBubble.ClientRectangle) : Rectangle.Empty;
+                var gridRect = drop != null ? drop.Bounds : Rectangle.Empty;
+                bool onMessage = firstMsg != null && drop != null && gridRect.Width > 0
+                    && Math.Min(Math.Abs(gridRect.Bottom - bubbleRect.Top), Math.Abs(gridRect.Top - bubbleRect.Bottom)) <= 30
+                    && gridRect.Right > bubbleRect.Left && gridRect.Left < bubbleRect.Right;
+                _log.AppendLine("  " + (onMessage ? "PASS  " : "FAIL  ") + "the reaction grid opens on its message, not at the pointer (grid " + gridRect + ", bubble " + bubbleRect
+                    + (lastBubble != null ? (lastBubble.Outgoing ? ", outgoing" : ", incoming") : "") + ")");
+                if (!onMessage) _failures++;
+                var shot = Rectangle.Union(gridRect, bubbleRect); shot.Inflate(12, 12);
+                shot.Intersect(Screen.FromControl(f).Bounds);
+                if (shot.Width > 0 && shot.Height > 0)
+                    using (var bmp = new Bitmap(shot.Width, shot.Height))
+                    {
+                        using (var g = Graphics.FromImage(bmp)) g.CopyFromScreen(shot.Location, Point.Empty, shot.Size);
+                        bmp.Save(Path.Combine(_dir, "keys-4-reaction-grid.png"), ImageFormat.Png);
+                    }
                 // (the grid is left open: the form then closes with it open, the case the Closed guard covers)
                 LivePump(300);
             }

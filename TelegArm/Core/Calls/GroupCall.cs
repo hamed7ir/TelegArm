@@ -39,7 +39,7 @@ namespace TelegArm.Core.Calls
         public bool CanManage { get; internal set; }
         public float MyLevel { get; internal set; }
         internal int MySpeakingUntil;
-        public bool MeSpeaking { get { return !Muted && unchecked(MySpeakingUntil - Environment.TickCount) > 0; } }
+        public bool MeSpeaking { get { return !Muted && MySpeakingUntil != 0 && unchecked(MySpeakingUntil - Environment.TickCount) > 0; } }
         public string Note { get; internal set; }
         public readonly GroupParticipants Participants = new GroupParticipants();
         public int DurationSeconds { get { return ConnectedUtc == null ? 0 : (int)(DateTime.UtcNow - ConnectedUtc.Value).TotalSeconds; } }
@@ -47,7 +47,7 @@ namespace TelegArm.Core.Calls
         internal NativeGroupCall Native;
         internal int Ssrc;
         internal int Version = -1;
-        internal bool Joined, Rejoining, Checking;
+        internal bool Joined, Rejoining, Checking, Reloading, ReloadAgain;
     }
 
     /// <summary>
@@ -86,7 +86,14 @@ namespace TelegArm.Core.Calls
         public bool Busy { get { return Current != null && !Current.Ended; } }
         private WTelegram.Client Client { get { return _svc.Client; } }
 
-        private void Raise(GroupCallSession s) { var h = Changed; if (h != null) h(s); }
+        /// <summary>Every subscriber, each guarded: a throwing one must not leave a session half-ended (review 2026-10-16).</summary>
+        private void Raise(GroupCallSession s)
+        {
+            var h = Changed;
+            if (h == null) return;
+            foreach (Action<GroupCallSession> d in h.GetInvocationList())
+                try { d(s); } catch (Exception ex) { Logger.Diag("[GCALL] Changed handler: " + ex); }
+        }
         private void Post(Action a) { _ui.Post(_ => { try { a(); } catch (Exception ex) { Logger.Diag("[GCALL] UI handler: " + ex); } }, null); }
 
         public GroupCallInfo InfoFor(long peerId) { GroupCallInfo i; return _info.TryGetValue(peerId, out i) ? i : null; }
@@ -138,7 +145,13 @@ namespace TelegArm.Core.Calls
             return info;
         }
 
-        private void Raise(long peerId) { var h = InfoChanged; if (h != null) h(peerId); }
+        private void Raise(long peerId)
+        {
+            var h = InfoChanged;
+            if (h == null) return;
+            foreach (Action<long> d in h.GetInvocationList())
+                try { d(peerId); } catch (Exception ex) { Logger.Diag("[GCALL] InfoChanged handler: " + ex); }
+        }
 
         private GroupCallInfo Remember(long peerId, GroupCall g)
         {
@@ -194,30 +207,45 @@ namespace TelegArm.Core.Calls
             await JoinAsync(peer, peerId, title, true);
         }
 
+        /// <summary>The call and its participants from the server. Built into a FRESH list and swapped in at the end (the
+        /// version with it), so updates applied meanwhile are never half-overwritten by older pages; one at a time (a
+        /// request during it runs once more after it).</summary>
         private async Task LoadParticipantsAsync(GroupCallSession s)
         {
-            var r = await Client.Phone_GetGroupCall(s.Call, 100);
-            Learn(r.users, r.chats);
-            var g = r.call as GroupCall;
-            if (g != null)
+            if (s.Reloading) { s.ReloadAgain = true; return; }
+            s.Reloading = true;
+            try
             {
-                s.Participants.ServerCount = g.participants_count;
-                if ((g.flags & GroupCall.Flags.has_title) != 0 && !string.IsNullOrEmpty(g.title)) s.Title = g.title;
-                s.Version = g.version;
-                if ((g.flags & GroupCall.Flags.creator) != 0) s.CanManage = true;
+                do
+                {
+                    s.ReloadAgain = false;
+                    var r = await Client.Phone_GetGroupCall(s.Call, 100);
+                    if (s.Ended) return;
+                    Learn(r.users, r.chats);
+                    var g = r.call as GroupCall;
+                    if (g == null) { End(s, "The voice chat has ended"); return; }   // GroupCallDiscarded
+                    var fresh = new GroupParticipants();
+                    fresh.Apply(r.participants, Name);
+                    string next = r.participants_next_offset;
+                    for (int page = 0; !string.IsNullOrEmpty(next) && page < 5; page++)   // up to 600 listed; the count says the rest
+                    {
+                        var pr = await Client.Phone_GetGroupParticipants(s.Call, null, null, next, 100);
+                        if (s.Ended) return;
+                        Learn(pr.users, pr.chats);
+                        fresh.Apply(pr.participants, Name);
+                        next = pr.next_offset;
+                    }
+                    s.Participants.ReplaceWith(fresh);
+                    s.Participants.ServerCount = g.participants_count;
+                    if ((g.flags & GroupCall.Flags.has_title) != 0 && !string.IsNullOrEmpty(g.title)) s.Title = g.title;
+                    if ((g.flags & GroupCall.Flags.creator) != 0) s.CanManage = true;
+                    s.Version = g.version;
+                    ReconcileSelf(s);
+                    ApplyVolumes(s);
+                    Raise(s);
+                } while (s.ReloadAgain && !s.Ended);
             }
-            s.Participants.Clear();
-            s.Participants.Apply(r.participants, Name);
-            string next = r.participants_next_offset;
-            for (int page = 0; !string.IsNullOrEmpty(next) && page < 5; page++)   // up to 600 listed; the count says the rest
-            {
-                var pr = await Client.Phone_GetGroupParticipants(s.Call, null, null, next, 100);
-                Learn(pr.users, pr.chats);
-                s.Participants.Apply(pr.participants, Name);
-                next = pr.next_offset;
-            }
-            ApplyVolumes(s);
-            Raise(s);
+            finally { s.Reloading = false; }
         }
 
         private void StartNative(GroupCallSession s)
@@ -232,6 +260,7 @@ namespace TelegArm.Core.Calls
             });
             if (native == null) throw new InvalidOperationException("Voice chats need a newer call library (" + TgCalls.Status + ").");
             s.Native = native;
+            native.SetMute(s.Muted || s.ForceMuted);   // an Unmute while it was still joining (it starts muted)
             native.EmitJoin();
         }
 
@@ -241,9 +270,11 @@ namespace TelegArm.Core.Calls
         {
             if (s.Ended || s.Native == null) return;
             s.Ssrc = unchecked((int)ssrc);
+            bool sent = false, sentMuted = s.Muted || s.ForceMuted;
             try
             {
-                var r = await Client.Phone_JoinGroupCall(s.Call, new InputPeerSelf(), new DataJSON { data = json }, muted: s.Muted || s.ForceMuted, video_stopped: true);
+                var r = await Client.Phone_JoinGroupCall(s.Call, new InputPeerSelf(), new DataJSON { data = json }, muted: sentMuted, video_stopped: true);
+                sent = true;   // the server has us now: any failure below must leave
                 if (s.Ended) { var t = LeaveQuietlyAsync(s.Call, s.Ssrc); return; }
                 Learn(r.Users, r.Chats);
                 bool connection = false;
@@ -259,6 +290,8 @@ namespace TelegArm.Core.Calls
                 ApplyVolumes(s);
                 s.Joined = true;
                 s.Rejoining = false;
+                bool wantMuted = s.Muted || s.ForceMuted;
+                if (wantMuted != sentMuted) { var e = EditSelfAsync(s, wantMuted, null); }   // toggled while the join was in flight
                 if (s.Phase != GroupCallPhase.Connected) s.Phase = GroupCallPhase.Connecting;
                 Logger.Diag("[GCALL] joined, ssrc " + s.Ssrc);
                 Raise(s);
@@ -268,6 +301,7 @@ namespace TelegArm.Core.Calls
             {
                 if (ex.Message.Contains("GROUPCALL_SSRC_DUPLICATE_MUCH")) { Logger.Diag("[GCALL] ssrc taken: rejoin"); s.Rejoining = false; Rejoin(s); return; }
                 Logger.Diag("[GCALL] join: " + ex.Message);
+                if (sent) { var l = LeaveQuietlyAsync(s.Call, s.Ssrc); }   // accepted, then failed here: no ghost participant
                 End(s, Friendly(ex, "Couldn't join the voice chat"));
             }
         }
@@ -286,7 +320,15 @@ namespace TelegArm.Core.Calls
                     if (s.Ended || !s.Joined || s.Phase == GroupCallPhase.Connected || s.Rejoining) break;
                     int[] alive = null;
                     try { alive = await Client.Phone_CheckGroupCall(s.Call, new[] { s.Ssrc }); }
-                    catch (Exception ex) { Logger.Diag("[GCALL] check: " + ex.Message); }
+                    catch (Exception ex)
+                    {
+                        Logger.Diag("[GCALL] check: " + ex.Message);
+                        string m = ex.Message ?? "";
+                        if (s.Ended) break;
+                        if (m.Contains("GROUPCALL_INVALID") || m.Contains("GROUPCALL_ALREADY_DISCARDED")) { End(s, "The voice chat has ended"); break; }
+                        if (m.Contains("GROUPCALL_JOIN_MISSING") || m.Contains("GROUPCALL_FORBIDDEN")) { Rejoin(s); break; }
+                        // anything else (the network, FLOOD_WAIT): ask again in 4 s
+                    }
                     if (alive != null && !alive.Contains(s.Ssrc)) { Logger.Diag("[GCALL] our ssrc is gone: rejoin"); Rejoin(s); break; }
                 }
             }
@@ -391,9 +433,19 @@ namespace TelegArm.Core.Calls
         {
             var s = Current;
             if (s == null || s.Ended) return;
-            End(s, "The voice chat has ended");
-            try { await Client.Phone_DiscardGroupCall(s.Call); }
-            catch (Exception ex) { Logger.Diag("[GCALL] discard: " + ex.Message); }
+            bool joined = s.Joined;
+            try
+            {
+                await Client.Phone_DiscardGroupCall(s.Call);
+                End(s, "The voice chat has ended");
+            }
+            catch (Exception ex)
+            {
+                Logger.Diag("[GCALL] discard: " + ex.Message);
+                if (s.Ended) return;
+                End(s, "Couldn't end the voice chat for everyone; you left it.");
+                if (joined) await LeaveQuietlyAsync(s.Call, s.Ssrc);
+            }
         }
 
         private async Task LeaveQuietlyAsync(InputGroupCall call, int ssrc)
@@ -439,32 +491,44 @@ namespace TelegArm.Core.Calls
             var s = Current;
             var call = u.call as InputGroupCall;
             if (s == null || s.Ended || s.Call == null || call == null || call.id != s.Call.id) return;
-            bool versioned = u.participants != null && u.participants.Any(p => (p.flags & GroupCallParticipant.Flags.versioned) != 0);
-            int expected = s.Version < 0 ? u.version : (versioned ? s.Version : s.Version + 1);
-            if (s.Version >= 0 && u.version > expected)
+            // Telegram's rule (core.telegram.org/api/group-calls): an update carrying a versioned, left or just_joined entry is
+            // SEQUENCED - version+1 applies, older is stale, a jump is a gap (reload); any other update applies as it is and
+            // does not move the version.
+            const GroupCallParticipant.Flags Sequenced = GroupCallParticipant.Flags.versioned | GroupCallParticipant.Flags.left | GroupCallParticipant.Flags.just_joined;
+            bool seq = u.participants != null && u.participants.Any(p => (p.flags & Sequenced) != 0);
+            if (seq && s.Version >= 0)
             {
-                Logger.Diag("[GCALL] participants version gap " + s.Version + " -> " + u.version + ": reload");
-                var t = ReloadAsync(s);
-                return;
+                if (u.version < s.Version) return;   // stale
+                if (u.version > s.Version + 1)
+                {
+                    Logger.Diag("[GCALL] participants version gap " + s.Version + " -> " + u.version + ": reload");
+                    var t = ReloadAsync(s);
+                    return;
+                }
             }
             s.Participants.Apply(u.participants, Name);
             ApplyVolumes(s);
-            s.Version = Math.Max(s.Version, u.version);
-            var me = s.Participants.Self ?? s.Participants.BySource(s.Ssrc);
-            if (me != null) me.IsSelf = true;
+            if (seq) s.Version = Math.Max(s.Version, u.version);
             // our own entry left while we are joined = this device was dropped: rejoin (Telegram Desktop)
-            if (s.Joined && u.participants != null && u.participants.Any(p => p.source == s.Ssrc && (p.flags & GroupCallParticipant.Flags.left) != 0))
+            if (s.Joined && s.Ssrc != 0 && u.participants != null && u.participants.Any(p => p.source == s.Ssrc && (p.flags & GroupCallParticipant.Flags.left) != 0))
             {
                 Rejoin(s);
                 return;
             }
-            if (me != null)
-            {
-                bool force = me.Muted && !me.CanSelfUnmute;
-                if (force && !s.ForceMuted) { s.ForceMuted = true; s.Muted = true; if (s.Native != null) s.Native.SetMute(true); }
-                else if (!force && s.ForceMuted) { s.ForceMuted = false; s.HandRaised = false; s.Note = "You may speak now."; }
-            }
+            ReconcileSelf(s);
             Raise(s);
+        }
+
+        /// <summary>Our own entry -> IsSelf, and an admin's mute (we cannot unmute ourselves) -> ForceMuted (mic shut here
+        /// too); lifted -> "You may speak now". After every incremental update AND every (re)load.</summary>
+        private static void ReconcileSelf(GroupCallSession s)
+        {
+            var me = s.Participants.Self ?? (s.Ssrc != 0 ? s.Participants.BySource(s.Ssrc) : null);
+            if (me == null) return;
+            me.IsSelf = true;
+            bool force = me.Muted && !me.CanSelfUnmute;
+            if (force && !s.ForceMuted) { s.ForceMuted = true; s.Muted = true; if (s.Native != null) s.Native.SetMute(true); }
+            else if (!force && s.ForceMuted) { s.ForceMuted = false; s.HandRaised = false; s.Note = "You may speak now."; }
         }
 
         /// <summary>"Muted for you" and the volume you set (on any of your devices) into tgcalls, per ssrc; 100 % is its default.</summary>
@@ -498,8 +562,12 @@ namespace TelegArm.Core.Calls
             var native = s.Native;
             s.Native = null;
             Logger.Diag("[GCALL] ended: " + text + " after " + s.DurationSeconds + " s");
+            if (native != null) StartTeardown(native);   // first: a throwing subscriber below must not leak the engine
             Raise(s);
-            if (native == null) return;
+        }
+
+        private void StartTeardown(NativeGroupCall native)
+        {
             _teardown = Task.Run(() =>
             {
                 try

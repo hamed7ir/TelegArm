@@ -25,6 +25,7 @@ namespace TelegArm.UI
                 "Log Out", "Cancel");
             try { ActiveControl = null; } catch { }
             if (c != 0) return;
+            var calls = LeaveCallsForAccountChangeAsync(0);   // 2026-10-16: end any call now; its goodbye goes in the background
 
             // INSTANT: detach the client + run ALL the slow work (server logout, dispose, delete folders) in the
             // BACKGROUND, then transition the UI right away — never wait on the network (the freeze fix).
@@ -69,6 +70,7 @@ namespace TelegArm.UI
         private async void AddAccount()
         {
             CloseDrawer();
+            await LeaveCallsForAccountChangeAsync(3000);   // 2026-10-16: before the active client is torn down below
             long prev = AccountContext.ActiveId;
             string prevName = _service.Me != null ? DisplayName(_service.Me) : null;
 
@@ -515,6 +517,7 @@ namespace TelegArm.UI
         {
             if (targetId == 0 || targetId == AccountContext.ActiveId) return;
             PersistDraftForCurrentChat();   // DRAFTS: save the open chat's draft to the OUTGOING account before _service swaps
+            await LeaveCallsForAccountChangeAsync(3000);   // 2026-10-16: calls go with the outgoing account (its client still up); no session touched
             long prevId = AccountContext.ActiveId;
             string prevName = _service.Me != null ? DisplayName(_service.Me) : null;
             Logger.Diag("[ACCT] switch start → " + targetId);
