@@ -326,7 +326,7 @@ namespace TelegArm
             ThemeMode mode;
             if (!Enum.TryParse(settings.ThemeMode, true, out mode)) mode = ThemeMode.System;
             ThemeHelper.InitMode(mode);
-            // Step 1.2 — the user's accent (or TELEGARM_ACCENT) BEFORE anything reads it: VlcBootstrap below does.
+            // Step 1.2 — the user's accent (or TELEGARM_ACCENT) BEFORE anything reads it.
             InitAccent(settings);
 
             // Step 1.2 — the theme listener is process-wide now (it was MainForm's, so the login screen never
@@ -368,16 +368,11 @@ namespace TelegArm
             });
 
             AccountStore.Init();   // read the active-account pointer / detect a legacy session before resuming
-            PerfLog.Boot("AccountStore.Init done → VlcBootstrap.EnsureReady");
+            PerfLog.Boot("AccountStore.Init done");
 
-            // Extract the bundled, matching-arch libVLC on first run (one-time) so audio/video work without
-            // the user hand-placing a libvlc/ folder. Later launches skip it (version marker). Never throws.
-            VlcBootstrap.EnsureReady();
-            // BATCH-TA-0: bracketed deliberately. This call is SYNCHRONOUS and runs BEFORE any window exists, so
-            // whatever it costs is dead time on a blank screen. VlcBootstrap's own [VLC] traces are Debug-only
-            // (stripped in Release), so without this rung the cost is invisible on the installed build — which is
-            // the only build that matters on RT, where the extract is slowest.
-            PerfLog.Boot("VlcBootstrap.EnsureReady done");
+            // 2026-10-16: media is FFmpeg (ffmpeg\<arch>\, loaded on first use: Core/Media/Tgav). Nothing to extract any
+            // more; the ~100 MB libVLC an older build extracted into Documents/AppData is removed in the background.
+            Core.Media.LegacyVlcCleanup.RunInBackground();
 
             var service = new TelegramService();
 
@@ -524,7 +519,7 @@ namespace TelegArm
         ///   logs, crash.log), and throws if something already did. Everything after it — settings, accounts, the
         ///   forms — sees an empty throwaway folder, never the user's profile.
         /// Deliberately skipped versus Run(): the mutex, ShellNotify/ToastActivator (registry + COM), file logging,
-        /// the daily cache prune and VlcBootstrap (writes outside the isolated root). None of them draws anything.</summary>
+        /// the daily cache prune and the old-libVLC cleanup (writes outside the isolated root). None of them draws anything.</summary>
         private static void RunShoot(string dir)
         {
             string iso = System.IO.Path.Combine(System.IO.Path.GetTempPath(),

@@ -20,7 +20,7 @@ namespace TelegArm.UI.Controls
     /// </summary>
     public class VideoControlBar : Control, IDpiAware
     {
-        private readonly VlcVideoControl _video;
+        private readonly VideoPlayerControl _video;
 
         private int _dpi;                                          // the DPI this bar is laid out at; 0 = not parented yet
         private int CurDpi { get { return _dpi > 0 ? _dpi : Dpi.Of(this); } }
@@ -52,7 +52,7 @@ namespace TelegArm.UI.Controls
         private Color TrackColor => ThemeHelper.PaletteFor(_isDark).ControlBarTrack;
         private Color DisabledColor => ThemeHelper.PaletteFor(_isDark).ControlBarDisabled;
 
-        public VideoControlBar(VlcVideoControl video)
+        public VideoControlBar(VideoPlayerControl video)
         {
             _video = video;
             Cursor = Cursors.Hand;

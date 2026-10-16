@@ -93,11 +93,14 @@ $files = Join-Path $work 'files'
 New-Item -ItemType Directory -Force (Join-Path $files 'dll') | Out-Null
 try {
     Copy-Item (Join-Path $rel 'TelegArm.exe'), (Join-Path $rel 'TelegArm.exe.config') $files
-    Copy-Item (Join-Path $rel '*.zip'), (Join-Path $rel '*.png'), (Join-Path $rel '*.ico') $files
+    # 2026-10-16: no *.zip any more: the libVLC zips are gone (FFmpeg below), and a stale one left in bin\Release by an
+    # older build must not ship.
+    Copy-Item (Join-Path $rel '*.png'), (Join-Path $rel '*.ico') $files
     # Licence + notices must ACCOMPANY the binary (GPL-3.0 s4, LGPL-2.1 s6, MIT/BSD/Apache/OFL).
     Copy-Item (Join-Path $root 'LICENSE') (Join-Path $files 'LICENSE.txt')
     Copy-Item (Join-Path $root 'THIRD-PARTY-NOTICES.txt') $files
     Copy-Item (Join-Path $rel 'rlottie') $files -Recurse
+    Copy-Item (Join-Path $rel 'ffmpeg') $files -Recurse   # FFmpeg + tgav per arch (ffmpeg\ARM, ffmpeg\x86): Core\Media\Tgav
     Copy-Item (Join-Path $rel '*.dll') (Join-Path $files 'dll')
     # Text files as CRLF + UTF-8 BOM: Windows 8.1 Notepad shows an LF-only file as ONE line and may misread
     # BOM-less UTF-8. The working tree is CRLF only when git's autocrlf happens to be on (review).

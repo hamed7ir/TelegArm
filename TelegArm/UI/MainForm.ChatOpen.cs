@@ -49,6 +49,7 @@ namespace TelegArm.UI
             _inChatFilter = 0; _inChatFromMe = false;   // T19
             _searchBox.Text = "";                 // TextChanged (in-chat mode) shows the chip; explicit call covers no-change
             RenderInChatSearchChrome();
+            ShowColumn(true);                     // one column: the search box and its results are on the list side
             try { _searchBox.Focus(); } catch { }
         }
 
@@ -59,6 +60,7 @@ namespace TelegArm.UI
             _inChatSearchEntry = null; _inChatQuery = null; _inChatOffsetId = 0; _inChatTotal = 0;
             _searchBox.Text = "";
             RenderChatList("");                   // guard is off now → the normal list rebuilds
+            if (_selectedChat != null) ShowColumn(false);   // one column: back to the chat that was searched
         }
 
         /// <summary>Renders the scope chip only (rows come from DoInChatSearch). Used on enter + while typing.</summary>
@@ -189,6 +191,7 @@ namespace TelegArm.UI
             var result = ((ChatListItemControl)sender).Entry;
             int id = result.FocusMessageId;
             if (_selectedChat == null || id <= 0) return;
+            ShowColumn(false);                    // one column: the chat, at the match (back shows the results again)
             if (!ScrollToAndFlash(id))            // not in the loaded window → reload around it, then flash
             {
                 await LoadHistoryAsync(_selectedChat, id);
@@ -244,6 +247,7 @@ namespace TelegArm.UI
             ClearThreadMode();        // COMMENTS-NAV-FIX Bug 2: leaving ANY comment thread — clear _thread so the loaders,
                                       // composer, and send target the NEW chat (LoadHistoryAsync below then resets the panel).
             _selectedChat = entry;
+            ShowColumn(false);   // one column: the chat comes to the front (before its history loads, at its final width)
             if (_chatSearchBtn != null) _chatSearchBtn.Visible = true;   // INCHAT-SEARCH: the header magnifier appears with an open chat
             if (_chatMenuBtn != null) _chatMenuBtn.Visible = true;        // TA-21/S1a: the ⋮ appears with it
             if (_dockBtn != null) _dockBtn.Visible = true;                // TA-23/D1c: …and the dock toggle

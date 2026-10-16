@@ -310,13 +310,15 @@ namespace TelegArm.UI
             return rh != null && rh.reply_to_top_id != 0 ? rh.reply_to_top_id : 1;   // else General (topic 1)
         }
 
-        /// <summary>FOLDER-SIDEBAR: rebuild whichever folder navigator is active — exactly one of the tab bar
-        /// (default) or the side rail is non-null. Replaces every RebuildFolderBar() call site so both layouts
-        /// stay current without the caller knowing which is live.</summary>
+        /// <summary>FOLDER-SIDEBAR: rebuild the folder navigator on screen — the tab bar (tab mode, and side-panel mode in
+        /// one column) or the side rail. Only the one shown is rebuilt: each rebuild re-registers the badge sources, so
+        /// rebuilding both left the hidden one's tiles as the only badges kept current. The other is rebuilt when it is
+        /// swapped in (MainForm.Columns SwapFolderNavigator).</summary>
         private void RebuildFolders()
         {
-            if (_folderBar != null) RebuildFolderBar();
-            if (_folderRail != null) RebuildFolderRail();
+            if (FolderBarShown) RebuildFolderBar();
+            else if (_folderRail != null) RebuildFolderRail();
+            UpdateBackButton();
         }
 
         // Per-folder unread, derived from the SAME model + filter the list uses (no new fetch). "All" excludes
@@ -357,7 +359,12 @@ namespace TelegArm.UI
         private void AddRailItem(string icon, string label, Func<int> unread, bool active, Action onClick, TL.DialogFilterBase folder)
         {
             var it = new FolderRailItem(icon, label, unread(), active, _dark, _accent, WindowDpiValue) { Width = ContentWidth(_folderRail) };
-            it.Clicked += onClick;
+            it.Clicked += () =>
+            {
+                // one column, a chat in front (the rail stays beside it): a folder means its list — close the chat first
+                if (_oneColumn && _selectedChat != null && !_listInFront) CloseOpenChat();
+                onClick();
+            };
             it.MouseUp += (s, e) => { if (e.Button == MouseButtons.Right) ShowFolderMenu(folder, it.PointToScreen(e.Location)); };   // T13
             _folderRail.Controls.Add(it);
             _folderBadgeSources.Add(new KeyValuePair<IFolderBadge, Func<int>>(it, unread));
@@ -375,6 +382,7 @@ namespace TelegArm.UI
             long __ts = Logger.Enabled ? System.Diagnostics.Stopwatch.GetTimestamp() : 0L;
             for (int i = 0; i < _folderBadgeSources.Count; i++)
                 _folderBadgeSources[i].Key.Unread = _folderBadgeSources[i].Value();
+            UpdateBackButton();   // one column: the back arrow's count of the other chats
             if (__ts != 0)
             {
                 double __ms = (System.Diagnostics.Stopwatch.GetTimestamp() - __ts) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;

@@ -33,7 +33,7 @@ namespace TelegArm.UI
         private ThemedLabel _fileLabel;
         private RoundedButton _saveButton, _saveAsButton;
         private ZoomableImagePanel _imagePanel;
-        private VlcVideoControl _videoControl;
+        private VideoPlayerControl _videoControl;
         private Panel _stubPanel;
         private ThemedLabel _stubLabel;
         private Panel _docPanel;
@@ -146,7 +146,7 @@ namespace TelegArm.UI
             _content = content;
 
             _imagePanel = new ZoomableImagePanel { Dock = DockStyle.Fill, Visible = false };
-            _videoControl = new VlcVideoControl { Dock = DockStyle.Fill, Visible = false };
+            _videoControl = new VideoPlayerControl { Dock = DockStyle.Fill, Visible = false };
             _videoControl.Resize += (s, e) => ApplyRoundClip();   // keep the round-video circle centered on resize
             _stubPanel = new Panel { Dock = DockStyle.Fill, Visible = false };
             _stubLabel = new ThemedLabel { Dock = DockStyle.Fill, Wrap = true, TextAlign = HorizontalAlignment.Center, Role = LabelRole.Body, Padding = new Padding(Px(24)) };

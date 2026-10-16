@@ -103,6 +103,11 @@ namespace TelegArm.UI
                 _chatMenuBtn.FlatAppearance.MouseOverBackColor = ColorMath.WithAlpha(_accent, 40);
                 _chatMenuBtn.Invalidate();
             }
+            if (_backBtn != null)
+            {
+                _backBtn.FlatAppearance.MouseOverBackColor = ColorMath.WithAlpha(_accent, 40);   // same one-shot gap as _dockBtn
+                _backBtn.Invalidate();
+            }
             if (_dockBtn != null)
             {
                 // TA-23/D1c — same one-shot-property gap as _chatMenuBtn: re-assert the hover tint here,
@@ -138,14 +143,11 @@ namespace TelegArm.UI
             ThemeSelectionBar();
 
             // UI-FIX-T1: the ctor-only color sites (UI-AUDIT A.3) — re-push/re-derive on a live theme switch.
-            if (_folderBar != null)
-            {
-                _folderBar.BackColor = ThemeHelper.PaletteFor(_dark).ListBg;
-                RebuildFolderBar();   // tab colors derive from _dark/_accent at build → rebuilding IS the recolor
-            }
+            if (_folderBar != null) _folderBar.BackColor = ThemeHelper.PaletteFor(_dark).ListBg;
+            RebuildFolders();         // tab / rail colors derive from _dark/_accent at build → rebuilding IS the recolor (the one shown)
             RebuildTopicBar();        // FORUM-TOPICS: same immutable-chip pattern → rebuild to recolor on theme change (any folder mode)
             RebuildStoryTray();       // STORIES: chips are immutable (color baked at build) → rebuild IS the recolor
-            if (_folderRail != null) RebuildFolderRail();   // FOLDER-SIDEBAR: rebuild IS the recolor (BackColor + item colors)
+            if (_folderRail != null && FolderBarShown) _folderRail.BackColor = ThemeHelper.PaletteFor(_dark).FolderRailBg;   // hidden rail: recoloured when swapped in
             if (_botMenuButton != null)
             {
                 _botMenuButton.BackColor = ThemeHelper.PaletteFor(_dark).BotMenuBg;

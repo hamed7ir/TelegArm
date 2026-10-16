@@ -637,6 +637,7 @@ namespace TelegArm.UI
             try { AudioPlayer.Stop(); } catch { }
             System.Diagnostics.Debug.WriteLine("[LOGOUT-TRACE] Reset: after AudioPlayer.Stop; before ClearMessagePanel");
             _selectedChat = null; _selectedItem = null;
+            ShowColumn(true);   // one column (owner 2026-10-15): no chat open → the list. UI only.
             // ACCOUNT-RECOVERY-SAFETY (Bug 3): drop the header-avatar reference NOW. It points at a bitmap OWNED by the
             // outgoing account's avatar store, which ResetPerAccountState is about to DISPOSE — leaving a pending header
             // repaint drawing a disposed Image ("Parameter is not valid", fatal in a Paint handler). Null it → the next

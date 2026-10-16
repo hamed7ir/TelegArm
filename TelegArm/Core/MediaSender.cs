@@ -114,7 +114,7 @@ namespace TelegArm.Core
             if (mode == SendMode.Video)
             {
                 // No re-encoding (no codec deps). We DO probe width/height/duration and grab a
-                // poster frame via the bundled LibVLC (best-effort, fully guarded).
+                // poster frame via FFmpeg (VideoProbe; best-effort, fully guarded).
                 var info = await VideoProbe.ProbeAsync(path, ct).ConfigureAwait(false);
 
                 InputFile thumbFile = null;

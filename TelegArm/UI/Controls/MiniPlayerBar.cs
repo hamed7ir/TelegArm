@@ -2,7 +2,7 @@ using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
-using LibVLCSharp.Shared;
+using TelegArm.Core.Media;
 using TelegArm.Core;
 using TelegArm.Helpers;
 
@@ -92,7 +92,7 @@ namespace TelegArm.UI.Controls
 
         private void OnTick()
         {
-            if (AudioPlayer.IsActive && AudioPlayer.State == VLCState.Ended)
+            if (AudioPlayer.IsActive && AudioPlayer.State == MediaState.Ended)
             {
                 if (AudioPlayer.HasNext) AudioPlayer.Next(); else AudioPlayer.Stop();
                 return;

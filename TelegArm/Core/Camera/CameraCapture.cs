@@ -21,18 +21,15 @@ namespace TelegArm.Core.Camera
         /// <summary>Creates a ready recorder using the selected/cached backend, or null if none works.</summary>
         public static async Task<ICameraRecorder> CreateAsync()
         {
-            if (Forced == "vlc") { System.Diagnostics.Debug.WriteLine("[ROUND-REC] backend FORCED=vlc"); return await MakeVlcAsync().ConfigureAwait(false); }
             if (Forced == "winrt") { System.Diagnostics.Debug.WriteLine("[ROUND-REC] backend FORCED=winrt"); return await MakeWinRtAsync().ConfigureAwait(false); }
 
             if (_cachedBackend == "winrt") { var r = await MakeWinRtAsync().ConfigureAwait(false); if (r != null) return r; }
-            else if (_cachedBackend == "vlc") { var r = await MakeVlcAsync().ConfigureAwait(false); if (r != null) return r; }
             else if (_cachedBackend == "none") return null;
 
-            // First open (or the cached backend failed): probe WinRT-first, then VLC; cache the winner.
+            // First open (or the cached backend failed): WinRT. (2026-10-16: the libVLC DirectShow fallback, Windows 7's
+            // only camera path, went with libVLC; Windows 7 has no round-video recording until another backend lands.)
             var w = await MakeWinRtAsync().ConfigureAwait(false);
             if (w != null) { _cachedBackend = "winrt"; System.Diagnostics.Debug.WriteLine("[ROUND-REC] backend selected=winrt"); return w; }
-            var v = await MakeVlcAsync().ConfigureAwait(false);
-            if (v != null) { _cachedBackend = "vlc"; System.Diagnostics.Debug.WriteLine("[ROUND-REC] backend selected=vlc"); return v; }
             _cachedBackend = "none";
             System.Diagnostics.Debug.WriteLine("[ROUND-REC] no camera backend available → recording unavailable");
             return null;
@@ -47,13 +44,5 @@ namespace TelegArm.Core.Camera
             return null;
         }
 
-        private static async Task<ICameraRecorder> MakeVlcAsync()
-        {
-            VlcCameraRecorder r = null;
-            try { r = new VlcCameraRecorder(); if (await r.ProbeAsync().ConfigureAwait(false)) return r; }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[ROUND-REC] VLC make failed: " + ex.Message); }
-            if (r != null) try { r.Dispose(); } catch { }
-            return null;
-        }
     }
 }

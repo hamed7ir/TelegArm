@@ -68,6 +68,8 @@ namespace TelegArm.Helpers
             if (live == "1") return RunLive(dir);
             if (live == "placement") return RunLivePlacement(dir);
             if (live == "keys") return RunLiveKeys(dir);
+            if (live == "columns") return RunLiveColumns(dir);
+            if (live == "media") return RunLiveMedia(dir);
 
             foreach (var mode in new[] { ThemeMode.Light, ThemeMode.Dark })
             {
@@ -416,6 +418,199 @@ namespace TelegArm.Helpers
         /// <summary>Redesign R5, on the real screen: Ctrl+E edits the last own message, Esc steps back one layer at a time
         /// (the edit, then the chat), Ctrl+1 picks All. The keys go through TryShortcut / EscapeOneLevel, the same calls
         /// ProcessCmdKey makes. No account: next-chat and mute need the network and are left out.</summary>
+        /// <summary>Owner addition 2026-10-15 — the one-column layout, in both folder modes: two columns → narrow (the list)
+        /// → a chat (back arrow + unread) → in-chat search (the results on the list side) → back → wide again → the minimum.</summary>
+        private static int RunLiveColumns(string dir)
+        {
+            ThemeHelper.InitMode(ThemeMode.Light);
+            var trace = new System.Diagnostics.TextWriterTraceListener(Path.Combine(dir, "trace.txt"));
+            System.Diagnostics.Trace.Listeners.Add(trace);
+            System.Diagnostics.Trace.AutoFlush = true;
+            Logger.Enabled = true;
+            MainForm.DemoNoSession = true;
+            foreach (bool sidebar in new[] { false, true })
+            {
+                AppSettings.Instance.FolderSidebar = sidebar;   // in memory only (the rig's data root is isolated anyway)
+                string m = sidebar ? "rail" : "tabs";
+                MainForm f = null;
+                Func<int, int> px = v => v * (f != null ? f.WindowDpiValue : 96) / 96;
+                Action<string> state = what =>
+                {
+                    var split = (SplitContainer)Field(f, "_split");
+                    var back = Field(f, "_backBtn") as Control;
+                    var rail = Field(f, "_folderRail") as Control;
+                    var barHost = Field(f, "_folderBarHost") as Control;
+                    _log.AppendLine("  " + m + " " + what + ": w=" + f.Width + " one=" + Field(f, "_oneColumn") + " list=" + !split.Panel1Collapsed
+                        + " chat=" + !split.Panel2Collapsed + " open=" + (Field(f, "_selectedChat") != null) + " back=" + (back != null && back.Visible)
+                        + (back != null ? "/" + back.Width : "") + " rail=" + (rail != null ? rail.Visible.ToString() : "-")
+                        + " strip=" + (barHost != null ? barHost.Visible + "/" + barHost.Height : "-") + " min=" + f.MinimumSize.Width);
+                };
+                try
+                {
+                    f = new MainForm(new TelegramService());
+                    var wa = Screen.PrimaryScreen.WorkingArea;
+                    f.StartPosition = FormStartPosition.Manual;
+                    f.Bounds = new Rectangle(wa.Left + 60, wa.Top + 40, 1000 * 96 / 96, 700);
+                    f.TopMost = true;
+                    f.Show();
+                    LivePump(1200);
+                    f.Bounds = new Rectangle(wa.Left + 60, wa.Top + 40, px(1000), px(700));
+                    SeedChatList(f);
+                    SetField(f, "_folders", new DialogFilterBase[]
+                    {
+                        null,
+                        new DialogFilter { id = 2, title = new TextWithEntities { text = "Work", entities = new MessageEntity[0] }, flags = DialogFilter.Flags.groups,
+                                           pinned_peers = new InputPeer[0], include_peers = new InputPeer[0], exclude_peers = new InputPeer[0] },
+                        new DialogFilter { id = 3, title = new TextWithEntities { text = "Family", entities = new MessageEntity[0] }, flags = DialogFilter.Flags.contacts,
+                                           pinned_peers = new InputPeer[0], include_peers = new InputPeer[0], exclude_peers = new InputPeer[0] },
+                    });
+                    Invoke(f, "RebuildFolders");
+                    LivePump(600);
+                    LiveShot(f, "col-" + m + "-1-two"); state("1 two columns");
+                    f.Width = px(600); LivePump(800);
+                    LiveShot(f, "col-" + m + "-2-one-list"); state("2 narrowed");
+                    OpenDemoChat(f);
+                    Invoke(f, "ShowColumn", false);   // what OpenChat does right after it sets _selectedChat
+                    Invoke(f, "RefreshFolderBadges");
+                    LivePump(800);
+                    LiveShot(f, "col-" + m + "-3-one-chat"); state("3 chat opened");
+                    Invoke(f, "EnterInChatSearch"); LivePump(600);
+                    LiveShot(f, "col-" + m + "-4-inchat-search"); state("4 in-chat search");
+                    Invoke(f, "ExitInChatSearch"); LivePump(400); state("4b search exited");
+                    Invoke(f, "OnBackClick"); LivePump(600);
+                    LiveShot(f, "col-" + m + "-5-back"); state("5 back");
+                    OpenDemoChat(f); Invoke(f, "ShowColumn", false); LivePump(400);
+                    f.Width = px(1000); LivePump(800);
+                    LiveShot(f, "col-" + m + "-6-two-again"); state("6 widened with a chat open");
+                    Invoke(f, "OnBackClick"); LivePump(300);   // the list, to see the folders near the minimum
+                    f.Width = px(460); LivePump(800);
+                    LiveShot(f, "col-" + m + "-7-near-minimum"); state("7 near the minimum (460)");
+                    f.Width = px(300); LivePump(800);
+                    LiveShot(f, "col-" + m + "-8-minimum"); state("8 dragged to 300");
+                    f.Width = px(600); LivePump(800); LiveShot(f, "col-" + m + "-9-600"); state("9 back to 600");
+                }
+                catch (Exception ex) { Fail("live-columns-" + m, ex); }
+                finally { if (f != null) { try { f.Close(); } catch { } try { f.Dispose(); } catch { } } }
+            }
+            File.WriteAllText(Path.Combine(_dir, "shots.txt"), _log.ToString());
+            return _failures == 0 ? 0 : 1;
+        }
+
+        /// <summary>2026-10-16 — the FFmpeg player in a real window (no account, no user media): ffmpeg-rt's synthetic H.264
+        /// clip in VideoPlayerControl (play, seek, pause, resize, loop), a voice note made here with Concentus through
+        /// AudioPlayer (1x then 2x), WebmAnimator, VideoProbe and GrabFirstFrame. Every check logs PASS/FAIL.</summary>
+        private static int RunLiveMedia(string dir)
+        {
+            ThemeHelper.InitMode(ThemeMode.Dark);
+            var trace = new System.Diagnostics.TextWriterTraceListener(Path.Combine(dir, "trace.txt"));
+            System.Diagnostics.Trace.Listeners.Add(trace);
+            System.Diagnostics.Trace.AutoFlush = true;
+            Logger.Enabled = true;
+            Action<bool, string> expect = (ok, what) => { _log.AppendLine("  " + (ok ? "PASS  " : "FAIL  ") + what); if (!ok) _failures++; };
+            string clip = Environment.GetEnvironmentVariable("TELEGARM_TEST_CLIP") ?? @"D:\repo\ffmpeg-rt\dist\device-trip\h264_360p.mp4";
+            Form f = null;
+            try
+            {
+                expect(Core.Media.Tgav.Available, "media engine: " + Core.Media.Tgav.Status);
+                expect(File.Exists(clip), "test clip " + clip);
+                f = new Form { Text = "media rig", StartPosition = FormStartPosition.Manual, Bounds = new Rectangle(80, 80, 900, 560), TopMost = true, BackColor = Color.Black };
+                var v = new UI.Controls.VideoPlayerControl { Dock = DockStyle.Fill };
+                f.Controls.Add(v);
+                f.Show();
+                LivePump(400);
+
+                v.PlayFile(clip);
+                LivePump(2500);
+                long t1 = v.Time;
+                expect(v.State == Core.Media.MediaState.Playing, "video playing (state " + v.State + ")");
+                expect(v.Length > 20000, "length " + v.Length + " ms");
+                // the clock is what the audio device has PLAYED: its output latency (large over Remote Desktop) shows up as
+                // a late start, not as a wrong rate — so the rate is what is checked; the lag is logged
+                _log.AppendLine("  info  start lag " + (2500 - t1) + " ms (audio output latency + open)");
+                LivePump(2000);
+                long t1b = v.Time;
+                expect(Math.Abs((t1b - t1) - 2000) < 300, "clock rate: " + (t1b - t1) + " ms per 2000 ms");
+                FormShot(f, "media-1-playing");
+
+                v.Position = 0.5f;
+                LivePump(1000);
+                long t2 = v.Time;
+                expect(Math.Abs(t2 - (v.Length / 2 + 1000)) < 600, "after a seek to the middle + 1 s: " + t2 + " ms (~" + (v.Length / 2 + 1000) + ")");
+
+                v.TogglePlay(); LivePump(400);
+                long p1 = v.Time; LivePump(800); long p2 = v.Time;
+                expect(v.State == Core.Media.MediaState.Paused && p1 == p2, "paused: the time holds (" + p1 + " = " + p2 + ")");
+                v.TogglePlay(); LivePump(800);
+                expect(v.Time > p2 + 400, "resumed: " + v.Time + " ms");
+
+                f.Width = 520; LivePump(900);
+                FormShot(f, "media-2-resized");
+                var pb = v.Playback;
+                int serial = pb != null ? pb.Frames.Serial : -1;
+                LivePump(500);
+                expect(pb != null && pb.Frames.FrontWidth <= 520 && pb.Frames.Serial > serial, "frames follow the new size (" + (pb != null ? pb.Frames.FrontWidth + "x" + pb.Frames.FrontHeight : "-") + ")");
+
+                v.PlayFile(clip, loop: true);
+                LivePump(800);
+                v.Position = 0.99f;
+                LivePump(1500);
+                expect(v.State == Core.Media.MediaState.Playing && v.Time < v.Length / 2, "loop: back at the start (" + v.Time + " ms, " + v.State + ")");
+                v.StopPlayback();
+
+                // a voice note through AudioPlayer: 1x for a second, then 2x (pitch kept by atempo)
+                string ogg = Path.Combine(Path.GetTempPath(), "tgav_rig_" + Guid.NewGuid().ToString("N") + ".ogg");
+                using (var fs = File.Create(ogg))
+                {
+                    var enc = Concentus.Structs.OpusEncoder.Create(48000, 1, Concentus.Enums.OpusApplication.OPUS_APPLICATION_VOIP);
+                    var w = new Concentus.Oggfile.OpusOggWriteStream(enc, fs);
+                    var pcm = new short[48000 * 3];
+                    for (int i = 0; i < pcm.Length; i++) pcm[i] = (short)(9000 * Math.Sin(2 * Math.PI * 440 * i / 48000.0));
+                    w.WriteSamples(pcm, 0, pcm.Length);
+                    w.Finish();
+                }
+                expect(AudioPlayer.Toggle(4242, ogg, "rig voice note"), "AudioPlayer took the voice note");
+                LivePump(1100);
+                long a1 = AudioPlayer.TimeMs;
+                expect(AudioPlayer.IsPlaying && a1 > 600 && a1 < 1400, "voice note at 1x after 1.1 s: " + a1 + " ms (" + AudioPlayer.State + ")");
+                AudioPlayer.SetRate(2f);
+                LivePump(1700);
+                expect(AudioPlayer.State == Core.Media.MediaState.Ended, "at 2x the rest (~2 s of audio) ended within 1.7 s (" + AudioPlayer.State + ", " + AudioPlayer.TimeMs + " ms)");
+                AudioPlayer.Stop();
+                try { File.Delete(ogg); } catch { }
+
+                int frames = 0;
+                using (var anim = new UI.Controls.WebmAnimator(clip, 160, 90, 30, f, img => { frames++; img.Dispose(); }))
+                    LivePump(1500);
+                expect(frames >= 25, "WebmAnimator delivered " + frames + " frames in 1.5 s (fps cap 30)");
+
+                var info = VideoProbe.ProbeAsync(clip, System.Threading.CancellationToken.None).Result;
+                expect(info.Width == 640 && info.Height == 360 && info.DurationSec >= 29, "VideoProbe " + info.Width + "x" + info.Height + " " + info.DurationSec + " s");
+                expect(info.ThumbPath != null && File.Exists(info.ThumbPath), "VideoProbe poster " + info.ThumbPath);
+                if (info.ThumbPath != null) try { File.Copy(info.ThumbPath, Path.Combine(dir, "media-3-poster.jpg"), true); File.Delete(info.ThumbPath); } catch { }
+                using (var bmp = UI.Controls.WebmAnimator.GrabFirstFrame(clip, 320, 180))
+                {
+                    expect(bmp != null && bmp.Width == 320, "GrabFirstFrame " + (bmp != null ? bmp.Width + "x" + bmp.Height : "null"));
+                    if (bmp != null) bmp.Save(Path.Combine(dir, "media-4-firstframe.png"), ImageFormat.Png);
+                }
+            }
+            catch (Exception ex) { Fail("live-media", ex); }
+            finally { if (f != null) { try { f.Close(); } catch { } try { f.Dispose(); } catch { } } }
+            File.WriteAllText(Path.Combine(_dir, "shots.txt"), _log.ToString());
+            return _failures == 0 ? 0 : 1;
+        }
+
+        private static void FormShot(Form f, string name)
+        {
+            try { f.Activate(); } catch { }
+            LivePump(250);
+            var r = f.Bounds;
+            using (var bmp = new Bitmap(r.Width, r.Height))
+            {
+                using (var g = Graphics.FromImage(bmp)) g.CopyFromScreen(r.Location, Point.Empty, r.Size);
+                bmp.Save(Path.Combine(_dir, name + ".png"), ImageFormat.Png);
+            }
+        }
+
         private static int RunLiveKeys(string dir)
         {
             ThemeHelper.InitMode(ThemeMode.Light);

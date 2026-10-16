@@ -148,6 +148,7 @@ namespace TelegArm.UI
             try { ActiveControl = null; } catch { }   // a read-only composer that kept the focus would still show its caret
             _messagePanel.Invalidate();   // the "Select a chat to start messaging" pill
             UpdateTrayTooltip();
+            ShowColumn(true);             // one column: back to the list
         }
 
         // ── folders ────────────────────────────────────────────────────────────────────────────────────────────────

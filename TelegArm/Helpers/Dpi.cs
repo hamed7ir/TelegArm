@@ -88,7 +88,8 @@ namespace TelegArm.Helpers
 
         // ── step 3.8b: the live scale and its per-screen fit cap ────────────────────────────────────────────────────
 
-        /// <summary>The logical size the main window needs (MainForm.LogicalMinimumSize). The fit cap keeps it on screen.</summary>
+        /// <summary>The logical size the main window needs in TWO columns. The fit cap keeps it on screen. (MainForm's own
+        /// minimum is narrower since the one-column layout, owner 2026-10-15; the cap stays where two columns fit.)</summary>
         public static readonly Size FitSize = new Size(720, 480);
 
         /// <summary>The largest scale (a 25% detent, never under 100) at which <see cref="FitSize"/> still fits

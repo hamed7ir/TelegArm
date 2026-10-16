@@ -4,7 +4,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
 using System.Windows.Forms;
-using LibVLCSharp.Shared;
+using TelegArm.Core.Media;
 using TelegArm.Core;
 using TelegArm.Helpers;
 
@@ -252,7 +252,7 @@ namespace TelegArm.UI.Controls
         private void Tick()
         {
             // Drives the elapsed/total line while playing (download progress repaints come from OnHandleChanged).
-            if (!IsCurrent || AudioPlayer.State == VLCState.Ended || AudioPlayer.State == VLCState.Stopped)
+            if (!IsCurrent || AudioPlayer.State == MediaState.Ended || AudioPlayer.State == MediaState.Stopped)
                 _timer.Stop();
             Invalidate();
         }

@@ -34,12 +34,26 @@ namespace TelegArm.UI
             _split.Panel1MinSize = Px(240);
             _split.Panel2MinSize = Px(360);
             try { _split.SplitterDistance = Px(300); } catch { /* width too small yet */ }
+            HookColumnSplitter();   // owner 2026-10-15: the list width survives a trip through one column
             PerfLog.Boot("  BuildUi: SplitContainer ready");
 
             BuildLeftPanel();
             PerfLog.Boot("  BuildUi: BuildLeftPanel done");
             BuildRightPanel();
             PerfLog.Boot("  BuildUi EXIT (BuildRightPanel done)");
+        }
+
+        /// <summary>The horizontal folder strip (tab mode; side-panel mode in one column).</summary>
+        private NoNativeScrollFlowPanel NewFolderBar()
+        {
+            return new NoNativeScrollFlowPanel
+            {
+                Dock = DockStyle.Fill,
+                Margin = new Padding(0, Px(1), Px(8), Px(1)),   // flush left: "All" now aligns with the chat-row avatars below
+                WrapContents = false,
+                AutoScroll = true,
+                BackColor = ThemeHelper.PaletteFor(_dark).ListBg
+            };
         }
 
         private void BuildLeftPanel()
@@ -129,10 +143,13 @@ namespace TelegArm.UI
             if (sidebar)
             {
                 // SIDE PANEL: a vertical folder rail on the far left (full height), the search row + chat-list
-                // host stacked to its right. The horizontal _folderBar is never created (its code stays inert).
+                // host stacked to its right. Owner 2026-10-16: the rail is OUTSIDE the split (a Dock.Left strip of
+                // Content), so it stays beside the open chat in one column, as in Telegram Desktop; Panel1 holds the
+                // list only. Near the minimum width the tab strip (row 2 of `right`) stands in for it.
                 _folderRail = new NoNativeScrollFlowPanel
                 {
-                    Dock = DockStyle.Fill,
+                    Dock = DockStyle.Left,
+                    Width = Px(72),
                     FlowDirection = FlowDirection.TopDown,
                     WrapContents = false,
                     AutoScroll = true,
@@ -142,23 +159,26 @@ namespace TelegArm.UI
                 };
                 RebuildFolderRail();
 
-                var right = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
+                var right = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4 };
                 right.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));   // owner bug 2026-10-15: an explicit column, or the AUTO-SIZED default column takes a DPI-scaled child's width and never shrinks back
                 right.RowStyles.Add(RowPx(60));
                 right.RowStyles.Add(RowPx(0));      // STORIES: tray row 1 (hidden until stories load)
+                right.RowStyles.Add(RowPx(0));      // owner 2026-10-15/16: the folder TAB strip, open only near the minimum width
                 right.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
                 right.Controls.Add(searchRow, 0, 0);
                 right.Controls.Add(_storyTrayBar, 0, 1);
+                _folderBar = NewFolderBar();        // built when shown (SwapFolderNavigator → RebuildFolders)
+                _folderBarHost = WrapWithHScrollbar(_folderBar);
+                _folderBarHost.Visible = false;
+                right.Controls.Add(_folderBarHost, 0, 2);
                 _chatListHost = WrapWithScrollbar(_chatListPanel);
-                right.Controls.Add(_chatListHost, 0, 2);
+                right.Controls.Add(_chatListHost, 0, 3);
                 _storyTrayLayout = right;
+                TouchScroller.Enable(_folderBar, horizontal: true);
 
-                var outer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = new Padding(0) };
-                outer.ColumnStyles.Add(ColPx(72));   // rail width
-                outer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-                outer.Controls.Add(_folderRail, 0, 0);
-                outer.Controls.Add(right, 1, 0);
-                _split.Panel1.Controls.Add(outer);
+                _split.Panel1.Controls.Add(right);
+                Content.Controls.Add(_folderRail);   // added after _split, so it docks first: outermost left, full height
+                _sidebarMode = true;
 
                 TouchScroller.Enable(_folderRail, horizontal: false);   // rail is touch-pannable if it overflows
             }
@@ -172,19 +192,13 @@ namespace TelegArm.UI
                 layout.RowStyles.Add(RowPx(46));
                 layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-                _folderBar = new NoNativeScrollFlowPanel
-                {
-                    Dock = DockStyle.Fill,
-                    Margin = new Padding(0, Px(1), Px(8), Px(1)),   // flush left: "All" now aligns with the chat-row avatars below
-                    WrapContents = false,
-                    AutoScroll = true,
-                    BackColor = ThemeHelper.PaletteFor(_dark).ListBg
-                };
+                _folderBar = NewFolderBar();
                 RebuildFolderBar();   // starts with just "All" until folders load
 
                 layout.Controls.Add(searchRow, 0, 0);
                 layout.Controls.Add(_storyTrayBar, 0, 1);
-                layout.Controls.Add(WrapWithHScrollbar(_folderBar), 0, 2);
+                _folderBarHost = WrapWithHScrollbar(_folderBar);
+                layout.Controls.Add(_folderBarHost, 0, 2);
                 _chatListHost = WrapWithScrollbar(_chatListPanel);
                 layout.Controls.Add(_chatListHost, 0, 3);
                 _split.Panel1.Controls.Add(layout);
@@ -323,8 +337,9 @@ namespace TelegArm.UI
             {
                 SetRowPx(_storyTrayLayout, 0, 60);
                 ResetOpenRow(_storyTrayLayout, 1, StoryTrayHeight);
-                if (_storyTrayLayout.RowCount == 4) SetRowPx(_storyTrayLayout, 2, 46);   // tabbed: the folder bar
+                SetRowPx(_storyTrayLayout, 2, FolderBarShown ? 46 : 0);   // the folder strip (side-panel mode: one column only)
             }
+            if (_sidebarMode && _folderRail != null) _folderRail.Width = Px(72);   // the rail, outside the split (owner 2026-10-16)
             if (_composerColumns != null && _composerColumns.ColumnStyles.Count > 0 && _composerColumns.ColumnStyles[0].Width > 0)
                 SetColPx(_composerColumns, 0, 48);   // bot menu
             try { SyncReplyKeyboardHeight(); } catch { }
@@ -403,6 +418,7 @@ namespace TelegArm.UI
             PositionJumpButton();
             PositionProxyPill();
             EnforceDockWidth();                                   // after the rescale: a clamped window may be too narrow for the dock
+            UpdateColumnLayout();                                 // owner 2026-10-15: one column or two, at the final width
             if (_dateFlyout != null) _dateFlyout.Text = "";       // re-measured at the new DPI on its next update
             Logger.Diag("[DPI] relayout dpi=" + WindowDpiValue + " chatRows=" + rows + " bubbles now=" + sync
                         + " queued=" + _remeasureQueue.Count + " " + sw.ElapsedMilliseconds + "ms");
@@ -626,6 +642,20 @@ namespace TelegArm.UI
             _headerAvatar.Paint += HeaderAvatar_Paint;
             _headerAvatar.Click += (s, e) => OnHeaderClick();
             topBar.Controls.Add(_headerAvatar);
+            // Owner 2026-10-15: one column's back arrow (+ the other chats' unread). Added after the avatar, so it docks
+            // outermost left. Metrics as _dockBtn; hidden in two columns (UpdateBackButton).
+            _backBtn = new Button
+            {
+                Dock = DockStyle.Left, Width = Px(44), FlatStyle = FlatStyle.Flat, Text = "",
+                BackColor = Color.Transparent, Cursor = Cursors.Hand, TabStop = false, Visible = false,
+                AccessibleName = "Back"
+            };
+            _backBtn.FlatAppearance.BorderSize = 0;
+            _backBtn.FlatAppearance.MouseOverBackColor = ColorMath.WithAlpha(_accent, 40);
+            _backBtn.Paint += (s, e) => PaintButtonBackdrop(e.Graphics, _backBtn);
+            _backBtn.Paint += (s, e) => PaintBackButton(e.Graphics);
+            _backBtn.Click += (s, e) => OnBackClick();
+            topBar.Controls.Add(_backBtn);
             // 2.7b: a 1 px divider under the header. Added last, so it docks first: the full width, at the bottom.
             _headerDivider = new Panel { Dock = DockStyle.Bottom, Height = 1, Margin = new Padding(0) };
             topBar.Controls.Add(_headerDivider);

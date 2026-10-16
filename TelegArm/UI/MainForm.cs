@@ -200,8 +200,9 @@ namespace TelegArm.UI
         private Timer _searchDebounce;
 
         // Chat folders (dialog filters). _activeFolder == null means "All chats".
-        // FOLDER-SIDEBAR: exactly ONE of _folderBar (tabbed, default) / _folderRail (side panel) is non-null,
-        // decided once at BuildLeftPanel from AppSettings.FolderSidebar — the other path never runs (2.4).
+        // FOLDER-SIDEBAR: the mode is decided once at BuildLeftPanel from AppSettings.FolderSidebar (2.4). Tab mode builds
+        // only _folderBar. Side-panel mode builds _folderRail AND a _folderBar that is shown only near the minimum width
+        // (owner 2026-10-15/16, MainForm.Columns.cs); RebuildFolders rebuilds the one on screen.
         private FlowLayoutPanel _folderBar;
         private NoNativeScrollFlowPanel _folderRail;
         // STORIES-BUILD-1: the story tray (avatars-with-rings) — a horizontal bar below the search row in BOTH
@@ -313,7 +314,7 @@ namespace TelegArm.UI
             PerfLog.Boot("  ctor: window icon decoded (app.ico)");
             // Redesign 2.7a: logical sizes through AppForm (the content inside is still 1.x pixel layout until Phase 3).
             Size = new Size(Px(960), Px(600));
-            LogicalMinimumSize = new Size(720, 480);
+            LogicalMinimumSize = new Size(OneColumnMinWidth, 480);   // owner 2026-10-15: one column below OneColumnBelow (was 720)
             StartPosition = FormStartPosition.CenterScreen;
             // STARTUP-SETTING: a --startup (auto-launch-at-login) start is SILENT — minimized + off-taskbar, no full
             // window. OnLoad still fires (the form is shown, just minimized) so the session resumes + the tray icon
@@ -403,6 +404,7 @@ namespace TelegArm.UI
             switch (keyData)
             {
                 case Keys.Control | Keys.F:           // focus search
+                    if (_oneColumn && _selectedChat != null && !_listInFront) CloseOpenChat();   // one column: the search is on the list
                     _searchBox.Focus();
                     _searchBox.SelectAll();
                     return true;

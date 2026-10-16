@@ -213,7 +213,7 @@ namespace TelegArm.UI
         // ONE plays at a time (_playingInline), so the chat is never a wall of decoders. The playing one stops
         // on a second click, scroll-off, chat switch, background, or toggle-OFF; the WebmAnimator's dispose
         // fence makes every stop crash-safe. All the WebM lessons are inherited unchanged here, so GIFs don't
-        // re-walk them: the shared app-lifetime LibVLC, the EndReached-restart loop (NOT :input-repeat), the
+        // re-walk them (VLC-era, 2026-10-16 FFmpeg keeps the contract): the shared app-lifetime decoder, the restart loop, the
         // in-flight fence, the RectangleToScreen + 2s-grace visibility check, and the atomic temp→rename cache.
         private sealed class InlineVid
         {
@@ -351,7 +351,7 @@ namespace TelegArm.UI
                 }
                 if (bubble.IsDisposed || !_inlineVid.ContainsKey(bubble)) return;
                 if (st.Animator != null) return;   // a second fire during the await already started it
-                if (!VlcEnvironment.TryInitialize()) return;   // libVLC not ready → stay static
+                if (!Core.Media.Tgav.Available) return;   // FFmpeg not here → stay static
                 st.PlayStartTick = Environment.TickCount;
                 st.Animator = new UI.Controls.WebmAnimator(st.Path, st.W, st.H, InlineVideoFps, bubble, img => OnInlineFrame(bubble, img));
                 _playingInline = bubble;

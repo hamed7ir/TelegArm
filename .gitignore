@@ -61,3 +61,5 @@ packages/
 # fresh clone could not build. Anchor any future asset rule with a leading "/".
 # Device-trip packages (built locally; never published)
 /trip/
+# tgav build output (native/tgav/build.ps1 stages the DLLs into TelegArm/ffmpeg/<arch>/)
+/native/tgav/out/

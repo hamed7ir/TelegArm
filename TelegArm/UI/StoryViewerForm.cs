@@ -21,7 +21,7 @@ namespace TelegArm.UI
         public InputPeer Input;
     }
 
-    /// <summary>STORIES-BUILD-2/3: the full-screen story VIEWER. Owner-draws the photo (or hosts a VlcVideoControl
+    /// <summary>STORIES-BUILD-2/3: the full-screen story VIEWER. Owner-draws the photo (or hosts a VideoPlayerControl
     /// for a video story) + a segmented progress bar + top/bottom overlays; auto-advances (photos ~5s, videos over
     /// their real duration), tap-left/right steps, hold pauses, swipe-down/✕/Esc closes, advances peer-to-peer.
     /// Marks stories seen on view (dims the ring).
@@ -59,7 +59,7 @@ namespace TelegArm.UI
         private int _captionH;
 
         // video (BUILD-3)
-        private VlcVideoControl _video;
+        private VideoPlayerControl _video;
         private DateTime _videoStartedAt;
         private bool _videoPlayStarted, _videoFallback;
         private readonly VideoTapFilter _tapFilter;
@@ -316,7 +316,7 @@ namespace TelegArm.UI
         private void EnsureVideoControl()
         {
             if (_video != null) return;
-            _video = new VlcVideoControl { Visible = false };
+            _video = new VideoPlayerControl { Visible = false };
             Controls.Add(_video);
         }
 

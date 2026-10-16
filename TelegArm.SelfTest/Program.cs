@@ -31,6 +31,7 @@ namespace TelegArm.SelfTest
             WsTunnelTests.Register(tests);
             ProxyTests.Register(tests);
             ComposerTests.Register(tests);
+            MediaTests.Register(tests);
 
             string filter = args.Length > 0 ? args[0] : null;
             int pass = 0, fail = 0;

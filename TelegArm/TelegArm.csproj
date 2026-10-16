@@ -65,6 +65,9 @@
     <Compile Include="Core\AppSettings.cs" />
     <Compile Include="Core\ThemeSettings.cs" />
     <Compile Include="Core\AudioPlayer.cs" />
+    <Compile Include="Core\Media\Tgav.cs" />
+    <Compile Include="Core\Media\MediaPlayback.cs" />
+    <Compile Include="Core\Media\LegacyVlcCleanup.cs" />
     <Compile Include="Core\AuthManager.cs" />
     <Compile Include="Core\AvatarStore.cs" />
     <Compile Include="UI\DownloadsPanel.cs" />
@@ -95,7 +98,6 @@
     <Compile Include="Core\Camera\ICameraRecorder.cs" />
     <Compile Include="Core\Camera\CameraCapture.cs" />
     <Compile Include="Core\Camera\WinRtCameraRecorder.cs" />
-    <Compile Include="Core\Camera\VlcCameraRecorder.cs" />
     <Compile Include="Core\ApiCredentials.cs" />
     <!-- Real api_id/api_hash. Gitignored; conditioned on existence so a fresh clone (without it) still
          compiles against the ApiCredentials.cs placeholders. -->
@@ -103,9 +105,6 @@
     <None Include="Core\ApiCredentials.Local.cs.example" />
     <Compile Include="Core\TelegramService.cs" />
     <Compile Include="Core\PrivacyRules.cs" />
-    <Compile Include="Core\VlcBootstrap.cs" />
-    <Compile Include="Core\VlcEnvironment.cs" />
-    <Compile Include="Core\WebmAlphaProbe.cs" />
     <Compile Include="Helpers\DrawHelper.cs" />
     <Compile Include="Helpers\AppIcon.cs" />
     <Compile Include="Helpers\InputPolicy.cs" />
@@ -161,6 +160,7 @@
     <Compile Include="UI\MainForm.Search.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
     <Compile Include="UI\MainForm.Folders.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
     <Compile Include="UI\MainForm.ChatOpen.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
+    <Compile Include="UI\MainForm.Columns.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
     <Compile Include="UI\MainForm.Presence.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
     <Compile Include="UI\MainForm.History.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
     <Compile Include="UI\MainForm.Bubbles.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
@@ -197,7 +197,6 @@
     <Compile Include="UI\Admin\ManageChatForm.cs" />
     <Compile Include="UI\CreateChatForm.cs" />
     <Compile Include="UI\PollVotersForm.cs" />
-    <Compile Include="UI\RoundProbeForm.cs" />
     <Compile Include="UI\RoundRecorderForm.cs" />
     <Compile Include="UI\CountryPickerForm.cs" />
     <Compile Include="UI\ProfileForm.cs" />
@@ -351,7 +350,7 @@
     <Compile Include="UI\Controls\VideoControlBar.cs">
       <SubType>Component</SubType>
     </Compile>
-    <Compile Include="UI\Controls\VlcVideoControl.cs">
+    <Compile Include="UI\Controls\VideoPlayerControl.cs">
       <SubType>Component</SubType>
     </Compile>
     <Compile Include="UI\Controls\WebmAnimator.cs" />
@@ -415,14 +414,12 @@
       <Link>openrt.png</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <!-- Bundled libVLC runtimes (per-arch). Shipped as zips; VlcBootstrap extracts the matching-arch one
-         to a libvlc/ folder on first run (LoadLibrary/plugins can't load from inside a zip). Repo root. -->
-    <Content Include="..\libvlc-x86.zip">
-      <Link>libvlc-x86.zip</Link>
+    <!-- 2026-10-16: media is FFmpeg (ffmpeg-rt 8.1.2) + TelegArm's tgav shim (native\tgav), per arch; loaded by
+         Core\Media\Tgav from ffmpeg\<arch>\ (staged there by native\tgav\build.ps1). Replaced the libVLC zips. -->
+    <Content Include="ffmpeg\ARM\*.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="..\libvlc-arm32.zip">
-      <Link>libvlc-arm32.zip</Link>
+    <Content Include="ffmpeg\x86\*.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <!-- Tray icons (unread-aware): swapped live by unread count. Repo root → copied beside the exe. -->
@@ -453,12 +450,6 @@
     </PackageReference>
     <PackageReference Include="Newtonsoft.Json">
       <Version>13.0.4</Version>
-    </PackageReference>
-    <PackageReference Include="LibVLCSharp">
-      <Version>3.9.7</Version>
-    </PackageReference>
-    <PackageReference Include="LibVLCSharp.WinForms">
-      <Version>3.9.7</Version>
     </PackageReference>
     <PackageReference Include="NAudio">
       <Version>1.10.0</Version>

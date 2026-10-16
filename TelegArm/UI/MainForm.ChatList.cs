@@ -367,7 +367,7 @@ namespace TelegArm.UI
                 UpdateTrayTooltip();
                 LoadFolders();     // fetch chat folders and build their tabs (non-blocking)
                 LoadArchivedAsync(); // fetch archived dialogs into the model (non-blocking)
-                WarmUpVlc();       // build VLC's plugin cache in the background so first playback is instant
+                WarmUpMedia();     // load FFmpeg in the background so the first playback doesn't pay for it
             }
             catch (Exception ex)
             {
@@ -375,21 +375,16 @@ namespace TelegArm.UI
             }
         }
 
-        /// <summary>
-        /// Pre-warms LibVLC off the UI thread: the first <c>new LibVLC()</c> scans the plugin folder
-        /// and builds the on-disk plugin cache, which is slow on RT. Doing it during idle startup
-        /// (not on the first tap-to-play) makes playback feel instant. Best-effort and guarded.
-        /// </summary>
-        private void WarmUpVlc()
+        /// <summary>Loads the FFmpeg shim off the UI thread during idle startup (2026-10-16; was the libVLC plugin-cache
+        /// warm-up), so the first tap-to-play doesn't pay for loading five DLLs. Best-effort and guarded.</summary>
+        private void WarmUpMedia()
         {
-            if (!VlcEnvironment.IsAvailable) { System.Diagnostics.Debug.WriteLine("[VLC] warm-up skipped (libVLC not available — extract failed or absent)"); return; }
-            System.Diagnostics.Debug.WriteLine("[VLC] init started (background) — first new LibVLC() scans plugins off the UI thread");
             System.Threading.Tasks.Task.Run(() =>
             {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 bool ok = false;
                 try { ok = AudioPlayer.TryEnsure(); } catch { }
-                System.Diagnostics.Debug.WriteLine("[VLC] init " + (ok ? "ready" : "FAILED") + " in " + sw.ElapsedMilliseconds + "ms (background; UI was never blocked)");
+                Logger.Diag("[MEDIA] warm-up " + (ok ? "ready" : "FAILED (" + Core.Media.Tgav.Status + ")") + " in " + sw.ElapsedMilliseconds + "ms");
             });
         }
 
@@ -872,6 +867,7 @@ namespace TelegArm.UI
                 if (_chatMenuBtn != null) _chatMenuBtn.Visible = false;       // TA-21/S1a: …and the ⋮ with it
                 if (_dockBtn != null) _dockBtn.Visible = false;               // TA-23/D1c: …and the dock toggle
                 SetDockOpen(false);
+                ShowColumn(true);                                             // one column: back to the list
             }
             RebuildFolders();
             UpdateTrayTooltip();

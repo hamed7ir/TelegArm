@@ -26,6 +26,7 @@ namespace TelegArm.UI
         {
             base.OnResize(e);
             EnforceDockWidth();
+            UpdateColumnLayout();   // owner 2026-10-15: one column below OneColumnBelow
         }
 
         protected override void WndProc(ref System.Windows.Forms.Message m)

@@ -1243,12 +1243,8 @@ namespace TelegArm.UI
 
         private void BuildAdvancedPage(PageStack page, AppSettings s)
         {
-            string curB = TelegArm.Core.Camera.CameraCapture.Forced;
-            var backend = new SegmentedRow("Camera backend", new[] { "Auto", "WinRT", "VLC" }, curB == "winrt" ? 1 : curB == "vlc" ? 2 : 0) { Subtitle = "Round-video capture path" };
-            backend.SelectedIndexChanged += (snd, ev) => { int idx = backend.SelectedIndex; TelegArm.Core.Camera.CameraCapture.Forced = idx == 1 ? "winrt" : idx == 2 ? "vlc" : null; };
-            var probe = new ActionRow("Camera capture probe", "Run") { Subtitle = "Test whether libVLC can record" };
-            probe.Click += (snd, ev) => { using (var f = new RoundProbeForm()) f.ShowDialog(this); };
-            page.Section("Camera (round video)", backend, probe);
+            // 2026-10-16: the camera section (backend switch + the libVLC capture probe) went with libVLC; WinRT is the one
+            // backend until the camera phase brings the Windows 10 frame reader.
 
             // Redesign R5 — what the main window's keys do (the list lives beside the code, MainForm.Shortcuts).
             var keys = new ActionRow("Keyboard shortcuts", "Show") { Subtitle = "Chats, folders, editing and the window" };

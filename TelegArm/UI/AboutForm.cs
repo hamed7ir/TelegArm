@@ -81,14 +81,9 @@ namespace TelegArm.UI
                 // BATCH-TA-2 — WTelegramClient was missing entirely: the MTProto library the whole app
                 // is built on. Concentus.OggFile is a separate package from Concentus and was also absent.
                 new[] { "WTelegramClient", "MIT" },
-                // One row used to cover both as "LGPL-2.1". True for the C# bindings and for
-                // libvlc/libvlccore, but NOT for what we actually ship: both bundled zips carry plugins
-                // built against GPL upstreams, so the native bundle is GPL-2.0-or-later. (Or-later, so it
-                // upgrades to GPL-3 and is compatible with ours.) The plugin table lives in
-                // THIRD-PARTY-NOTICES.txt component 4 — the footer below already points there, and this
-                // screen deliberately does not restate it.
-                new[] { "LibVLCSharp", "LGPL-2.1" },
-                new[] { "libVLC + plugins", "GPL-2.0-or-later" },
+                // 2026-10-16: FFmpeg (ffmpeg-rt 8.1.2, shared DLLs, no --enable-gpl / --enable-nonfree) replaced libVLC
+                // and LibVLCSharp; tgav is TelegArm's own shim over it (GPL-3.0 with the app).
+                new[] { "FFmpeg (ffmpeg-rt)", "LGPL-2.1-or-later" },
                 new[] { "Newtonsoft.Json", "MIT" },
                 new[] { "NAudio", "Ms-PL" },
                 new[] { "Concentus (Opus)", "BSD-3-Clause" },
