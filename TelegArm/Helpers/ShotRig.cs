@@ -902,6 +902,25 @@ namespace TelegArm.Helpers
             return _failures == 0 ? 0 : 1;
         }
 
+        /// <summary>The teaser's voice chat: six people, one speaking, a raised hand, one muted by an admin.</summary>
+        private static Core.Calls.GroupCallSession TeaserVoiceChat()
+        {
+            var names = new Dictionary<long, string> { { 1000, "Hamed" }, { 1001, "Ada Lovelace" }, { 1002, "Charles Babbage" }, { 1003, "Mary Somerville" },
+                                                       { 1004, "Augustus De Morgan" }, { 1005, "Luigi Menabrea" } };
+            Func<long, int, TL.GroupCallParticipant.Flags, TL.GroupCallParticipant> gp = (id, src, fl) =>
+                new TL.GroupCallParticipant { peer = new TL.PeerUser { user_id = id }, source = src, flags = fl, date = DateTime.UtcNow.AddMinutes(-id % 7) };
+            const TL.GroupCallParticipant.Flags Muted = TL.GroupCallParticipant.Flags.muted, CanUnmute = TL.GroupCallParticipant.Flags.can_self_unmute;
+            var s = new Core.Calls.GroupCallSession { PeerId = 77, Title = "Analytical Engine club", Phase = Core.Calls.GroupCallPhase.Connected,
+                                                      ConnectedUtc = DateTime.UtcNow.AddSeconds(-754), Muted = false };
+            var hand = gp(1003, 14, Muted | TL.GroupCallParticipant.Flags.has_raise_hand_rating); hand.raise_hand_rating = 5;
+            var bio = gp(1005, 16, Muted | CanUnmute | TL.GroupCallParticipant.Flags.has_about); bio.about = "Translator, Turin";
+            s.Participants.Apply(new[] { gp(1000, 11, Muted | CanUnmute | TL.GroupCallParticipant.Flags.self), gp(1001, 12, 0), gp(1002, 13, Muted | CanUnmute),
+                                         hand, gp(1004, 15, Muted), bio }, (id, u) => names[id]);
+            s.Participants.ServerCount = 6;
+            var speaker = s.Participants.BySource(12); speaker.Level = 0.7f; speaker.SpeakingUntil = Environment.TickCount + 600000;
+            return s;
+        }
+
         /// <summary>TELEGARM_LIVE=teaser (2026-10-16, the release teaser): curated scenes, demo data only, on a STAGE - a
         /// borderless window over the whole screen showing TELEGARM_WALLPAPER, so a capture never shows this PC's desktop.
         /// Each scene is one PNG of the screen (t-*.png); a compositor outside the app turns them into the GIF / MP4.</summary>
@@ -992,8 +1011,19 @@ namespace TelegArm.Helpers
                         cw.Activate();
                         snap("t-call-" + t);
                         cw.Close();
-                        f.Location = centred;
                         CallWindow.ShowSwitchForRig = false;
+                        LivePump(300);
+
+                        // a voice chat beside it (demo people; nothing joins)
+                        var gcalls = new Core.Calls.GroupCallManager(new TelegramService(), new WindowsFormsSynchronizationContext());
+                        var vc = TeaserVoiceChat();
+                        var gw = new GroupCallWindow(gcalls, vc, null) { StartPosition = FormStartPosition.Manual };
+                        gw.Show(f);
+                        gw.Location = new Point(scr.Bounds.Right - gw.Width - px(f, 40), scr.Bounds.Y + (scr.Bounds.Height - gw.Height) / 2);
+                        gw.Activate();
+                        snap("t-voicechat-" + t);
+                        gw.Close();
+                        f.Location = centred;
                         LivePump(300);
 
                         // Settings, the Appearance page, over the main window ("Wallpaper" chosen, as the stage shows it)

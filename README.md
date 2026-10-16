@@ -1,95 +1,75 @@
 # TelegArm
-<img width="1366" height="768" alt="te" src="https://github.com/user-attachments/assets/46279785-a7f0-4d54-8f87-00184b12107b" />
 
-A lightweight, **pure-managed C# Telegram client** built to run on **jailbroken Windows RT 8.1**
-and **Windows 10 ARM32** — hardware the official Telegram apps abandoned. It talks MTProto
-directly (via WTelegramClient); calls and voice chats use Telegram's own call library (tgcalls),
-built for ARM32 and x86. A single AnyCPU build runs everywhere from a Surface RT to a modern x64 desktop.
+![TelegArm 2.0](media/teaser.gif)
+
+TelegArm is a Telegram client for Windows RT 8.1 and Windows 10 ARM32. The official Telegram apps don't run on
+these devices anymore, so I made this one. It runs on normal Windows PCs too.
+
+It's written in C# (WinForms) and talks to Telegram with WTelegramClient. Calls and voice chats use Telegram's own
+call library (tgcalls), built for ARM32 and x86.
+
+## Download
+
+Get the latest version from the [Releases](https://github.com/hamed7ir/TelegArm/releases) page.
+
+- `TelegArm-2.0.0-Setup.exe` installs it.
+- `TelegArm-2.0.0-Portable.zip` runs without installing.
 
 ## Runs on
 
-- **Windows RT 8.0 (ARM32)** — requires the .NET Framework 4.8 update, which is currently difficult to obtain for RT 8.0
-- **Windows RT 8.1 (ARM32)** — the original Surface / Surface 2 (requires the RT jailbreak to run desktop apps)
-- **Windows 10 ARM32** (build 15035)
-- **Windows 8.1 / 10 / 11 (x86 / x64 /ARM64)**
-- **Windows 7 (not tested yet)*
+- Windows RT 8.1 (Surface and Surface 2). You need the RT jailbreak to run desktop apps.
+- Windows RT 8.0. It needs the .NET 4.8 update, which is hard to find for RT 8.0.
+- Windows 10 ARM32 (build 15035)
+- Windows 8.1, 10 and 11 (x86, x64 and ARM64)
+- Windows 7: not tested yet, and calls don't work there.
 
-One `AnyCPU + Prefer32Bit` binary covers all of the above (32-bit process on every arch).
+One build (AnyCPU) runs on all of them.
 
-## Requirements — .NET Framework 4.7
+## Before you install: .NET Framework 4.7
 
-TelegArm needs **.NET Framework 4.7 or later** on the device. Without it the app will not start, and
-Windows' own error message never says why.
+TelegArm needs .NET Framework 4.7 or newer. Without it the app won't start, and Windows won't tell you why.
 
-- **Windows RT 8.1 (Surface / Surface 2)** — RT ships with .NET 4.5, so **you must install 4.7 first**:
-  **https://go.microsoft.com/fwlink/?linkid=2088632**
-- **Windows 10 ARM32** — already has it. **No action needed.**
-- **Windows 8.1 / 10 / 11 (x86 / x64 / ARM64)** — usually already present; install from the link above
-  if TelegArm refuses to start.
+- Windows RT 8.1 comes with .NET 4.5, so install 4.7 first: https://go.microsoft.com/fwlink/?linkid=2088632
+- Windows 10 ARM32 already has it.
+- Windows 8.1, 10 and 11 usually have it. If TelegArm doesn't start, install it from the link above.
 
-The installer checks for 4.7 when you install and tells you, with the right download link, if it is
-missing or older — and there is a **Check requirements** button you can press first. The portable build cannot perform that check (it is itself compiled against 4.7, so it fails
-before any of its own code runs), so install .NET first if you are using it.
+The installer checks .NET for you and gives you the link if it's missing. The portable version can't check, so
+install .NET first.
 
-## Features
+## What it can do
 
-- Phone + 2FA login with silent session resume; QR login; multiple accounts
-- **Voice calls, video calls and group voice chats** (Telegram's tgcalls; the Surface RT's camera included)
-- Chat list and conversations with live updates, bidirectional paging, and combined search (chats + global messages)
-- RTL-aware message bubbles (Persian / Arabic), emoji, and animated stickers (.tgs via rlottie)
-- Photos with thumbnails + disk cache and a zoom/pan viewer; inline video / GIF (FFmpeg) with a system-player fallback
-- Documents: file cards, open, Save / Save As, with background downloads (pause / resume / manager)
-- Send media: attach or drag-and-drop photos, videos, and files — Compress / Send-as-file, caption, per-file progress, correct dimensions + poster thumbnails
-- Record and send voice notes (OGG/Opus — pure-managed, ARM32-safe) and round video notes
-- Message actions: reply (quoted), forward, copy, multi-select, delete (for me / for everyone), retry
-- Pinned messages, folders, reactions, polls, inline keyboards & bots, group/channel admin
-- Its own window frame (Windows 11 rounded corners, touch-resizable edges) — no MaterialSkin
-- Follow-system / Light / Dark themes and a chosen or **Windows-following accent colour**, applied live (no restart)
-- A colour-emoji composer that grows to 13 lines, with an "Edit in a window" editor and formatting
-- **Per-monitor DPI** and a live **interface scale** (50–200%, Ctrl+= / Ctrl+- / Ctrl+0): sharp at any display scale
-- Configurable media auto-download and a managed cache folder; notifications with mute
-- Touch panning, momentum scrolling, and the on-screen keyboard handled for tablet use
+- Log in with your phone, 2FA or a QR code. Use more than one account.
+- Chats, groups and channels with live updates, search, folders, pinned messages, reactions, polls, bots and admin tools.
+- Voice calls, video calls and group voice chats. The camera works on the Surface RT too.
+- Photos, videos, GIFs, music and voice notes. Animated stickers and color emoji.
+- Send photos, videos and files. Record voice notes and round videos.
+- Downloads you can pause, resume and cancel.
+- Persian and Arabic text goes right to left.
+- Light and dark themes, any accent color, chat backgrounds and a wallpaper background for the window.
+- Sharp at any display scale, and you can change the size live (Ctrl+= and Ctrl+-).
+- One column on small screens. Made for touch and the on-screen keyboard.
+- Proxies: MTProto, SOCKS5 and a built-in WebSocket tunnel.
 
-## Building
+## Build it yourself
 
-Requirements: **Visual Studio 2017**, **.NET Framework 4.7**, C# **7.3**.
+You need Visual Studio 2017, .NET Framework 4.7 and C# 7.3.
 
 1. Clone the repo.
-2. **Provide your own Telegram API credentials** — they are deliberately kept out of source control:
-   - Register an application at **https://my.telegram.org/apps** to get an `api_id` and `api_hash`.
-   - In `TelegArm/Core/`, copy **`ApiCredentials.Local.cs.example`** → **`ApiCredentials.Local.cs`**
-     and fill in your values. This file is gitignored and must never be committed.
-   - Without it the project still builds (placeholders in `ApiCredentials.cs`), but it will **not authenticate**.
-3. Build the solution (Debug or Release, `AnyCPU`). NuGet restores the package dependencies.
+2. Get your own Telegram API keys (api_id and api_hash) at https://my.telegram.org/apps
+3. In `TelegArm/Core/`, copy `ApiCredentials.Local.cs.example` to `ApiCredentials.Local.cs` and put your keys in
+   it. This file is ignored by git, never commit it. Without it the app builds but can't log in.
+4. Build the solution (Debug or Release, AnyCPU). NuGet gets the packages.
 
-Everything the app needs at runtime — FFmpeg and the call library (per-arch), rlottie, Noto Emoji,
-and fonts — is carried in the project and copied next to the executable on build, so no manual
-codec/DLL setup is required.
-
-## Continuing development (docs)
-
-The repo is self-documenting so a new contributor — or a fresh AI session — can pick it up cold:
-
-- **`CLAUDE.md`** — the top-level orientation (auto-loaded by Claude Code); start here.
-- **`BUILD.md`** — exact build / run / installer commands and prerequisites.
-- **`STATE.md`** — current status and the prioritized open-work list.
-- **`INVARIANTS.md`** — the hard "don't regress these" rules (toolchain, account-data safety, UI/touch).
-- **`mdfiles/`** — the deep docs: `HANDOFF.md` (full orientation), `CURRENT_STATE.md`, the dated
-  `SESSION_*.md` narratives, `ARCHITECTURE_AND_LOGIC.md`, `LESSONS_LEARNED.md`, `BUGS_AND_FIXES.md`,
-  `CREATIVE_DECISIONS.md`, `ROADMAP.md`, `THEME_UI_HANDOFF.md`.
-- **`installer/INSTALLER_HANDOFF.md`** — how to build the RT-runnable AnyCPU installer.
+Everything else the app needs (FFmpeg, the call library, rlottie, emoji and fonts) is in the repo and gets copied
+next to the exe when you build. How the native parts are built: `third-party/ffmpeg`, `third-party/rlottie` and
+`third-party/tgcalls`.
 
 ## License
 
-TelegArm is released under the **GNU General Public License v3.0 only (GPL-3.0-only)** — see
-[LICENSE](LICENSE).
-
-Bundled third-party components (WTelegramClient, LibVLCSharp / libVLC,
-Newtonsoft.Json, NAudio, Concentus, SixLabors.ImageSharp, QRCoder, rlottie, and the Roboto /
-Vazirmatn / Noto Emoji assets) remain under their own licenses — see
+TelegArm is GPL-3.0-only, see [LICENSE](LICENSE). The libraries it uses keep their own licenses, see
 [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt).
 
 ## Credits
 
-Built on [WTelegramClient](https://github.com/wiz0u/WTelegramClient) by Wizou. Developed with
-assistance from Claude (Anthropic).
+Built on [WTelegramClient](https://github.com/wiz0u/WTelegramClient) by Wizou. Calls use Telegram's
+[tgcalls](https://github.com/TelegramMessenger/tgcalls). Made with help from Claude (Anthropic).
