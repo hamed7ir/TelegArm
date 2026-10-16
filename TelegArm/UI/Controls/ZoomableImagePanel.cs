@@ -27,6 +27,7 @@ namespace TelegArm.UI.Controls
 
         public ZoomableImagePanel()
         {
+            TabStop = false;   // R6: no key handling here, so not a Tab stop (TabStop only: Selectable stays, for the touch keyboard)
             DoubleBuffered = true;
             BackColor = ThemeHelper.Palette.MediaViewerBg;
             SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint

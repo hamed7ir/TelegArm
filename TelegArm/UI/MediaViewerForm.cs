@@ -214,6 +214,9 @@ namespace TelegArm.UI
         protected override bool ProcessCmdKey(ref System.Windows.Forms.Message msg, Keys keyData)
         {
             if (keyData == Keys.Escape) { Close(); return true; }
+            // R6: Left / Right step through the album, as ProfilePhotoViewer (nothing here takes the arrows: no text field)
+            if (keyData == Keys.Left) { Navigate(-1); return true; }
+            if (keyData == Keys.Right) { Navigate(+1); return true; }
             return base.ProcessCmdKey(ref msg, keyData);
         }
 

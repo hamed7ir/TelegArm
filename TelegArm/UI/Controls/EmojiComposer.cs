@@ -190,8 +190,11 @@ namespace TelegArm.UI.Controls
             bool handled = true;
             switch (e.KeyCode)
             {
-                case Keys.Left: MoveTo(ctrl ? WordLeft(_caret) : StepLeft(_caret), shift); break;
-                case Keys.Right: MoveTo(ctrl ? WordRight(_caret) : StepRight(_caret), shift); break;
+                case Keys.Left: case Keys.Right:
+                    // visual in a right-to-left line (R4): Left goes on in the text there, Right goes back
+                    bool back = (e.KeyCode == Keys.Left) != LineOf(_caret).Rtl;
+                    MoveTo(back ? (ctrl ? WordLeft(_caret) : StepLeft(_caret)) : (ctrl ? WordRight(_caret) : StepRight(_caret)), shift);
+                    break;
                 case Keys.Up: MoveVertical(-1, shift); break;
                 case Keys.Down: MoveVertical(1, shift); break;
                 case Keys.PageUp: MoveVertical(-Math.Max(1, VisibleLines() - 1), shift); break;
@@ -540,17 +543,8 @@ namespace TelegArm.UI.Controls
             return sb.ToString();
         }
 
-        private static bool IsRtlChar(char c) { return (c >= 0x0590 && c <= 0x08FF) || (c >= 0xFB1D && c <= 0xFDFF) || (c >= 0xFE70 && c <= 0xFEFF); }
-
-        private static bool ParagraphRtl(string p)
-        {
-            foreach (char c in p)
-            {
-                if (IsRtlChar(c)) return true;
-                if (char.IsLetter(c)) return false;
-            }
-            return false;
-        }
+        /// <summary>The paragraph's first strong character decides (Helpers\TextDirection: digits, marks and emoji are skipped).</summary>
+        private static bool ParagraphRtl(string p) { return TextDirection.FirstStrongIsRtl(p); }
 
         private const TextFormatFlags Flags = TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine;
 
@@ -890,7 +884,10 @@ namespace TelegArm.UI.Controls
                         }
                         else
                         {
-                            var r = new Rectangle(ta.X + s.X, ty, s.Width + Dpi.Px(2, d), line.TextHeight);
+                            // 2 px of slack against clipping, on the side the text does NOT align to: a right-aligned (RTL)
+                            // run must end at s.X + s.Width, where its caret stops are (R4)
+                            int slack = Dpi.Px(2, d);
+                            var r = new Rectangle(ta.X + s.X - (s.Rtl ? slack : 0), ty, s.Width + slack, line.TextHeight);
                             TextRenderer.DrawText(g, s.Text, line.Font, r, ink, Flags | (s.Rtl ? TextFormatFlags.RightToLeft | TextFormatFlags.Right : 0));
                         }
                     }
@@ -952,6 +949,13 @@ namespace TelegArm.UI.Controls
             public Accessible(EmojiComposer c) : base(c) { _c = c; }
             public override string Value { get { return _c._text; } set { _c.Text = value; } }
             public override AccessibleRole Role { get { return AccessibleRole.Text; } }
+            /// <summary>R6: the caller's name, else the hint ("Write a message…"). Name only: Role and Value stay as they are
+            /// (Windows' touch-keyboard auto-invoke reads those).</summary>
+            public override string Name
+            {
+                get { string n = _c.AccessibleName; return string.IsNullOrEmpty(n) ? _c._hint : n; }
+                set { _c.AccessibleName = value; }
+            }
         }
     }
 }

@@ -108,7 +108,7 @@ namespace TelegArm.UI
             for (int i = 0; i < PageNames.Length; i++)
             {
                 var pageHost = new Panel { Dock = DockStyle.Fill, Visible = i == 0 };
-                var scroll = ScrollHost.Wrap(pageHost, ThemeHelper.Palette.Dark, ThemeHelper.Palette.Accent);   // + TouchScroller momentum
+                var scroll = ScrollHost.Wrap(pageHost, ThemeHelper.Palette.Dark, ThemeHelper.Palette.Accent, composited: true);   // + TouchScroller momentum; composited frames as the chat list
                 WindowBackdrop.Attach(pageHost);   // step 5.9
                 WindowBackdrop.Attach(scroll);
                 host.Controls.Add(pageHost);

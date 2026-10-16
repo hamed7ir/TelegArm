@@ -81,6 +81,7 @@ namespace TelegArm.UI
 
             _hamburger = new Button
             {
+                AccessibleName = "Menu",   // R6: a drawn glyph has no text to read
                 Size = new Size(Px(38), Px(38)),
                 Anchor = AnchorStyles.None,            // centered in its cell
                 FlatStyle = FlatStyle.Flat,
@@ -570,7 +571,7 @@ namespace TelegArm.UI
             topBar.Controls.Add(titleStack);
             // DOWNLOAD-UX Part 4: transfers indicator (aggregate ring + badge; hidden when the roster is
             // empty). Fill sibling added first so the Right dock takes the edge (codebase dock convention).
-            _dlIndicator = new DownloadIndicator(_service) { Dock = DockStyle.Right };
+            _dlIndicator = new DownloadIndicator(_service) { AccessibleName = "Downloads", Dock = DockStyle.Right };
             _dlIndicator.Click += (s, e) => OpenDownloadsPanel();
             topBar.Controls.Add(_dlIndicator);
             // BATCH-TA-21/S1a — the header ⋮, beside the magnifier. Added BETWEEN the transfers indicator and
@@ -595,10 +596,18 @@ namespace TelegArm.UI
             _callBtn.FlatAppearance.BorderSize = 0;
             _callBtn.FlatAppearance.MouseOverBackColor = ColorMath.WithAlpha(_accent, 40);
             _callBtn.Paint += (s, e) => PaintButtonBackdrop(e.Graphics, _callBtn);
-            _callBtn.Paint += (s, e) => DrawPhoneGlyph(e.Graphics, _callBtn.ClientRectangle, ThemeHelper.PaletteFor(_dark).AccentGlyph);
-            _callBtn.Click += (s, e) => StartCallWith(_selectedChat);
+            _callBtn.Paint += (s, e) =>
+            {
+                var glyph = ThemeHelper.PaletteFor(_dark).AccentGlyph;
+                // by the chat's KIND (owner 2026-10-16): the voice chat only in groups and channels, the phone everywhere else
+                if (IsGroupOrChannel(_selectedChat)) DrawVoiceChatGlyph(e.Graphics, _callBtn.ClientRectangle, glyph);
+                else DrawPhoneGlyph(e.Graphics, _callBtn.ClientRectangle, glyph);
+            };
+            _callBtn.Click += (s, e) => OnCallButton();
+            _callBtn.MouseUp += (s, e) => { if (e.Button == MouseButtons.Right) ShowCallMenu(); };   // Call / Video call; Join voice chat
             _chatMenuBtn = new Button
             {
+                AccessibleName = "Chat menu",   // R6: a drawn glyph has no text to read
                 Dock = DockStyle.Right, Width = Px(44), FlatStyle = FlatStyle.Flat, Text = "",
                 BackColor = Color.Transparent, Cursor = Cursors.Hand, TabStop = false,
                 Visible = false   // shown only while a chat is open — toggled beside _chatSearchBtn
@@ -613,6 +622,7 @@ namespace TelegArm.UI
             // results for the open chat). Drawn (GDI), not a font glyph, for crisp/consistent rendering on RT.
             _chatSearchBtn = new Button
             {
+                AccessibleName = "Search in chat",   // R6: a drawn glyph has no text to read
                 Dock = DockStyle.Right, Width = Px(44), FlatStyle = FlatStyle.Flat, Text = "",
                 BackColor = Color.Transparent, Cursor = Cursors.Hand, TabStop = false,
                 Visible = false   // shown only while a chat is open (toggled in OpenChat / on leaving a chat)
@@ -633,6 +643,7 @@ namespace TelegArm.UI
             //   hidden until a chat is open.
             _dockBtn = new Button
             {
+                AccessibleName = "Chat info panel",   // R6: a drawn glyph has no text to read
                 Dock = DockStyle.Right, Width = Px(44), FlatStyle = FlatStyle.Flat, Text = "",
                 BackColor = Color.Transparent, Cursor = Cursors.Hand, TabStop = false,
                 Visible = false
@@ -646,7 +657,7 @@ namespace TelegArm.UI
             topBar.Controls.Add(_dockBtn);
             // Peer avatar before the name. Added LAST so its Dock.Left resolves outermost-left; titleStack (Fill,
             // added first) then occupies the space between the avatar and the right-docked transfers indicator.
-            _headerAvatar = new Panel { Dock = DockStyle.Left, Width = Px(54), Margin = new Padding(0), Cursor = Cursors.Hand };
+            _headerAvatar = new Panel { AccessibleName = "Chat info", Dock = DockStyle.Left, Width = Px(54), Margin = new Padding(0), Cursor = Cursors.Hand };
             _headerAvatar.Paint += (s2, e2) =>   // step 5.9: behind the round avatar, the backdrop (before the avatar is drawn)
             {
                 if (WindowBackdrop.Enabled)
@@ -756,6 +767,7 @@ namespace TelegArm.UI
             PerfLog.Boot("    BuildRightPanel: before first FontHelper.Ui call");
             _botMenuButton = new Button
             {
+                AccessibleName = "Bot menu",   // R6: a drawn glyph has no text to read
                 Text = "", Anchor = AnchorStyles.None, Width = Px(44), Height = Px(38), Visible = false,
                 FlatStyle = FlatStyle.Flat, Font = FontHelper.UiAt(13f, WindowDpiValue), Cursor = Cursors.Hand,   // shared: never dispose
                 BackColor = ThemeHelper.PaletteFor(_dark).BotMenuBg,
@@ -770,6 +782,7 @@ namespace TelegArm.UI
 
             _attachButton = new AttachButton
             {
+                AccessibleName = "Attach",   // R6: a drawn glyph has no text to read
                 Anchor = AnchorStyles.None,   // centered in its cell
                 Enabled = false
             };
@@ -870,6 +883,7 @@ namespace TelegArm.UI
             // mic/emoji/attach buttons beside it (Anchor.None, 40x40 from the control itself).
             _sendButton = new UI.Controls.SendButton
             {
+                AccessibleName = "Send",   // R6: a drawn glyph has no text to read
                 Anchor = AnchorStyles.None,
                 Enabled = false
             };
@@ -877,10 +891,10 @@ namespace TelegArm.UI
             // T11: right-click (or press-and-hold, which Windows turns into one) → schedule the message
             _sendButton.MouseUp += (s, e) => { if (e.Button == MouseButtons.Right) ShowSendMenu(); };
 
-            _emojiButton = new EmojiGlyphButton { Anchor = AnchorStyles.None, Enabled = false };
+            _emojiButton = new EmojiGlyphButton { AccessibleName = "Emoji, stickers and GIFs", Anchor = AnchorStyles.None, Enabled = false };
             _emojiButton.Click += (s, e) => OpenEmojiPicker();
 
-            _micButton = new MicButton { Anchor = AnchorStyles.None, Enabled = false };
+            _micButton = new MicButton { AccessibleName = "Record a voice message", Anchor = AnchorStyles.None, Enabled = false };
             _micButton.Click += (s, e) => OnMicClick();
 
             // Recording strip: owner-painted, overlays the input cell while recording/ready.
@@ -912,6 +926,7 @@ namespace TelegArm.UI
             _replyStrip = new Panel { Dock = DockStyle.Fill, Visible = false, Margin = new Padding(0) };
             _replyCancelBtn = new Button
             {
+                AccessibleName = "Cancel reply",   // R6: a drawn glyph has no text to read
                 Text = "✕",
                 Dock = DockStyle.Right,
                 Width = Px(44),
@@ -949,6 +964,7 @@ namespace TelegArm.UI
             // not the scrolling panel). Visible only when scrolled up; badge shows messages missed meanwhile.
             _jumpBtn = new JumpToBottomButton
             {
+                AccessibleName = "Go to the latest messages",   // R6: a drawn glyph has no text to read
                 IsDark = _dark, AccentColor = _accent, Visible = false,
                 Anchor = AnchorStyles.Bottom | AnchorStyles.Right
             };
@@ -956,10 +972,10 @@ namespace TelegArm.UI
             _msgHost.Controls.Add(_jumpBtn);
             _jumpBtn.BringToFront();
             // T2: jump to the unread @mentions / reactions of the open chat (MainForm.Scroll: CollectThenRead)
-            _mentionBtn = new JumpToBottomButton { IsDark = _dark, AccentColor = _accent, Visible = false, Glyph = "@", Anchor = AnchorStyles.Bottom | AnchorStyles.Right };
+            _mentionBtn = new JumpToBottomButton { AccessibleName = "Go to the next mention", IsDark = _dark, AccentColor = _accent, Visible = false, Glyph = "@", Anchor = AnchorStyles.Bottom | AnchorStyles.Right };
             _mentionBtn.Click += (s, e) => JumpToNextUnread(true);
             _msgHost.Controls.Add(_mentionBtn);
-            _reactionBtn = new JumpToBottomButton { IsDark = _dark, AccentColor = _accent, Visible = false, Glyph = "\u2665", Anchor = AnchorStyles.Bottom | AnchorStyles.Right };
+            _reactionBtn = new JumpToBottomButton { AccessibleName = "Go to the next reaction", IsDark = _dark, AccentColor = _accent, Visible = false, Glyph = "\u2665", Anchor = AnchorStyles.Bottom | AnchorStyles.Right };
             _reactionBtn.Click += (s, e) => JumpToNextUnread(false);
             _msgHost.Controls.Add(_reactionBtn);
             _msgHost.Resize += (s, e) => PositionJumpButton();

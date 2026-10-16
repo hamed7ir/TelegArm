@@ -238,8 +238,8 @@ namespace TelegArm.UI
             int left = Math.Max(wa.Left, Math.Min(at.X, wa.Right - picker.Width));
             int top = at.Y + picker.Height <= wa.Bottom ? at.Y : Math.Max(wa.Top, at.Y - _emoji.Height - Dpi.Px(8, dpi) - picker.Height);
             picker.Location = new Point(left, top);
-            picker.Show(this);
-            picker.Activate();
+            try { picker.Show(this); picker.Activate(); }
+            catch (ObjectDisposedException) { Logger.Diag("[EMOJI] the picker closed while it opened"); }   // RT trip 2026-10-16
         }
 
         // ── lifecycle ──────────────────────────────────────────────────────────────────────────────────────────────

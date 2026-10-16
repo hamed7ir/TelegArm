@@ -37,6 +37,7 @@ namespace TelegArm.UI.Controls
 
         public PinnedRowControl(int messageId, string label, string preview)
         {
+            TabStop = false;   // R6: no key handling here, so not a Tab stop (TabStop only: Selectable stays, for the touch keyboard)
             MessageId = messageId;
             _label = label ?? "Pinned message";
             _preview = preview ?? "";

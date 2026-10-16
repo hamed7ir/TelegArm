@@ -238,6 +238,7 @@ namespace TelegArm.UI.Controls
 
             public FrameSurface(VideoPlayerControl owner)
             {
+                TabStop = false;   // R6: no key handling here, so not a Tab stop (TabStop only: Selectable stays, for the touch keyboard)
                 _owner = owner;
                 SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.Opaque, true);
                 BackColor = Color.Black;

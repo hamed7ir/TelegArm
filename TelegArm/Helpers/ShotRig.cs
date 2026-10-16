@@ -71,6 +71,10 @@ namespace TelegArm.Helpers
             if (live == "columns") return RunLiveColumns(dir);
             if (live == "media") return RunLiveMedia(dir);
             if (live == "camera") return RunLiveCamera(dir);
+            if (live == "callcam") return RunLiveCallCamera(dir);
+            if (live == "calltest") return RunLiveCallTest(dir);
+            if (live == "backdrop") return RunLiveBackdrop(dir);
+            if (live == "teaser") return RunLiveTeaser(dir);
 
             foreach (var mode in new[] { ThemeMode.Light, ThemeMode.Dark })
             {
@@ -250,6 +254,55 @@ namespace TelegArm.Helpers
                     if (ph == Core.Calls.CallPhase.Ended) cs.EndText = "Call ended";
                     Shot("p8-call-" + ph.ToString().ToLowerInvariant() + "-" + t, () => new CallWindow(calls, cs, null, s => "Ada Lovelace"));
                 }
+                // 2026-10-16 video (drawn pictures, no camera): theirs (portrait) with ours (landscape, mirrored) in the corner and
+                // the switch button; ours alone while it rings out; an incoming video call
+                CallWindow.ShowSwitchForRig = true;
+                var theirs = DemoCallPicture(480, 640, Color.SteelBlue, Color.SandyBrown);
+                var ours = DemoCallPicture(640, 480, Color.SeaGreen, Color.Tan);
+                var v1 = new Core.Calls.CallSession { Peer = ada, PeerId = 1001, Outgoing = true, Video = true, CameraOn = true, RemoteVideo = 2,
+                                                      Phase = Core.Calls.CallPhase.Established, EstablishedUtc = DateTime.UtcNow.AddSeconds(-125), SignalBars = 4 };
+                Feed(v1.RemoteFrames, theirs, 480, 640);
+                Feed(v1.LocalVideo, ours, 640, 480);
+                Shot("p8-call-video-" + t, () => new CallWindow(calls, v1, null, s => "Ada Lovelace"));
+                var v2 = new Core.Calls.CallSession { Peer = ada, PeerId = 1001, Outgoing = true, Video = true, CameraOn = true, Phase = Core.Calls.CallPhase.Ringing };
+                Feed(v2.LocalVideo, ours, 640, 480);
+                Shot("p8-call-videoself-" + t, () => new CallWindow(calls, v2, null, s => "Ada Lovelace"));
+                var v3 = new Core.Calls.CallSession { Peer = ada, PeerId = 1001, Outgoing = false, Video = true, CameraOn = true, Phase = Core.Calls.CallPhase.Incoming };
+                Shot("p8-call-videoin-" + t, () => new CallWindow(calls, v3, null, s => "Ada Lovelace"));
+                var v4 = new Core.Calls.CallSession { Peer = ada, PeerId = 1001, Outgoing = true, Phase = Core.Calls.CallPhase.Ringing,
+                                                      CameraNote = "You can turn on video once the call is connected." };
+                Shot("p8-call-camnote-" + t, () => new CallWindow(calls, v4, null, s => "Ada Lovelace"));
+                CallWindow.ShowSwitchForRig = false;
+                // 2026-10-16: the voice chat window (an offline GroupCallManager: nothing joins) - connected with six people (Ada
+                // speaking, a raised hand, one muted by an admin, one with a bio); us muted by an admin while it connects; the end
+                var gcalls = new Core.Calls.GroupCallManager(new TelegramService(), new WindowsFormsSynchronizationContext());
+                Func<long, int, TL.GroupCallParticipant.Flags, TL.GroupCallParticipant> gp = (id, src, fl) =>
+                    new TL.GroupCallParticipant { peer = new TL.PeerUser { user_id = id }, source = src, flags = fl, date = DateTime.UtcNow.AddMinutes(-id % 7) };
+                var gnames = new Dictionary<long, string> { { 1000, "Hamed" }, { 1001, "Ada Lovelace" }, { 1002, "Charles Babbage" }, { 1003, "Mary Somerville" },
+                                                            { 1004, "Augustus De Morgan" }, { 1005, "Luigi Menabrea" } };
+                const TL.GroupCallParticipant.Flags Muted = TL.GroupCallParticipant.Flags.muted, CanUnmute = TL.GroupCallParticipant.Flags.can_self_unmute;
+                Func<Core.Calls.GroupCallSession> people = () =>
+                {
+                    var gs = new Core.Calls.GroupCallSession { PeerId = 77, Title = "Analytical Engine club" };
+                    var hand = gp(1003, 14, Muted | TL.GroupCallParticipant.Flags.has_raise_hand_rating); hand.raise_hand_rating = 5;
+                    var bio = gp(1005, 16, Muted | CanUnmute | TL.GroupCallParticipant.Flags.has_about); bio.about = "Translator, Turin";
+                    gs.Participants.Apply(new[] { gp(1000, 11, Muted | CanUnmute | TL.GroupCallParticipant.Flags.self), gp(1001, 12, 0), gp(1002, 13, Muted | CanUnmute),
+                                                  hand, gp(1004, 15, Muted), bio }, (id, u) => gnames[id]);
+                    gs.Participants.ServerCount = 6;
+                    return gs;
+                };
+                var g1 = people();
+                g1.Phase = Core.Calls.GroupCallPhase.Connected; g1.ConnectedUtc = DateTime.UtcNow.AddSeconds(-754); g1.Muted = false;
+                var speaker = g1.Participants.BySource(12); speaker.Level = 0.7f; speaker.SpeakingUntil = Environment.TickCount + 600000;
+                Shot("p8-groupcall-" + t, () => new GroupCallWindow(gcalls, g1, null));
+                var g2 = people();
+                g2.Phase = Core.Calls.GroupCallPhase.Connecting; g2.ForceMuted = true; g2.HandRaised = true;
+                g2.Note = "An admin muted you: raise your hand to ask to speak.";
+                Shot("p8-groupcall-forcemuted-" + t, () => new GroupCallWindow(gcalls, g2, null));
+                var g3 = people();
+                g3.Phase = Core.Calls.GroupCallPhase.Ended; g3.EndText = "The voice chat has ended";
+                Shot("p8-groupcall-ended-" + t, () => new GroupCallWindow(gcalls, g3, null));
+                Shot("p8-groupcall-icons-" + t, () => IconSheet(GroupCallWindow.VoiceChatPath, GroupCallWindow.MicPath, GroupCallWindow.MicOffPath, GroupCallWindow.HandPath));
                 // T22: the privacy exceptions editor (two people in "Always allow")
                 Shot("p7-privacyex-" + t, () => new PrivacyExceptionsForm("Last seen", new[] { new TL.User { id = 1001, first_name = "Ada", last_name = "Lovelace" },
                                                                                           new TL.User { id = 1002, first_name = "Charles" } }, null, null));
@@ -683,6 +736,376 @@ namespace TelegArm.Helpers
             return _failures == 0 ? 0 : 1;
         }
 
+        /// <summary>A stand-in video picture (BGRA): a background, a head and shoulders. Drawn, never a camera's.</summary>
+        private static byte[] DemoCallPicture(int w, int h, Color back, Color skin)
+        {
+            using (var bmp = new Bitmap(w, h, PixelFormat.Format32bppArgb))
+            {
+                using (var g = Graphics.FromImage(bmp))
+                {
+                    g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                    using (var bg = new System.Drawing.Drawing2D.LinearGradientBrush(new Rectangle(0, 0, w, h), back, ColorMath.Mix(back, Color.Black, 0.5f), 90f))
+                        g.FillRectangle(bg, 0, 0, w, h);
+                    int head = Math.Min(w, h) / 3;
+                    using (var b = new SolidBrush(ColorMath.Mix(back, Color.Black, 0.35f)))
+                        g.FillEllipse(b, w / 2 - head, h * 6 / 10, head * 2, head * 2);   // shoulders
+                    using (var b = new SolidBrush(skin))
+                        g.FillEllipse(b, w / 2 - head / 2, h * 6 / 10 - head, head, head * 6 / 5);
+                }
+                var data = bmp.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+                try
+                {
+                    var px = new byte[w * h * 4];
+                    for (int y = 0; y < h; y++) System.Runtime.InteropServices.Marshal.Copy(data.Scan0 + y * data.Stride, px, y * w * 4, w * 4);
+                    return px;
+                }
+                finally { bmp.UnlockBits(data); }
+            }
+        }
+
+        /// <summary>Hands a picture to a call's video sink the way tgcalls_native does (its callback, a native pointer).</summary>
+        private static void Feed(Core.Calls.CallVideoSink sink, byte[] bgra, int w, int h)
+        {
+            var pin = System.Runtime.InteropServices.GCHandle.Alloc(bgra, System.Runtime.InteropServices.GCHandleType.Pinned);
+            try { sink.Callback(IntPtr.Zero, pin.AddrOfPinnedObject(), w, h, w * 4); }
+            finally { pin.Free(); }
+        }
+
+        /// <summary>TELEGARM_LIVE=callcam (2026-10-16): THIS machine's camera through the call camera, each backend (the
+        /// Windows 10 frame reader, and the Windows 8.1 media sink forced on), then through two calls connected in this
+        /// process (A sends it, B decodes it), then the other camera. Counts pictures and sizes only: no picture is saved.</summary>
+        private static int RunLiveCallCamera(string dir)
+        {
+            var trace = new System.Diagnostics.TextWriterTraceListener(Path.Combine(dir, "trace.txt"));
+            System.Diagnostics.Trace.Listeners.Add(trace);
+            System.Diagnostics.Trace.AutoFlush = true;
+            Logger.Enabled = true;
+            Action<bool, string> expect = (ok, what) => { _log.AppendLine("  " + (ok ? "PASS  " : "FAIL  ") + what); if (!ok) _failures++; };
+            expect(Core.Calls.TgCalls.Available, "tgcalls_native: " + Core.Calls.TgCalls.Status);
+            foreach (string backend in new[] { "reader", "sink" })
+            {
+                _log.AppendLine("  -- " + backend);
+                if (backend == "reader" && !Core.Camera.CameraCapture.FrameReaderPresent)
+                {
+                    _log.AppendLine("  info  no MediaFrameReader on this Windows (8.1): the media sink is the call camera here");
+                    continue;
+                }
+                Environment.SetEnvironmentVariable("TELEGARM_CALL_CAMERA", backend);
+                var preview = new Core.Calls.CallVideoSink();
+                Core.Calls.CallCamera cam = null;
+                try
+                {
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    cam = RunSync(Core.Calls.CallCamera.OpenAsync(preview));
+                    expect(cam != null, "opened in " + sw.ElapsedMilliseconds + " ms via " + (cam != null ? cam.Backend : "-") + " (" + (cam != null && cam.Current != null ? cam.Current.Name : "-") + ")");
+                    if (cam == null) continue;
+                    expect(cam.Backend == (backend == "reader" ? "frame reader" : "media sink"), "the backend asked for");
+                    var s0 = cam.Stats();
+                    int p0 = preview.Frames;
+                    LivePump(3000);
+                    var s1 = cam.Stats();
+                    double fps = (s1.Pushed - s0.Pushed) / 3.0, pfps = (preview.Frames - p0) / 3.0;
+                    expect(fps >= 12, "camera " + fps.ToString("0.0") + " pictures/s into the DLL over 3 s");
+                    expect(pfps >= 8, "preview " + pfps.ToString("0.0") + "/s (capped at 15), " + preview.Store.FrontWidth + "x" + preview.Store.FrontHeight);
+                    LoopbackCamera(cam.Handle, expect);
+                    if (cam.Cameras.Count > 1)
+                    {
+                        bool ok = RunSync(cam.SwitchAsync()) == 1;
+                        var t0 = cam.Stats();
+                        LivePump(2000);
+                        var t1 = cam.Stats();
+                        double sfps = (t1.Pushed - t0.Pushed) / 2.0;
+                        expect(ok && sfps >= 12, "switched to " + (cam.Current != null ? cam.Current.Name : "-") + ": " + sfps.ToString("0.0") + " pictures/s");
+                    }
+                }
+                catch (Exception ex) { expect(false, backend + ": " + ex.GetType().Name + " " + ex.Message); }
+                finally
+                {
+                    var w = System.Diagnostics.Stopwatch.StartNew();
+                    if (cam != null) cam.Dispose();
+                    _log.AppendLine("  info  closed in " + w.ElapsedMilliseconds + " ms");
+                    Environment.SetEnvironmentVariable("TELEGARM_CALL_CAMERA", null);
+                }
+            }
+            File.WriteAllText(Path.Combine(_dir, "shots.txt"), _log.ToString());
+            return _failures == 0 ? 0 : 1;
+        }
+
+        /// <summary>TELEGARM_LIVE=backdrop (owner 2026-10-16: "the mini player, the pinned bar and the downloads button need the
+        /// backdrop too"): the rail layout with a chat open, its pinned bar, the mini player and the downloads button shown,
+        /// in both themes. Run with TELEGARM_WALLPAPER=&lt;picture&gt; to force the backdrop on.</summary>
+        private static int RunLiveBackdrop(string dir)
+        {
+            MainForm.DemoNoSession = true;
+            AppSettings.Instance.FolderSidebar = true;   // in memory only
+            foreach (var mode in new[] { ThemeMode.Dark, ThemeMode.Light })
+            {
+                ThemeHelper.InitMode(mode);
+                MainForm f = null;
+                try
+                {
+                    f = new MainForm(new TelegramService());
+                    var wa = Screen.PrimaryScreen.WorkingArea;
+                    f.StartPosition = FormStartPosition.Manual;
+                    f.Bounds = new Rectangle(wa.Left + 60, wa.Top + 40, f.WindowDpiValue * 1000 / 96, f.WindowDpiValue * 700 / 96);
+                    f.TopMost = true;
+                    f.Show();
+                    LivePump(1200);
+                    SeedChatList(f);
+                    OpenDemoChat(f);
+                    LivePump(400);
+                    SetField(f, "_pinnedMessages", new List<Message> { new Message { id = 77, message = "The pinned message", date = DateTime.UtcNow, peer_id = new PeerUser { user_id = AdaId } } });
+                    SetField(f, "_pinnedChatId", AdaId);
+                    Invoke(f, "UpdatePinnedBar");
+                    var mini = (Control)Field(f, "_miniBar");
+                    mini.Visible = true;
+                    Invoke(f, "SetRowPx", Field(f, "_rightLayout"), 1, 48);
+                    var dl = Field(f, "_dlIndicator") as Control;
+                    if (dl != null) dl.Visible = true;
+                    LivePump(800);
+                    LiveShot(f, "backdrop-bars-" + (mode == ThemeMode.Dark ? "dark" : "light"));
+                    _log.AppendLine("  backdrop " + (WindowBackdrop.Enabled ? "ON" : "off") + ": pinned " + ((Control)Field(f, "_pinnedBar")).Visible
+                                    + ", mini " + mini.Visible + ", downloads " + (dl != null && dl.Visible));
+                }
+                catch (Exception ex) { _log.AppendLine("  FAIL  " + ex.GetType().Name + " " + ex.Message); _failures++; }
+                finally
+                {
+                    if (f != null) { try { f.Close(); } catch { } try { f.Dispose(); } catch { } }
+                    LivePump(400);
+                }
+            }
+            File.WriteAllText(Path.Combine(_dir, "shots.txt"), _log.ToString());
+            return _failures == 0 ? 0 : 1;
+        }
+
+        /// <summary>TELEGARM_LIVE=teaser (2026-10-16, the release teaser): curated scenes, demo data only, on a STAGE - a
+        /// borderless window over the whole screen showing TELEGARM_WALLPAPER, so a capture never shows this PC's desktop.
+        /// Each scene is one PNG of the screen (t-*.png); a compositor outside the app turns them into the GIF / MP4.</summary>
+        private static int RunLiveTeaser(string dir)
+        {
+            MainForm.DemoNoSession = true;
+            UI.Ringer.Silent = true;
+            string wall = null;
+            try { wall = Environment.GetEnvironmentVariable("TELEGARM_WALLPAPER"); } catch { }
+            var scr = Screen.PrimaryScreen;
+            var stage = new Form
+            {
+                FormBorderStyle = FormBorderStyle.None, StartPosition = FormStartPosition.Manual, Bounds = scr.Bounds, ShowInTaskbar = false,
+                BackColor = Color.Black, TopMost = true,
+                BackgroundImage = wall != null && File.Exists(wall) ? Image.FromFile(wall) : null, BackgroundImageLayout = ImageLayout.Stretch,
+            };
+            stage.Show();
+            LivePump(500);
+            Action<string> snap = name =>
+            {
+                LivePump(700);
+                using (var bmp = new Bitmap(scr.Bounds.Width, scr.Bounds.Height))
+                {
+                    using (var g = Graphics.FromImage(bmp)) g.CopyFromScreen(scr.Bounds.Location, Point.Empty, scr.Bounds.Size);
+                    bmp.Save(Path.Combine(_dir, name + ".png"), ImageFormat.Png);
+                }
+                _log.AppendLine("  scene " + name);
+            };
+            Func<Form, int, int> px = (form, v) => v * ((AppForm)form).WindowDpiValue / 96;
+            var folders = new DialogFilterBase[]
+            {
+                null,
+                new DialogFilter { id = 2, title = new TextWithEntities { text = "Work", entities = new MessageEntity[0] }, flags = DialogFilter.Flags.groups,
+                                   pinned_peers = new InputPeer[0], include_peers = new InputPeer[0], exclude_peers = new InputPeer[0] },
+                new DialogFilter { id = 3, title = new TextWithEntities { text = "Family", entities = new MessageEntity[0] }, flags = DialogFilter.Flags.contacts,
+                                   pinned_peers = new InputPeer[0], include_peers = new InputPeer[0], exclude_peers = new InputPeer[0] },
+                new DialogFilter { id = 4, title = new TextWithEntities { text = "Unread", entities = new MessageEntity[0] }, flags = DialogFilter.Flags.exclude_read,
+                                   pinned_peers = new InputPeer[0], include_peers = new InputPeer[0], exclude_peers = new InputPeer[0] },
+            };
+            foreach (var mode in new[] { ThemeMode.Dark, ThemeMode.Light })
+            {
+                string t = mode == ThemeMode.Dark ? "dark" : "light";
+                ThemeHelper.InitMode(mode);
+                AppSettings.Instance.FolderSidebar = true;   // in memory only
+                MainForm f = null;
+                try
+                {
+                    f = new MainForm(new TelegramService());
+                    f.StartPosition = FormStartPosition.Manual;
+                    f.TopMost = true;
+                    f.Show();
+                    LivePump(900);
+                    int w = px(f, 1060), h = px(f, 690);
+                    f.Bounds = new Rectangle(scr.Bounds.X + (scr.Bounds.Width - w) / 2, scr.Bounds.Y + (scr.Bounds.Height - h) / 2, w, h);
+                    SeedChatList(f);
+                    SetField(f, "_folders", folders);
+                    Invoke(f, "RebuildFolders");
+                    OpenDemoChat(f);
+                    SetField(f, "_pinnedMessages", new List<Message> { new Message { id = 77, message = "Release day! TelegArm 2.0 is out.", date = DateTime.UtcNow, peer_id = new PeerUser { user_id = AdaId } } });
+                    SetField(f, "_pinnedChatId", AdaId);
+                    Invoke(f, "UpdatePinnedBar");
+                    Invoke(f, "RefreshFolderBadges");
+                    f.Activate();
+                    snap("t-main-" + t);
+
+                    if (mode == ThemeMode.Dark)
+                    {
+                        // the emoji picker over the composer
+                        Invoke(f, "OpenEmojiPicker");
+                        LivePump(900);
+                        snap("t-emoji-" + t);
+                        foreach (var pick in Application.OpenForms.OfType<EmojiPicker>().ToList()) { try { pick.Close(); } catch { } }
+                        LivePump(300);
+
+                        // a video call beside it (drawn pictures; no camera, no call)
+                        CallWindow.ShowSwitchForRig = true;
+                        var calls = new Core.Calls.CallManager(new TelegramService(), new WindowsFormsSynchronizationContext());
+                        var ada = new TL.User { id = AdaId, first_name = "Ada", last_name = "Lovelace" };
+                        var v = new Core.Calls.CallSession { Peer = ada, PeerId = AdaId, Outgoing = true, Video = true, CameraOn = true, RemoteVideo = 2,
+                                                             Phase = Core.Calls.CallPhase.Established, EstablishedUtc = DateTime.UtcNow.AddSeconds(-94), SignalBars = 4 };
+                        Feed(v.RemoteFrames, DemoCallPicture(480, 640, Color.SteelBlue, Color.SandyBrown), 480, 640);
+                        Feed(v.LocalVideo, DemoCallPicture(640, 480, Color.SeaGreen, Color.Tan), 640, 480);
+                        var cw = new CallWindow(calls, v, null, x => "Ada Lovelace") { StartPosition = FormStartPosition.Manual };
+                        var centred = f.Location;
+                        f.Left = scr.Bounds.X + px(f, 24);   // the main window left, the call on the right, both whole
+                        cw.Show(f);
+                        cw.Location = new Point(scr.Bounds.Right - cw.Width - px(f, 40), scr.Bounds.Y + (scr.Bounds.Height - cw.Height) / 2);
+                        cw.Activate();
+                        snap("t-call-" + t);
+                        cw.Close();
+                        f.Location = centred;
+                        CallWindow.ShowSwitchForRig = false;
+                        LivePump(300);
+
+                        // Settings, the Appearance page, over the main window ("Wallpaper" chosen, as the stage shows it)
+                        AppSettings.Instance.WindowBackground = "wallpaper";   // in memory only (isolated data root)
+                        var st = new SettingsForm { StartPosition = FormStartPosition.Manual, TopMost = true };
+                        st.Show(f);
+                        Invoke(st, "ShowPage", 1);
+                        st.Location = new Point(f.Left + (f.Width - st.Width) / 2, f.Top + (f.Height - st.Height) / 2);
+                        st.Activate();
+                        snap("t-settings-" + t);
+                        st.Close();
+                        LivePump(300);
+                    }
+                    else
+                    {
+                        // one column: the chat alone, the folder rail beside it
+                        f.Bounds = new Rectangle(scr.Bounds.X + (scr.Bounds.Width - px(f, 560)) / 2, f.Top, px(f, 560), h);
+                        LivePump(600);
+                        Invoke(f, "ShowColumn", false);
+                        snap("t-onecol-" + t);
+                    }
+                }
+                catch (Exception ex) { _log.AppendLine("  FAIL  " + ex.GetType().Name + " " + ex.Message + " " + ex.StackTrace); _failures++; }
+                finally
+                {
+                    if (f != null) { try { f.Close(); } catch { } try { f.Dispose(); } catch { } }
+                    LivePump(400);
+                }
+            }
+            stage.Close();
+            File.WriteAllText(Path.Combine(_dir, "shots.txt"), _log.ToString());
+            return _failures == 0 ? 0 : 1;
+        }
+
+        /// <summary>TELEGARM_LIVE=calltest (2026-10-16, the device trip): the call library's own self-tests in THIS process's
+        /// architecture (on the Surface: the first ARM32 run of tgcalls) - the voice loopback, then the video loopback on the
+        /// newest library and on the old one, with the codec this machine sends (VP8 on ARM32), and the CPU it took. No
+        /// account, no server, no camera (a drawn test picture).</summary>
+        private static int RunLiveCallTest(string dir)
+        {
+            var trace = new System.Diagnostics.TextWriterTraceListener(Path.Combine(dir, "trace.txt"));
+            System.Diagnostics.Trace.Listeners.Add(trace);
+            System.Diagnostics.Trace.AutoFlush = true;
+            Logger.Enabled = true;
+            Action<bool, string> expect = (ok, what) => { _log.AppendLine("  " + (ok ? "PASS  " : "FAIL  ") + what); if (!ok) _failures++; };
+            bool loaded = Core.Calls.TgCalls.Available;
+            expect(loaded, "tgcalls_native: " + Core.Calls.TgCalls.Status);
+            if (loaded)
+            {
+                var me = System.Diagnostics.Process.GetCurrentProcess();
+                Func<string, Func<byte[], int>, bool> run = (name, test) =>
+                {
+                    var report = new byte[8192];
+                    me.Refresh();
+                    var cpu0 = me.TotalProcessorTime;
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    int rc = -1;
+                    try { rc = test(report); }
+                    catch (Exception ex) { _log.AppendLine("  info  " + ex.GetType().Name + ": " + ex.Message); }
+                    me.Refresh();
+                    double cpu = (me.TotalProcessorTime - cpu0).TotalMilliseconds;
+                    foreach (var line in Core.Calls.TgCalls.Z(report).Trim().Split('\n')) _log.AppendLine("        " + line);
+                    expect(rc == 0, name + " (" + sw.ElapsedMilliseconds + " ms, CPU " + cpu.ToString("0") + " ms = " +
+                           (cpu / Math.Max(1, sw.ElapsedMilliseconds) / Environment.ProcessorCount * 100).ToString("0") + "% of " + Environment.ProcessorCount + " cores)");
+                    return rc == 0;
+                };
+                run("voice loopback", b => Core.Calls.TgCalls.tgn_selftest_loopback(25, b, b.Length));
+                // the speaker path the real calls use (the trip: "their voice was choppy and late"): B plays A's tone through
+                // this device's speaker at 1/10 volume for 10 s, the report counts the gaps
+                run("the speaker, 10 s (a quiet tone)", b => Core.Calls.TgCalls.tgn_selftest_audio(Core.Calls.TgCalls.AudioSpeakerTest, 10, b, b.Length));
+                run("video loopback, newest library", b => Core.Calls.TgCalls.tgn_selftest_video(null, 30, 0, b, b.Length));
+                run("video loopback, library 5.0.0", b => Core.Calls.TgCalls.tgn_selftest_video(System.Text.Encoding.UTF8.GetBytes("5.0.0\0"), 30, 0, b, b.Length));
+                // voice chats: the group engine (join payload, levels, our tone once unmuted, rejoin; no server)
+                if (Core.Calls.TgCalls.GroupAvailable) run("voice chat engine", b => Core.Calls.TgCalls.tgn_selftest_group(0, b, b.Length));
+                else _log.AppendLine("  FAIL  voice chat engine: the call library has no group calls");
+                _log.AppendLine("  info  encoders made: " + Core.Calls.TgCalls.Encoders());
+            }
+            File.WriteAllText(Path.Combine(_dir, "shots.txt"), _log.ToString());
+            return _failures == 0 ? 0 : 1;
+        }
+
+        /// <summary>Two calls in this process (test tones), A sending <paramref name="camera"/>: B must decode its pictures.</summary>
+        private static void LoopbackCamera(IntPtr camera, Action<bool, string> expect)
+        {
+            var key = new byte[256];
+            new Random(5).NextBytes(key);
+            string version = Core.Calls.TgCalls.Versions().Split(';')[0];
+            var inA = new List<byte[]>();
+            var inB = new List<byte[]>();
+            int stA = -1, stB = -1, video = -1;
+            var remote = new Core.Calls.CallVideoSink();
+            Core.Calls.NativeCall a = null, b = null;
+            try
+            {
+                a = Core.Calls.NativeCall.Create(version, key, true, null, null, true, 92, null, Core.Calls.TgCalls.AudioTest, 440, camera, n =>
+                {
+                    n.SignalingEmitted += d => { lock (inB) inB.Add(d); };
+                    n.StateChanged += x => stA = x;
+                });
+                b = Core.Calls.NativeCall.Create(version, key, false, null, null, true, 92, null, Core.Calls.TgCalls.AudioTest, 1000, wire: n =>
+                {
+                    n.SignalingEmitted += d => { lock (inA) inA.Add(d); };
+                    n.StateChanged += x => stB = x;
+                    n.RemoteMediaChanged += (au, v) => video = v;
+                });
+                b.SetRemoteVideo(remote, 640, 640);
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                int f0 = -1;
+                long t0 = 0;
+                while (sw.ElapsedMilliseconds < 15000)
+                {
+                    byte[][] forA, forB;
+                    lock (inA) { forA = inA.ToArray(); inA.Clear(); }
+                    lock (inB) { forB = inB.ToArray(); inB.Clear(); }
+                    foreach (var d in forA) a.ReceiveSignaling(d);
+                    foreach (var d in forB) b.ReceiveSignaling(d);
+                    if (f0 < 0 && remote.Frames > 0) { f0 = remote.Frames; t0 = sw.ElapsedMilliseconds; }
+                    if (f0 >= 0 && sw.ElapsedMilliseconds - t0 >= 3000) break;
+                    LivePump(20);
+                }
+                double fps = f0 < 0 ? 0 : (remote.Frames - f0) / ((sw.ElapsedMilliseconds - t0) / 1000.0);
+                var vs = b.VideoStats();
+                expect(stA == 2 && stB == 2 && video == 2 && fps >= 10,
+                       "through a call: states " + stA + "/" + stB + ", remote video " + video + ", " + fps.ToString("0.0") + " pictures/s decoded (" +
+                       vs.RemoteWidth + "x" + vs.RemoteHeight + "), first after " + t0 + " ms; encoders " + Core.Calls.TgCalls.Encoders());
+                a.Stop(5000);
+                b.Stop(5000);
+            }
+            finally
+            {
+                if (a != null) a.Dispose();
+                if (b != null) b.Dispose();
+            }
+            GC.KeepAlive(remote);
+        }
+
         /// <summary>Waits for a task while pumping the UI (the camera's preview paints on the UI thread meanwhile).</summary>
         private static T RunSync<T>(System.Threading.Tasks.Task<T> t)
         {
@@ -741,6 +1164,89 @@ namespace TelegArm.Helpers
                 bool phoneOk = callBtn != null && callBtn.Visible && callBtn.Left < lensBtn.Left;
                 _log.AppendLine("  " + (phoneOk ? "PASS  " : "FAIL  ") + "header: the phone sits left of the magnifier");
                 if (!phoneOk) _failures++;
+                // 2026-10-16: the header ⋮ menu of a private chat offers a voice and a video call
+                using (var headerMenu = new ContextMenuStrip())
+                {
+                    var surface = Enum.Parse(typeof(MainForm).GetNestedType("ChatMenuSurface", BindingFlags.NonPublic), "ChatHeader");
+                    var chat = (ChatEntry)Field(f, "_selectedChat");
+                    var info = chat.PeerInfo;
+                    chat.PeerInfo = new TL.User { id = AdaId, first_name = "Ada", last_name = "Lovelace" };   // a person, as a real chat has
+                    try { Invoke(f, "BuildChatActionMenu", headerMenu, chat, surface); }
+                    finally { chat.PeerInfo = info; }
+                    var texts = headerMenu.Items.Cast<ToolStripItem>().Select(i => i.Text).ToList();
+                    bool callsOk = texts.Contains("Call") && texts.Contains("Video call");
+                    _log.AppendLine("  " + (callsOk ? "PASS  " : "FAIL  ") + "header menu offers Call and Video call (" + string.Join(" | ", texts) + ")");
+                    if (!callsOk) _failures++;
+                }
+                // R6 (accessibility): what a screen reader reads for the header's glyph buttons and the composer, and the chat
+                // rows / bubbles are not Tab stops
+                {
+                    var names = new List<string>();
+                    foreach (var fld in new[] { "_hamburger", "_chatMenuBtn", "_chatSearchBtn", "_dockBtn", "_callBtn", "_sendButton", "_emojiButton", "_attachButton", "_micButton" })
+                    {
+                        var ctl = Field(f, fld) as Control;
+                        names.Add(fld + "=" + (ctl == null ? "(none)" : ctl.AccessibilityObject.Name ?? ""));
+                    }
+                    var input = Field(f, "_messageInput");
+                    var inner = input == null ? null : input.GetType().GetField("Rich").GetValue(input) as Control;   // InputBox.Rich: the EmojiComposer
+                    string composerName = inner != null ? inner.AccessibilityObject.Name : null;
+                    var rows = new List<Control>();
+                    Action<Control> walk = null;
+                    walk = c => { foreach (Control k in c.Controls) { if (k is UI.Controls.ChatListItemControl || k is UI.Controls.MessageBubbleControl) rows.Add(k); walk(k); } };
+                    walk(f);
+                    bool named = names.TrueForAll(n => !n.EndsWith("=") && !n.EndsWith("(none)"));
+                    bool noStops = rows.Count > 0 && rows.TrueForAll(r => !r.TabStop);
+                    _log.AppendLine("  " + (named ? "PASS  " : "FAIL  ") + "R6: the header and composer buttons have names (" + string.Join(", ", names) + ")");
+                    _log.AppendLine("  info  R6: the composer reads as \"" + (composerName ?? "(not found)") + "\"");
+                    _log.AppendLine("  " + (noStops ? "PASS  " : "FAIL  ") + "R6: chat rows and bubbles are not Tab stops (" + rows.Count + " checked)");
+                    if (!named) _failures++;
+                    if (!noStops) _failures++;
+                }
+                // 2026-10-16: a group with a voice chat on - the header's call button becomes the voice chat button (shot) and
+                // the ⋮ menu offers to join; an admin's group without one offers to start one
+                {
+                    var surface = Enum.Parse(typeof(MainForm).GetNestedType("ChatMenuSurface", BindingFlags.NonPublic), "ChatHeader");
+                    var chat = (ChatEntry)Field(f, "_selectedChat");
+                    var info = chat.PeerInfo; var peer = chat.Peer; bool phoneShown = callBtn.Visible;
+                    // the person's chat first: the phone, never the voice chat icon (owner 2026-10-16), even with no PeerInfo
+                    bool personPhone = !(bool)Invoke(f, "IsGroupOrChannel", chat);
+                    _log.AppendLine("  " + (personPhone ? "PASS  " : "FAIL  ") + "a private chat's header button is the phone (PeerInfo " + (chat.PeerInfo == null ? "none" : chat.PeerInfo.GetType().Name) + ")");
+                    if (!personPhone) _failures++;
+                    Capture(f, "keys-call-header");
+                    var club = new TL.Channel { id = 4242, title = "Analytical Engine club", flags = TL.Channel.Flags.megagroup | TL.Channel.Flags.call_active };
+                    chat.PeerInfo = club;
+                    chat.Peer = new TL.InputPeerChannel(4242, 1);
+                    try
+                    {
+                        Func<string> menuTexts = () =>
+                        {
+                            using (var m = new ContextMenuStrip())
+                            {
+                                Invoke(f, "BuildChatActionMenu", m, chat, surface);
+                                return string.Join(" | ", m.Items.Cast<ToolStripItem>().Select(i => i.Text));
+                            }
+                        };
+                        bool voice = !(bool)Invoke(f, "CanCall", chat) && (bool)Invoke(f, "CanVoiceChat", chat) && (bool)Invoke(f, "IsGroupOrChannel", chat);
+                        string joinMenu = menuTexts();
+                        bool joinOk = voice && joinMenu.Contains("Join voice chat") && !joinMenu.Contains("Video call");
+                        _log.AppendLine("  " + (joinOk ? "PASS  " : "FAIL  ") + "a group with a voice chat on: the voice chat button, and the menu offers to join (" + joinMenu + ")");
+                        if (!joinOk) _failures++;
+                        callBtn.Visible = true;
+                        Invoke(f, "PlaceCallButton");
+                        callBtn.Invalidate();
+                        LivePump(300);
+                        Capture(f, "keys-voicechat-header");
+                        club.flags = TL.Channel.Flags.megagroup | TL.Channel.Flags.creator;   // no voice chat; we may start one
+                        string startMenu = menuTexts();
+                        club.flags = TL.Channel.Flags.megagroup;                              // neither: no button, no item
+                        string noneMenu = menuTexts();
+                        bool none = !(bool)Invoke(f, "CanVoiceChat", chat);
+                        bool startOk = startMenu.Contains("Start voice chat") && none && !noneMenu.Contains("voice chat");
+                        _log.AppendLine("  " + (startOk ? "PASS  " : "FAIL  ") + "an admin may start one; a member of a quiet group sees nothing (" + startMenu + ")");
+                        if (!startOk) _failures++;
+                    }
+                    finally { chat.PeerInfo = info; chat.Peer = peer; callBtn.Visible = phoneShown; callBtn.Invalidate(); }
+                }
                 // T20: a venue message — its name, address and an "Open in map" link
                 var venueMsg = new TL.Message
                 {
@@ -935,6 +1441,22 @@ namespace TelegArm.Helpers
 
         /// <summary>A form shot in one line: build it, capture it under <paramref name="name"/>.</summary>
         private static void Shot(string name, Func<Form> make) { WithForm(name, make, f => Capture(f, name)); }
+
+        /// <summary>Icon outlines at 16, 20, 24, 32 and 48 px in the theme's glyph colour (the offline preview before wiring).</summary>
+        private static Form IconSheet(params string[] paths)
+        {
+            var f = new Form { FormBorderStyle = FormBorderStyle.None, ClientSize = new Size(40 + 160 * 1, 30 + paths.Length * 60), BackColor = ThemeHelper.Palette.Window };
+            int[] sizes = { 16, 20, 24, 32, 48 };
+            f.ClientSize = new Size(20 + sizes.Length * 60, 20 + paths.Length * 60);
+            f.Paint += (o, e) =>
+            {
+                for (int r = 0; r < paths.Length; r++)
+                    for (int c = 0; c < sizes.Length; c++)
+                        GroupCallWindow.FillIcon(e.Graphics, paths[r], new RectangleF(10 + c * 60 + (60 - sizes[c]) / 2f, 10 + r * 60 + (60 - sizes[c]) / 2f, sizes[c], sizes[c]),
+                                                 ThemeHelper.Palette.AccentGlyph);
+            };
+            return f;
+        }
 
         /// <summary>A flat 400×400 picture (no file, no network) for the photo viewers.</summary>
         private static Image DemoImage(Color c)

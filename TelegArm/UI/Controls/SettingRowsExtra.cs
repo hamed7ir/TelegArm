@@ -16,6 +16,7 @@ namespace TelegArm.UI.Controls
         public ActionRow(string caption, string actionText = null) : base(caption, true)
         {
             _action = string.IsNullOrEmpty(actionText) ? null : actionText;
+            AccessibleRole = AccessibleRole.PushButton;   // R6
             Refit();
         }
 
@@ -131,6 +132,7 @@ namespace TelegArm.UI.Controls
             _default = dflt;
             _presets = presets;
             _names = names;
+            AccessibleRole = AccessibleRole.RadioButton;   // R6: one of several swatches
             if (follow) _windows = ThemeHelper.ReadWindowsAccent();
             _index = 0;
             if (current.HasValue && !(!follow && current.Value.ToArgb() == dflt.ToArgb()))

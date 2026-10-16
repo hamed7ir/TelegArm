@@ -91,7 +91,8 @@ namespace TelegArm.UI
                 Dpi.ForPopup(new Point(Math.Max(wa.Left, Math.Min(at.X - 1, wa.Right - 1)), Math.Max(wa.Top, Math.Min(at.Y, wa.Bottom - 1)))));
             p.Location = new Point(Math.Max(wa.Left, Math.Min(at.X - p.Width, wa.Right - p.Width)),
                                    Math.Max(wa.Top, Math.Min(at.Y, wa.Bottom - p.Height)));
-            p.Show(this);   // borderless popup; closes on Deactivate/Esc (rows unsubscribe on close)
+            try { p.Show(this); }   // borderless popup; closes on Deactivate/Esc (rows unsubscribe on close)
+            catch (ObjectDisposedException) { Logger.Diag("[DL] the downloads panel closed while it opened"); }   // RT trip 2026-10-16
         }
 
         /// <summary>Bridges a DownloadHandle's completion to an awaitable (resumes on the UI thread).</summary>

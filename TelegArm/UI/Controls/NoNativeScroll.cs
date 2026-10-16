@@ -87,6 +87,22 @@ namespace TelegArm.UI.Controls
             DoubleBuffered = true;
         }
 
+        /// <summary>WS_EX_COMPOSITED, as <see cref="NoNativeScrollFlowPanel.ForceComposited"/> (same AppSettings gate): one
+        /// coherent frame per pan/coast step instead of rows repainting one by one. Settings' pages (RT trip 2026-10-16:
+        /// "the same smooth scrolling as the chat and chat list").</summary>
+        public bool ForceComposited { get; set; }
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                var cp = base.CreateParams;
+                if (ForceComposited && Core.AppSettings.Instance.CompositedScroll)
+                    cp.ExStyle |= 0x02000000;   // WS_EX_COMPOSITED
+                return cp;
+            }
+        }
+
         protected override void WndProc(ref Message m)
         {
             NativeScrollSuppressor.Suppress(this, m.Msg, ref _busy);

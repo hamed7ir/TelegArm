@@ -26,6 +26,19 @@ namespace TelegArm.Core.Calls
         public int SignalBars { get; internal set; } = -1;
         public bool Muted { get; internal set; }
         public bool RemoteMuted { get; internal set; }
+        /// <summary>Our camera is wanted on: sent once the call runs (an incoming video call starts with it on, as
+        /// Telegram Desktop's does; Accept then opens it).</summary>
+        public bool CameraOn { get; internal set; }
+        /// <summary>The camera is opening or switching.</summary>
+        public bool CameraBusy { get; internal set; }
+        /// <summary>The other side's video: 0 off, 1 paused, 2 on (tgcalls' VideoState).</summary>
+        public int RemoteVideo { get; internal set; }
+        /// <summary>Why the camera is not on although it was asked for (no camera, busy, privacy, not connected yet).</summary>
+        public string CameraNote { get; internal set; }
+        public bool CanSwitchCamera { get { var c = Camera; return c != null && c.Cameras != null && c.Cameras.Count > 1; } }
+        /// <summary>Our camera's picture (mirrored) and the other side's, for the call window to paint.</summary>
+        public readonly CallVideoSink LocalVideo = new CallVideoSink();
+        public readonly CallVideoSink RemoteFrames = new CallVideoSink();
         public bool Ended { get { return Phase == CallPhase.Ended; } }
         public int DurationSeconds { get { return EstablishedUtc == null ? 0 : (int)(DateTime.UtcNow - EstablishedUtc.Value).TotalSeconds; } }
 
@@ -33,6 +46,8 @@ namespace TelegArm.Core.Calls
         internal byte[] GA, GAHash, Key;
         internal long Fingerprint;
         internal NativeCall Native;
+        internal CallCamera Camera;
+        internal bool CameraPending;   // opened before the call connected: handed to the instance once it does (V1 needs that)
         internal bool DiscardWhenKnown;
         internal readonly List<byte[]> EarlySignaling = new List<byte[]>();
         internal readonly SemaphoreSlim SendGate = new SemaphoreSlim(1, 1);
@@ -47,6 +62,10 @@ namespace TelegArm.Core.Calls
     /// endpoints (UDP, 16-byte tags) and as "reflector" TURN servers (id = position in the sorted set of their ids + 1,
     /// password = the tag in hex); hanging up sends Missed while it still rings out, Busy for a declined incoming call,
     /// else Hangup. One call at a time: another incoming call is declined as busy.
+    /// Video (2026-10-16): phone.requestCall says "video" only when a camera actually started (tdesktop: f_video iff it
+    /// has a capture); the camera goes into the instance at its start or later (turning it on in a voice call waits for
+    /// the connection, as tdesktop's NotStartedCall); the remote picture and state come from tgcalls; phone.discardCall
+    /// says "video" when either side sent video.
     /// Everything public runs on the UI thread, and every event is raised there.
     /// </summary>
     public sealed class CallManager
@@ -56,6 +75,7 @@ namespace TelegArm.Core.Calls
         private readonly TelegramService _svc;
         private readonly SynchronizationContext _ui;
         private int _dhVersion;
+        private Task _teardown;   // the last call's native stop + camera close (Shutdown waits for it)
         private byte[] _dhP;
         private int _dhG;
 
@@ -75,6 +95,9 @@ namespace TelegArm.Core.Calls
 
         public static bool Available { get { return TgCalls.Available; } }
         public bool Busy { get { return Current != null && !Current.Ended; } }
+        /// <summary>A voice chat is on (set by the window): no 1:1 call meanwhile, and an incoming one is answered busy.</summary>
+        public Func<bool> OtherBusy;
+        private bool InVoiceChat { get { var f = OtherBusy; return f != null && f(); } }
 
         private WTelegram.Client Client { get { return _svc.Client; } }
 
@@ -119,19 +142,23 @@ namespace TelegArm.Core.Calls
         public async Task StartAsync(User user, bool video = false)
         {
             if (Busy) throw new InvalidOperationException("Already in a call.");
+            if (InVoiceChat) throw new InvalidOperationException("Leave the voice chat first.");
             if (!TgCalls.Available) throw new InvalidOperationException("Calls are unavailable here (" + TgCalls.Status + ").");
-            var s = new CallSession { Peer = user, PeerId = user.id, Outgoing = true, Video = video, Phase = CallPhase.Requesting };
+            var s = new CallSession { Peer = user, PeerId = user.id, Outgoing = true, Video = video, CameraOn = video, Phase = CallPhase.Requesting };
             Current = s;
             Raise(s);
             try
             {
+                if (video) await OpenCameraAsync(s);   // the request says "video" only with a camera that works
+                if (s.Ended) return;
+                s.Video = s.Camera != null;
                 var random = await DhRandomAsync();
                 s.Secret = CallCrypto.NewSecret(random);
                 var ga = BigInteger.ModPow(new BigInteger(_dhG), s.Secret, P);
                 if (!CallCrypto.CheckPublic(ga, P)) throw new Exception("g_a out of range");
                 s.GA = CallCrypto.ToBigEndian256(ga);
                 s.GAHash = CallCrypto.Sha256(s.GA);
-                var res = await Client.Phone_RequestCall(new InputUser(user.id, user.access_hash), new Random().Next(), s.GAHash, Protocol(), video);
+                var res = await Client.Phone_RequestCall(new InputUser(user.id, user.access_hash), new Random().Next(), s.GAHash, Protocol(), s.Video);
                 Logger.Diag("[CALL] requested → " + res.phone_call.GetType().Name);
                 await HandleAsync(res.phone_call);
             }
@@ -152,6 +179,8 @@ namespace TelegArm.Core.Calls
             Raise(s);
             try
             {
+                if (s.CameraOn) await OpenCameraAsync(s);   // a camera that will not start leaves an answered voice call
+                if (s.Ended) return;
                 var random = await DhRandomAsync();
                 s.Secret = CallCrypto.NewSecret(random);
                 var gb = BigInteger.ModPow(new BigInteger(_dhG), s.Secret, P);
@@ -185,6 +214,98 @@ namespace TelegArm.Core.Calls
             if (s == null || s.Ended) return;
             s.Muted = muted;
             if (s.Native != null) s.Native.SetMute(muted);
+            Raise(s);
+        }
+
+        // ── video ───────────────────────────────────────────────────────────────────────────────────────────────────
+
+        /// <summary>Turns our camera on or off. On: in a ringing incoming call it only marks it (Accept opens it); during
+        /// a call it opens the camera and sends it - once connected, unless the call was started as a video call.</summary>
+        public async Task SetCameraAsync(bool on)
+        {
+            var s = Current;
+            if (s == null || s.Ended || s.CameraBusy) return;
+            if (!on)
+            {
+                s.CameraOn = false;
+                s.CameraNote = null;
+                s.CameraPending = false;
+                var cam = s.Camera;
+                s.Camera = null;
+                if (s.Native != null) s.Native.SetCamera(IntPtr.Zero);
+                s.CameraBusy = cam != null;   // "Start video" waits until the device is free again
+                Raise(s);
+                if (cam != null) await Task.Run(() => cam.Dispose());
+                s.CameraBusy = false;
+                s.LocalVideo.Clear();         // after the close: the preview callback is gone, no late picture refills it
+                Raise(s);
+                return;
+            }
+            if (s.Phase == CallPhase.Incoming) { s.CameraOn = true; s.CameraNote = null; Raise(s); return; }
+            if (s.EstablishedUtc == null && !(s.Outgoing && s.Video))
+            {
+                s.CameraNote = "You can turn on video once the call is connected.";
+                Raise(s);
+                return;
+            }
+            s.CameraOn = true;
+            await OpenCameraAsync(s);
+            if (s.Camera == null || s.Ended) return;
+            if (s.Native != null && s.EstablishedUtc != null) s.Native.SetCamera(s.Camera.Handle);
+            else if (s.Native != null) s.CameraPending = true;   // still connecting: OnNativeState hands it over (V1 needs that)
+        }
+
+        /// <summary>The other camera (front and back), when there is one.</summary>
+        public async Task SwitchCameraAsync()
+        {
+            var s = Current;
+            if (s == null || s.Ended || s.CameraBusy || !s.CanSwitchCamera) return;
+            s.CameraBusy = true;
+            Raise(s);
+            int r = await s.Camera.SwitchAsync();
+            s.CameraBusy = false;
+            if (r < 0) { await CameraLostAsync(s, s.Camera, "The camera stopped."); return; }
+            s.CameraNote = r > 0 ? null : "The other camera didn't start.";
+            Raise(s);
+        }
+
+        /// <summary>The camera stopped by itself (another app took it, unplugged) or nothing runs after a failed switch: the
+        /// same as Stop video, with a note.</summary>
+        private async Task CameraLostAsync(CallSession s, CallCamera cam, string why)
+        {
+            if (s.Ended || s.Camera != cam || cam == null) return;
+            Logger.Diag("[CALL] camera lost: " + why);
+            await SetCameraAsync(false);
+            if (!s.Ended) { s.CameraNote = why; Raise(s); }
+        }
+
+        private async Task OpenCameraAsync(CallSession s)
+        {
+            if (s.Camera != null || s.CameraBusy) return;
+            s.CameraBusy = true;
+            s.CameraNote = null;
+            s.LocalVideo.Clear();   // no old picture until the new camera's first
+            Raise(s);
+            CallCamera cam = null;
+            string why = null;
+            try { cam = await CallCamera.OpenAsync(s.LocalVideo); }
+            catch (Exception ex) { why = CallCamera.Problem(ex); }
+            s.CameraBusy = false;
+            if (cam != null && (s.Ended || !s.CameraOn)) { var late = cam; cam = null; var t = Task.Run(() => late.Dispose()); }   // hung up meanwhile
+            if (cam == null)
+            {
+                s.CameraOn = false;
+                if (!s.Ended) s.CameraNote = why;
+                if (why != null) Logger.Diag("[CALL] camera: " + why);
+            }
+            else
+            {
+                s.Camera = cam;
+                s.Video = true;
+                var opened = cam;
+                cam.Failed += reason => Post(() => { var t = CameraLostAsync(s, opened, "The camera stopped (" + reason + ")."); });
+                Logger.Diag("[CALL] camera: " + (cam.Current != null ? cam.Current.Name : "?") + " via " + cam.Backend);
+            }
             Raise(s);
         }
 
@@ -244,11 +365,11 @@ namespace TelegArm.Core.Calls
         private async Task OnRequestedAsync(PhoneCallRequested r)
         {
             var input = new InputPhoneCall { id = r.id, access_hash = r.access_hash };
-            if (Busy)
+            if (Busy || InVoiceChat)
             {
-                if (Current.Id == r.id) return;
-                Logger.Diag("[CALL] incoming call while in a call → busy");
-                try { await Client.Phone_DiscardCall(input, 0, new PhoneCallDiscardReasonBusy(), 0, false); } catch { }
+                if (Busy && Current.Id == r.id) return;
+                Logger.Diag("[CALL] incoming call while in a call or voice chat → busy");
+                try { await Client.Phone_DiscardCall(input, 0, new PhoneCallDiscardReasonBusy(), 0, (r.flags & PhoneCallRequested.Flags.video) != 0); } catch { }
                 return;
             }
             User u = null;
@@ -259,6 +380,7 @@ namespace TelegArm.Core.Calls
                 Id = r.id, AccessHash = r.access_hash, Peer = u, PeerId = r.admin_id, Outgoing = false,
                 Video = (r.flags & PhoneCallRequested.Flags.video) != 0, Phase = CallPhase.Incoming, GAHash = r.g_a_hash,
             };
+            s.CameraOn = s.Video;
             Current = s;
             Logger.Diag("[CALL] incoming from " + r.admin_id + (s.Video ? " (video)" : ""));
             Raise(s);
@@ -372,12 +494,17 @@ namespace TelegArm.Core.Calls
             bool p2p = (c.flags & PhoneCall.Flags.p2p_allowed) != 0;
             string custom = c.custom_parameters != null ? c.custom_parameters.data : null;
             Logger.Diag("[CALL] start " + version + " relays=" + endpoints.Count + " servers=" + servers.Count + " p2p=" + p2p);
-            var native = NativeCall.Create(version, s.Key, s.Outgoing, endpoints, servers, p2p, c.protocol.max_layer, custom);
+            var camera = s.CameraOn && s.Camera != null ? s.Camera.Handle : IntPtr.Zero;
+            var native = NativeCall.Create(version, s.Key, s.Outgoing, endpoints, servers, p2p, c.protocol.max_layer, custom,
+                                           camera: camera, wire: n =>
+            {
+                n.StateChanged += st => Post(() => OnNativeState(s, st));
+                n.SignalingEmitted += d => Post(() => { var t = SendSignalingAsync(s, d); });
+                n.SignalBarsChanged += b => Post(() => { if (!s.Ended) { s.SignalBars = b; Raise(s); } });
+                n.RemoteMediaChanged += (a, v) => Post(() => OnRemoteMedia(s, a, v));
+            });
             if (native == null) throw new Exception("version " + version + " is not supported here");
-            native.StateChanged += st => Post(() => OnNativeState(s, st));
-            native.SignalingEmitted += d => Post(() => { var t = SendSignalingAsync(s, d); });
-            native.SignalBarsChanged += b => Post(() => { if (!s.Ended) { s.SignalBars = b; Raise(s); } });
-            native.RemoteMediaChanged += (a, v) => Post(() => { if (!s.Ended) { s.RemoteMuted = a == 0; Raise(s); } });
+            native.SetRemoteVideo(s.RemoteFrames, 960, 960);
             s.Native = native;
             if (s.Muted) native.SetMute(true);
             foreach (var d in s.EarlySignaling) native.ReceiveSignaling(d);
@@ -397,6 +524,20 @@ namespace TelegArm.Core.Calls
             };
         }
 
+        private void OnRemoteMedia(CallSession s, int audio, int video)
+        {
+            if (s.Ended) return;
+            s.RemoteMuted = audio == 0;
+            if (video != s.RemoteVideo)
+            {
+                s.RemoteVideo = video;
+                if (video == 2) s.Video = true;
+                s.RemoteFrames.Clear();   // off or paused: the avatar again (Telegram Desktop treats paused as off); on: no stale picture
+                Logger.Diag("[CALL] remote video " + video);
+            }
+            Raise(s);
+        }
+
         private void OnNativeState(CallSession s, int state)
         {
             if (s.Ended) return;
@@ -405,6 +546,9 @@ namespace TelegArm.Core.Calls
             {
                 s.Phase = CallPhase.Established;
                 if (s.EstablishedUtc == null) s.EstablishedUtc = DateTime.UtcNow;
+                if (s.CameraPending && s.Camera != null && s.Native != null) s.Native.SetCamera(s.Camera.Handle);
+                s.CameraPending = false;
+                s.CameraNote = null;   // "once the call is connected" and the like: it is now
                 Raise(s);
             }
             else if (state == TgCalls.StateReconnecting) { s.Phase = CallPhase.Reconnecting; Raise(s); }
@@ -433,18 +577,49 @@ namespace TelegArm.Core.Calls
             s.EndText = text;
             var native = s.Native;
             s.Native = null;
+            var camera = s.Camera;
+            s.Camera = null;
+            s.CameraPending = false;
             Logger.Diag("[CALL] ended: " + text + " after " + s.DurationSeconds + " s");
             Raise(s);
-            if (native == null) return;
+            // the camera closes at once, beside the call's own stop (the instance keeps its capture until it ends)
+            var closing = camera != null ? Task.Run(() => { try { camera.Dispose(); } catch (Exception ex) { Logger.Diag("[CALL] camera close: " + ex.Message); } })
+                                         : Task.FromResult(0);
+            if (native == null)
+            {
+                _teardown = closing.ContinueWith(_ => { s.LocalVideo.Release(); s.RemoteFrames.Release(); });
+                return;
+            }
             var input = s.Input;
-            Task.Run(async () =>
+            _teardown = Task.Run(async () =>
             {
                 string log = "";
+                try
+                {   // the device's side of the audio, for a trip log: gaps = the speaker ran dry, overruns = mic data lost
+                    var a = native.Stats();
+                    Logger.Diag("[CALL] audio: " + a.FramesRecorded + " mic frames, " + a.FramesRendered + " played, " +
+                                a.PlaybackUnderruns + " speaker gaps, " + a.CaptureOverruns + " mic overruns");
+                }
+                catch { }
                 try { log = native.Stop(5000); } catch (Exception ex) { Logger.Diag("[CALL] stop: " + ex.Message); }
                 try { native.Dispose(); } catch { }
+                try { closing.Wait(6000); } catch { }
+                s.LocalVideo.Release();    // nothing calls back any more: unpin the picture buffers
+                s.RemoteFrames.Release();
                 if (needDebug && !string.IsNullOrEmpty(log))
                     try { await Client.Phone_SaveCallDebug(input, new DataJSON { data = log }); } catch (Exception ex) { Logger.Diag("[CALL] saveCallDebug: " + ex.Message); }
             });
+        }
+
+        /// <summary>The app is closing: hang up a live call (the peer is told; the request is on its way when this returns)
+        /// and wait, bounded, until the call library and the camera have stopped (a live instance at exit is what hung
+        /// the process before tgn_call_destroy drained tgcalls). On the UI thread, before the service goes.</summary>
+        public void Shutdown(int timeoutMs)
+        {
+            var s = Current;
+            if (s != null && !s.Ended) { var t = HangUpAsync(); }
+            var td = _teardown;
+            if (td != null) try { td.Wait(timeoutMs); } catch { }
         }
 
         private static string Friendly(Exception ex, string what)

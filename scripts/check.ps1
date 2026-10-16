@@ -80,6 +80,55 @@ function PaintBodies($files) {
     return $out
 }
 
+# Phase 7 R6 (accessibility): every class declared on "class X : <base>" with its brace-counted body, as objects.
+function ClassBodies($files, [string]$basePattern) {
+    $out = @()
+    foreach ($f in $files) {
+        $lines = [IO.File]::ReadAllLines($f.FullName)
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $m = [regex]::Match(($lines[$i] -replace '//.*$', ''), '\bclass\s+(\w+)\s*:\s*(' + $basePattern + ')\b')
+            if (-not $m.Success) { continue }
+            $depth = 0; $seen = $false; $body = New-Object System.Text.StringBuilder
+            for ($j = $i; $j -lt $lines.Count; $j++) {
+                $code = $lines[$j] -replace '//.*$', ''
+                [void]$body.AppendLine($code)
+                $depth += ([regex]::Matches($code, '\{')).Count - ([regex]::Matches($code, '\}')).Count
+                if ($code -match '\{') { $seen = $true }
+                if ($seen -and $depth -le 0) { break }
+            }
+            $out += [pscustomobject]@{ At = (Rel $f.FullName) + ':' + ($i + 1); Name = $m.Groups[1].Value; Body = $body.ToString() }
+        }
+    }
+    return $out
+}
+
+# Phase 7 R6: "x = new Button / RoundedButton { ... }" initializers (to the matching brace) that show a glyph or nothing and
+# carry no AccessibleName - a screen reader would read the symbol, or nothing.
+function UnnamedGlyphButtons($files) {
+    $out = @()
+    foreach ($f in $files) {
+        $lines = [IO.File]::ReadAllLines($f.FullName)
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            if (($lines[$i] -replace '//.*$', '') -notmatch '=\s*new\s+(Button|RoundedButton|UI\.Controls\.RoundedButton)\s*(\(\s*\))?\s*(\{|$)') { continue }
+            if ($lines[$i] -match 'a11y-ok') { continue }   # waived on its line (e.g. its Text is set later)
+            $text = ''; $depth = 0; $seen = $false
+            for ($j = $i; $j -lt [Math]::Min($lines.Count, $i + 40); $j++) {
+                $code = $lines[$j] -replace '//.*$', ''
+                $text += $code + "`n"
+                $depth += ([regex]::Matches($code, '\{')).Count - ([regex]::Matches($code, '\}')).Count
+                if ($code -match '\{') { $seen = $true }
+                if ($seen -and $depth -le 0) { break }
+                if (-not $seen -and $j -gt $i) { break }   # no initializer
+            }
+            if ($text -match 'AccessibleName\s*=' -or $text -match 'AccessibleRole\s*=\s*AccessibleRole\.None') { continue }
+            $t = [regex]::Match($text, '\bText\s*=\s*"((?:\\.|[^"\\])*)"')
+            $named = $t.Success -and ($t.Groups[1].Value -match '[A-Za-z0-9]')
+            if (-not $named -and $text -notmatch '\bText\s*=\s*[^"\s]') { $out += (Rel $f.FullName) + ':' + ($i + 1) + ': ' + $lines[$i].Trim() }
+        }
+    }
+    return $out
+}
+
 # Phase 2: every file a step has converted off MaterialSkin (append as steps land; step 2.8 then forbids it everywhere).
 $converted = @(
     'UI\ThemedDialog.cs',                                                                    # 2.1
@@ -148,6 +197,16 @@ $gates = @(
         Hits $all 'ColorMath\.Rgb\s*\(\s*\d|ColorMath\.Argb\s*\(\s*\d+\s*,\s*\d' '^(Palette|ColorMath)\.cs$' } }
     @{ From = '5.1'; Name = 'no registry read inside a paint method (read ThemeHelper.Palette)'; Test = {
         @(PaintBodies $all | Where-Object { $_ -match 'Registry\.|GetWindowsAccentColor\s*\(|IsDarkMode\s*\(|ThemeHelper\.IsDark\b' }) } }
+    # Phase 7 R6 (accessibility). Plain Controls are Tab stops by default: one that paints and takes no keys must say so.
+    @{ From = 'always'; Name = 'no accidental Tab stops: a painted plain Control handles keys or sets TabStop / Selectable (R6)'; Test = {
+        @(ClassBodies $ui 'Control|UserControl' | Where-Object { $_.Body -match '\bOnPaint\b|UserPaint' -and $_.Body -notmatch '\b(OnKeyDown|IsInputKey|ProcessCmdKey|TabStop|Selectable)\b|a11y-ok' } |
+          ForEach-Object { $_.At + ': class ' + $_.Name }) } }
+    @{ From = 'always'; Name = 'glyph buttons (no text, or a symbol) carry an AccessibleName (R6)'; Test = { UnnamedGlyphButtons $ui } }
+    @{ From = '7.6'; Name = 'painted controls have a name or role for screen readers (R6)'; Test = {
+        @(ClassBodies $ui 'Control|UserControl|Panel' | Where-Object { $_.Body -match '\bOnPaint\b' -and $_.Body -notmatch 'AccessibleName|AccessibleRole|CreateAccessibilityInstance|a11y-ok' } |
+          ForEach-Object { $_.At + ': class ' + $_.Name }) } }
+    @{ From = '7.6'; Name = 'no SystemColors / HighContrast reads outside the theme layer (R6 high contrast; rule 13b)'; Test = {
+        Hits $all 'SystemInformation\.HighContrast|SystemColors\.' '^(Palette|ThemeHelper|WindowBackdrop)\.cs$' } }
 )
 
 $cur = [version]($Step + '.0')

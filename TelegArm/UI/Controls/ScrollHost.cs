@@ -12,9 +12,10 @@ namespace TelegArm.UI.Controls
     /// </summary>
     public static class ScrollHost
     {
-        public static NoNativeScrollPanel Wrap(Control host, bool dark, Color accent)
+        /// <param name="composited">WS_EX_COMPOSITED, as the chat list and the messages (Settings' pages).</param>
+        public static NoNativeScrollPanel Wrap(Control host, bool dark, Color accent, bool composited = false)
         {
-            var scroll = new NoNativeScrollPanel { Dock = DockStyle.Fill, AutoScroll = true };
+            var scroll = new NoNativeScrollPanel { Dock = DockStyle.Fill, AutoScroll = true, ForceComposited = composited };
             host.Controls.Add(scroll);   // Fill — added first so it docks last and fills the leftover space
             host.Controls.Add(new ThemedScrollBar(scroll, dark, accent) { Dock = DockStyle.Right });
             TouchScroller.Enable(scroll, false);   // finger-pan scrolling (RT touch) for every ScrollHost body (admin forms)

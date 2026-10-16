@@ -2,14 +2,14 @@
 # as the tgcalls handoff requires) against the handoff's static-library packages, and stages the DLL into
 # TelegArm\tgcalls\<ARM|x86>\ (what Core\Calls\TgCalls loads). Windows PowerShell 5.1.
 #
-#   powershell -ExecutionPolicy Bypass -File native\tgcalls_native\build.ps1 [-Arch ARM|x86]
+#   powershell -ExecutionPolicy Bypass -File native\tgcalls_native\build.ps1 [-Arch ARM|x86] [-Full]
 #
 # Inputs (environment variables of the same name override):
 #   RT21     rt2.1's bin (the packaged release: clang-cl sha256 d572c493..., lld-link 6e203038...)
 #   VCTOOLS  MSVC 14.44.35207;  WINSDK  Windows Kits\10 (SDK 10.0.19041.0: headers and the last ARM32 import libraries)
 #   TGCALLS  the extracted packages: <TGCALLS>\arm32\tgcalls-1c236c09-win-arm32 and <TGCALLS>\x86\tgcalls-1c236c09-win-x86
 #            (TGCALLS-HANDOFF-20261016\packages\*.zip, sha256 7709987e... / 2263e6c6...)
-param([ValidateSet('all','ARM','x86')][string]$Arch = 'all')
+param([ValidateSet('all','ARM','x86')][string]$Arch = 'all', [switch]$Full)
 $ErrorActionPreference = 'Stop'
 function Env-Or($name, $default) { $v = [Environment]::GetEnvironmentVariable($name); if ($v) { $v } else { $default } }
 $RT21    = Env-Or 'RT21'    'D:\repo\llvm-rt\dist\rt2.1\stage\rt2.1-23.1.1-rt2.1-arm32-win\bin'
@@ -39,7 +39,8 @@ $defines = 'TGCALLS_USE_STD_OPTIONAL WEBRTC_APP_TDESKTOP RTC_ENABLE_H265 RTC_ENA
 $libs = 'tgcalls.lib tg_owt.lib ssl.lib crypto.lib avformat.lib avcodec.lib swresample.lib swscale.lib avutil.lib ' +
         'opus.lib vpx.lib openh264.lib jpeg-static.lib rnnoise.lib zlibstatic.lib ' +
         'secur32.lib d3d11.lib dxgi.lib dwmapi.lib shcore.lib strmiids.lib winmm.lib ws2_32.lib iphlpapi.lib crypt32.lib ' +
-        'bcrypt.lib ole32.lib oleaut32.lib uuid.lib user32.lib gdi32.lib advapi32.lib shell32.lib shlwapi.lib version.lib avrt.lib'
+        'bcrypt.lib ole32.lib oleaut32.lib uuid.lib user32.lib gdi32.lib advapi32.lib shell32.lib shlwapi.lib version.lib avrt.lib ' +
+        'mfuuid.lib runtimeobject.lib'   # the 8.1 camera sink: Media Foundation GUIDs (static) and WinRT strings; mfplat.dll at run time
 
 $targets = @(
     @{ Name = 'ARM'; Triple = 'armv7-pc-windows-msvc'; Machine = 'arm'; Pkg = (Join-Path $TGC 'arm32\tgcalls-1c236c09-win-arm32') },
@@ -54,15 +55,31 @@ foreach ($t in $targets) {
     New-Item -ItemType Directory -Force $out | Out-Null
     $clArgs = @("--target=$($t.Triple)", '-vctoolsdir', $VCTOOLS, '-winsdkdir', $WINSDK, '-winsdkversion', $SDKVER,
                 '-fuse-ld=lld', '/nologo', '/O2', '/MT', '/GR', '/EHsc', '/std:c++20', '/permissive-', '/Zc:__cplusplus',
-                '/utf-8', '/bigobj', '/D_CRT_SECURE_NO_WARNINGS', '/W1', '/LD')
+                '/utf-8', '/bigobj', '/D_CRT_SECURE_NO_WARNINGS', '/W1')
     foreach ($d in $defines.Split(' ')) { $clArgs += "/D$d" }
     foreach ($i in @('tgcalls', 'tg_owt', 'tg_owt\third_party\abseil-cpp', 'tg_owt\third_party\libyuv\include')) { $clArgs += "/I$(Join-Path $inc $i)" }
-    $clArgs += @("/I$Here", (Join-Path $Here 'tgcalls_native.cpp'), "/Fo$out\tgcalls_native.obj", "/Fe$out\tgcalls_native.dll",
-                 '/link', "/machine:$($t.Machine)", "/libpath:$lib", '/OPT:REF', '/OPT:ICF')
-    $clArgs += $libs.Split(' ')
+    $clArgs += "/I$Here"
+    # Incremental (each file costs minutes on the tgcalls headers): a source is compiled again only when it, one of our
+    # headers or this script is newer than its object; -Full rebuilds all.
+    $newest = @((Get-ChildItem $Here -Filter '*.h') + (Get-Item $MyInvocation.MyCommand.Path) | ForEach-Object { $_.LastWriteTimeUtc }) | Sort-Object | Select-Object -Last 1
+    $objs = @()
     Write-Host "== $($t.Name): clang-cl $($t.Triple) + lld-link"
-    & $clang @clArgs
-    if ($LASTEXITCODE -ne 0) { throw "tgcalls_native $($t.Name) failed ($LASTEXITCODE)" }
+    foreach ($src in @('tgcalls_native.cpp', 'tgcalls_video.cpp', 'tgcalls_camsink.cpp', 'tgcalls_group.cpp')) {
+        $obj = Join-Path $out ([IO.Path]::ChangeExtension($src, '.obj'))
+        $objs += $obj
+        $srcFile = Get-Item (Join-Path $Here $src)
+        if (-not $Full -and (Test-Path $obj)) {
+            $objTime = (Get-Item $obj).LastWriteTimeUtc
+            if ($objTime -gt $srcFile.LastWriteTimeUtc -and $objTime -gt $newest) { Write-Host "   up to date: $src"; continue }
+        }
+        Write-Host "   compiling: $src"
+        & $clang @clArgs '/c' $srcFile.FullName "/Fo$obj"
+        if ($LASTEXITCODE -ne 0) { throw "tgcalls_native $($t.Name): $src failed ($LASTEXITCODE)" }
+    }
+    $linkArgs = @("--target=$($t.Triple)", '-vctoolsdir', $VCTOOLS, '-winsdkdir', $WINSDK, '-winsdkversion', $SDKVER, '-fuse-ld=lld', '/nologo', '/MT', '/LD') +
+                $objs + @("/Fe$out\tgcalls_native.dll", '/link', "/machine:$($t.Machine)", "/libpath:$lib", '/OPT:REF', '/OPT:ICF') + $libs.Split(' ')
+    & $clang @linkArgs
+    if ($LASTEXITCODE -ne 0) { throw "tgcalls_native $($t.Name) link failed ($LASTEXITCODE)" }
     $stage = Join-Path $Repo ("TelegArm\tgcalls\" + $t.Name)
     New-Item -ItemType Directory -Force $stage | Out-Null
     Copy-Item (Join-Path $out 'tgcalls_native.dll') $stage -Force

@@ -307,6 +307,7 @@ namespace TelegArm.UI
             if (t.Contains("save") || t.Contains("download")) return "💾";
             if (t.Contains("report"))                   return "⚠️";
             if (t.Contains("revoke") || t.Contains("ban") || t.Contains("block")) return "🚫";
+            if (t.EndsWith("voice chat"))               return "🎙️";   // Join / Start voice chat
             if (t.Contains("unmute"))                   return "🔔";
             if (t.Contains("mute"))                     return "🔕";
             if (t.Contains("unarchive") || t.Contains("archive")) return "🗄️";
@@ -316,6 +317,7 @@ namespace TelegArm.UI
             if (t.Contains("reveal") || t.Contains("folder")) return "📁";
             if (t.Contains("photo") || t.Contains("image") || t.Contains("file")) return "▣";
             if (t.Contains("round video") || t.Contains("video")) return "🎥";
+            if (t == "call" || t.EndsWith(" call"))     return "📞";   // the chat header's call items ("Video call" is above)
             if (t.Contains("poll"))                     return "📊";
             if (t.Contains("react"))                    return "😊";
             if (t.Contains("open"))                     return "📂";

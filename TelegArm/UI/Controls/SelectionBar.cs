@@ -46,6 +46,7 @@ namespace TelegArm.UI.Controls
 
         public SelectionBar()
         {
+            TabStop = false;   // R6: no key handling here, so not a Tab stop (TabStop only: Selectable stays, for the touch keyboard)
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer
                      | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
             BackColor = BarColor;
@@ -161,6 +162,7 @@ namespace TelegArm.UI.Controls
 
         public RecordingBar()
         {
+            TabStop = false;   // R6: no key handling here, so not a Tab stop (TabStop only: Selectable stays, for the touch keyboard)
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer
                      | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
             BackColor = BgColor;

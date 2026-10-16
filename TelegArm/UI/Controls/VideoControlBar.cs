@@ -54,6 +54,7 @@ namespace TelegArm.UI.Controls
 
         public VideoControlBar(VideoPlayerControl video)
         {
+            TabStop = false;   // R6: no key handling here, so not a Tab stop (TabStop only: Selectable stays, for the touch keyboard)
             _video = video;
             Cursor = Cursors.Hand;
             BackColor = BarColor;

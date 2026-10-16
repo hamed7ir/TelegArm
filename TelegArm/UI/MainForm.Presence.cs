@@ -233,7 +233,8 @@ namespace TelegArm.UI
             var g = e.Graphics;
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             var p = (Panel)sender;
-            g.Clear(p.BackColor);   // blend with the header's theme background
+            if (!WindowBackdrop.Enabled) g.Clear(p.BackColor);   // blend with the header's theme background (with the backdrop on, the
+                                                                 // handler before this one drew it: clearing here hid it - owner 2026-10-16)
             if (_headerAvatarPeerId == 0) return;   // empty state (no chat) → just the background
             int d = Px(40);   // step 3.4: logical diameter at the window's DPI
             var rect = new Rectangle((p.Width - d) / 2, (p.Height - d) / 2, d, d);

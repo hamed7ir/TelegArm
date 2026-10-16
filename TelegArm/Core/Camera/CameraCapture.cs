@@ -35,6 +35,17 @@ namespace TelegArm.Core.Camera
             }
         }
 
+        /// <summary>Does this Windows have MediaFrameReader (Windows 10 1607+)? The call camera's test (it needs no FFmpeg):
+        /// by name, as above.</summary>
+        public static bool FrameReaderPresent
+        {
+            get
+            {
+                try { return Type.GetType("Windows.Media.Capture.Frames.MediaFrameReader, Windows, ContentType=WindowsRuntime") != null; }
+                catch { return false; }
+            }
+        }
+
         /// <summary>Creates a ready recorder using the selected/cached backend, or null if none works.</summary>
         public static async Task<ICameraRecorder> CreateAsync()
         {

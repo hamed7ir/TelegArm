@@ -37,6 +37,7 @@ namespace TelegArm.UI.Controls
 
         public TitleBar()
         {
+            TabStop = false;   // R6: no key handling here, so not a Tab stop (TabStop only: Selectable stays, for the touch keyboard)
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             AccessibleRole = AccessibleRole.TitleBar;
             _left.Click += (s, e) => { var h = LeftClick; if (h != null) h(this, EventArgs.Empty); };

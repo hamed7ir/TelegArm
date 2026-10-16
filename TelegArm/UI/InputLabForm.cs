@@ -260,6 +260,14 @@ namespace TelegArm.UI
             check(c.Text == "q", "composer: typing replaces a selection", "'" + c.Text + "'");
             c.Text = ""; type("\u0633\u0644\u0627\u0645 \u2764\uFE0F");
             check(c.Text == "\u0633\u0644\u0627\u0645 \u2764\uFE0F" && c.SelectionStart == c.Text.Length, "composer: Persian and a BMP emoji, caret at the end", "len " + c.Text.Length + " caret " + c.SelectionStart);
+            // R4: the arrows are visual - in a Persian line Right goes back in the text, Left goes on; Latin unchanged
+            c.Text = "سلام"; c.SelectionStart = 2;
+            key(Keys.Right, false); int rtlRight = c.SelectionStart;
+            key(Keys.Left, false); key(Keys.Left, false); int rtlLeft = c.SelectionStart;
+            c.Text = "abcd"; c.SelectionStart = 2;
+            key(Keys.Right, false); int ltrRight = c.SelectionStart;
+            check(rtlRight == 1 && rtlLeft == 3 && ltrRight == 3, "composer: arrows are visual in a right-to-left line (and unchanged in Latin)",
+                  "RTL 2 -> Right " + rtlRight + " -> Left x2 " + rtlLeft + "; LTR 2 -> Right " + ltrRight);
             c.Text = "Hello \U0001F600 x";
             check(true, "composer layout (info)", c.DebugFirstLine());
             int fired = 0;

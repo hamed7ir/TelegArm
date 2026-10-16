@@ -20,6 +20,7 @@ namespace TelegArm.Core.Calls
         private readonly TgCalls.MediaCallback _media;
         private readonly object _gate = new object();
         private bool _stopped;
+        private CallVideoSink _remote;   // its delegate must outlive the native side's use of it (cleared at stop)
 
         public event Action<int> StateChanged;
         public event Action<byte[]> SignalingEmitted;
@@ -44,13 +45,17 @@ namespace TelegArm.Core.Calls
             };
         }
 
-        /// <summary>Starts the call (tgcalls connects at once). Null when this version has no implementation.</summary>
+        /// <summary>Starts the call (tgcalls connects at once). Null when this version has no implementation.
+        /// <paramref name="wire"/> subscribes the events BEFORE the instance starts (its first state or signaling packet can
+        /// come at once); <paramref name="camera"/> is a tgn_camera to send from the start (a video call) or zero.</summary>
         public static NativeCall Create(string version, byte[] key, bool outgoing, IList<TgCalls.Endpoint> endpoints,
                                         IList<TgCalls.RtcServer> servers, bool p2p, int maxLayer, string customParameters,
-                                        int audioMode = TgCalls.AudioDevices, int toneHz = 0)
+                                        int audioMode = TgCalls.AudioDevices, int toneHz = 0, IntPtr camera = default(IntPtr),
+                                        Action<NativeCall> wire = null)
         {
             if (!TgCalls.Available || key == null || key.Length != 256) return null;
             var call = new NativeCall();
+            if (wire != null) wire(call);
             var allocs = new List<IntPtr>();
             Func<byte[], IntPtr> pin = bytes => { var p = Marshal.AllocHGlobal(bytes.Length); Marshal.Copy(bytes, 0, p, bytes.Length); allocs.Add(p); return p; };
             Func<string, IntPtr> utf8 = s => s == null ? IntPtr.Zero : pin(Encoding.UTF8.GetBytes(s + "\0"));
@@ -66,6 +71,7 @@ namespace TelegArm.Core.Calls
                     CustomParameters = utf8(customParameters),
                     AudioMode = audioMode,
                     TestToneHz = toneHz,
+                    Camera = camera,
                 };
                 if (endpoints != null && endpoints.Count > 0)
                 {
@@ -106,6 +112,30 @@ namespace TelegArm.Core.Calls
             lock (_gate) if (_h != IntPtr.Zero && !_stopped) TgCalls.tgn_call_set_mute(_h, mute ? 1 : 0);
         }
 
+        /// <summary>Starts (a tgn_camera) or stops (zero) sending video.</summary>
+        public void SetCamera(IntPtr camera)
+        {
+            lock (_gate) if (_h != IntPtr.Zero && !_stopped) TgCalls.tgn_call_set_camera(_h, camera);
+        }
+
+        /// <summary>The remote video into <paramref name="sink"/> (rotated upright, fitted in maxW x maxH); null stops it.</summary>
+        public void SetRemoteVideo(CallVideoSink sink, int maxW, int maxH)
+        {
+            lock (_gate)
+            {
+                if (_h == IntPtr.Zero || _stopped) return;
+                _remote = sink;
+                TgCalls.tgn_call_set_remote_video(_h, sink != null ? sink.Callback : null, IntPtr.Zero, maxW, maxH);
+            }
+        }
+
+        public TgCalls.VideoStats VideoStats()
+        {
+            TgCalls.VideoStats s;
+            lock (_gate) { if (_h == IntPtr.Zero) return default(TgCalls.VideoStats); TgCalls.tgn_call_video_stats(_h, out s); }
+            return s;
+        }
+
         public TgCalls.AudioStats Stats()
         {
             TgCalls.AudioStats s;
@@ -129,6 +159,7 @@ namespace TelegArm.Core.Calls
             lock (_gate) { h = _h; _h = IntPtr.Zero; _stopped = true; }
             if (h != IntPtr.Zero) TgCalls.tgn_call_destroy(h);   // stops first if it has not been
             GC.KeepAlive(_state); GC.KeepAlive(_signal); GC.KeepAlive(_bars); GC.KeepAlive(_level); GC.KeepAlive(_media); GC.KeepAlive(_battery);
+            GC.KeepAlive(_remote);
         }
     }
 }

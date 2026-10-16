@@ -83,8 +83,16 @@ namespace TelegArm.UI.Controls
         public string Hint
         {
             get { return _inner.Cue; }
-            set { _inner.Cue = value ?? ""; _inner.InvalidateCue(); AccessibleDescription = value; }
+            set
+            {
+                _inner.Cue = value ?? ""; _inner.InvalidateCue(); AccessibleDescription = value;
+                // R6: the EDIT (the tab stop a screen reader lands on) is named by its hint unless the caller named it
+                // (a managed property: no window style is touched)
+                if (string.IsNullOrEmpty(_inner.AccessibleName) || _inner.AccessibleName == _autoName) { _autoName = value ?? ""; _inner.AccessibleName = _autoName; }
+            }
         }
+
+        private string _autoName = "";
 
         public int SelectionStart { get { return _inner.SelectionStart; } set { _inner.SelectionStart = value; } }
         public int SelectionLength { get { return _inner.SelectionLength; } set { _inner.SelectionLength = value; } }

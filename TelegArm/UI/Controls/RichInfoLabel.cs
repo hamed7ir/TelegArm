@@ -43,6 +43,7 @@ namespace TelegArm.UI.Controls
         /// <param name="font">The base font, normally a shared pixel-unit font at the host window's DPI. Never disposed here.</param>
         public RichInfoLabel(bool dark, Color accent, Font font)
         {
+            TabStop = false;   // R6: no key handling here, so not a Tab stop (TabStop only: Selectable stays, for the touch keyboard)
             _dark = dark; _accent = accent;
             _fg = ThemeHelper.PaletteFor(dark).InfoLabelText;
             _link = accent;

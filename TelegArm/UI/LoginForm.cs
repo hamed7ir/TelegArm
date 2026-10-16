@@ -166,7 +166,7 @@ namespace TelegArm.UI
             Content.Controls.Add(_qrToggleLink); Content.Controls.Add(_phoneToggleLink); Content.Controls.Add(_resendLink);
 
             // ── Shared filled-accent action button + status ──
-            _submitButton = new RoundedButton { Width = Px(300), Height = Px(48), Kind = RoundedButtonKind.Primary, Modern = true, Font = FontHelper.UiAt(12.5f, dpi, FontStyle.Bold) };
+            _submitButton = new RoundedButton { Width = Px(300), Height = Px(48), Kind = RoundedButtonKind.Primary, Modern = true, Font = FontHelper.UiAt(12.5f, dpi, FontStyle.Bold) };   // a11y-ok: its Text is set per step
             _submitButton.Click += OnSubmitClick;
             _statusLabel = new Label { Width = Px(420), Height = Px(40), Font = TextRoles.Font(TextRole.Field, dpi), TextAlign = ContentAlignment.TopCenter };
             Content.Controls.Add(_submitButton); Content.Controls.Add(_statusLabel);

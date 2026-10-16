@@ -250,7 +250,14 @@ namespace TelegArm.UI
             ShowColumn(false);   // one column: the chat comes to the front (before its history loads, at its final width)
             if (_chatSearchBtn != null) _chatSearchBtn.Visible = true;   // INCHAT-SEARCH: the header magnifier appears with an open chat
             if (_chatMenuBtn != null) _chatMenuBtn.Visible = true;        // TA-21/S1a: the ⋮ appears with it
-            if (_callBtn != null) { _callBtn.Visible = CanCall(entry); PlaceCallButton(); }   // 2026-10-16: the phone, for a person
+            if (_callBtn != null)   // 2026-10-16: the phone, for a person; a group's or channel's voice chat (MainForm.GroupCalls)
+            {
+                bool person = CanCall(entry);
+                _callBtn.Visible = person || CanVoiceChat(entry);
+                _callBtn.AccessibleName = IsGroupOrChannel(entry) ? "Voice chat" : "Call";
+                _callBtn.Invalidate();
+                PlaceCallButton();
+            }
             if (_dockBtn != null) _dockBtn.Visible = true;                // TA-23/D1c: …and the dock toggle
             // TA-24: re-target the Info pane at the newly-opened chat, but only if it is actually on screen
             // — building it runs ProfileForm.LoadDetails, i.e. network, and a closed dock must not pay that.

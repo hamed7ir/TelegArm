@@ -21,8 +21,11 @@
 #include "tgcalls/Instance.h"
 #include "tgcalls/FakeAudioDeviceModule.h"
 #include "tgcalls/StaticThreads.h"
+#include "rtc_base/thread.h"
 
 #include "tgcalls_native.h"
+#include "tgcalls_internal.h"
+#include "tgcalls_audio.h"
 
 // As tdesktop (calls_call.cpp): the implementation headers are not public; declare the classes for Register<>.
 namespace tgcalls {
@@ -33,10 +36,11 @@ class InstanceV2ReferenceImpl;
 
 namespace {
 
-constexpr int kVersionMajor = 1, kVersionMinor = 0;
+constexpr int kVersionMajor = 1, kVersionMinor = 2;   // 1.1: video; 1.2: group calls
 constexpr int kRate = 48000;           // the call's audio: 48 kHz mono, 10 ms frames
 constexpr int kChannels = 1;
 constexpr int kFrame = kRate / 100;
+constexpr int kPlayReserveMs = 40;   // what the renderer keeps queued ahead of the speaker, besides WinMM's 60 ms
 
 // ── logging ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 std::mutex g_logMutex;
@@ -85,6 +89,49 @@ class Ring {
   std::vector<int16_t> buf_;
   size_t r_ = 0, w_ = 0, count_ = 0;
 };
+
+// ── audio threads: priority and a fine timer ─────────────────────────────────────────────────────────────────────────
+// RT trip 2026-10-16: the other side's voice came out choppy and late on the Surface (video on). Two causes:
+//  * tgcalls' FakeAudioDeviceModule paces its loops with std::this_thread::sleep_for, which Windows rounds up to the
+//    system timer tick - 15.6 ms unless some program raised it (an idle RT has not): the renderer's 2-10 ms waits became
+//    16 ms and the speaker ran dry. So its loops run on OUR threads (Options.scheduler_) with a 1 ms timer
+//    (timeBeginPeriod, held while they run);
+//  * VP8 encoding and decoding load the Tegra: the audio threads get audio priority (MMCSS "Pro Audio" when avrt.dll is
+//    there, else TIME_CRITICAL), as every voice app's do.
+class AudioPriority {
+ public:
+  AudioPriority() {
+    static auto set = (HANDLE(WINAPI *)(LPCWSTR, LPDWORD))GetProcAddress(LoadLibraryW(L"avrt.dll"), "AvSetMmThreadCharacteristicsW");
+    DWORD index = 0;
+    if (set) h_ = set(L"Pro Audio", &index);
+    if (!h_) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+  }
+  ~AudioPriority() {
+    static auto revert = (BOOL(WINAPI *)(HANDLE))GetProcAddress(LoadLibraryW(L"avrt.dll"), "AvRevertMmThreadCharacteristics");
+    if (h_ && revert) revert(h_);
+  }
+
+ private:
+  HANDLE h_ = nullptr;
+};
+
+class FineTimer {   // the 1 ms system timer while this lives (reference-counted by Windows)
+ public:
+  FineTimer() { timeBeginPeriod(1); }
+  ~FineTimer() { timeEndPeriod(1); }
+};
+
+void AudioScheduler(tgcalls::FakeAudioDeviceModule::Task task) {
+  std::thread([task = std::move(task)]() mutable {
+    AudioPriority priority;
+    FineTimer timer;
+    while (true) {
+      double wait = task();   // seconds; negative = stop
+      if (wait < 0) return;
+      if (wait > 0) std::this_thread::sleep_for(std::chrono::microseconds((int64_t)(wait * 1000000.0)));
+    }
+  }).detach();
+}
 
 WAVEFORMATEX Format() {
   WAVEFORMATEX f = {};
@@ -137,6 +184,7 @@ class WinmmCapture {
  private:
   static constexpr int kBuffers = 4;
   void Loop() {
+    AudioPriority priority;
     while (!stop_) {
       WaitForSingleObject(ev_, 100);
       for (int i = 0; i < kBuffers && !stop_; ++i) {
@@ -158,7 +206,11 @@ class WinmmCapture {
   std::atomic<bool> stop_{false};
 };
 
-// ── WinMM playback: 4 x 20 ms buffers fed from a ring (silence when it runs dry) ─────────────────────────────────────
+// ── WinMM playback: 3 x 20 ms buffers fed from a ring (silence when it runs dry) ─────────────────────────────────────
+// The device starts once the ring holds a reserve (no burst of silence first); a buffer coming back finds the ring above
+// one buffer because the renderer keeps it at kPlayReserveMs (RenderWaitUs), independent of what WinMM holds. (It was
+// "60 ms ahead INCLUDING WinMM's 80 ms": WinMM alone was above that, so the ring stayed short and every buffer was part
+// silence - the choppy voice of the RT trip.)
 class WinmmPlayback {
  public:
   WinmmPlayback(Ring &ring, std::atomic<int> &underruns) : ring_(ring), underruns_(underruns) {}
@@ -194,24 +246,30 @@ class WinmmPlayback {
     CloseHandle(ev_);
     ev_ = nullptr;
   }
-  // Samples written to the device and not yet played (the renderer's pacing adds the ring to this).
+  // Samples written to the device and not yet played.
   size_t Queued() const { return queued_.load(); }
 
  private:
-  static constexpr int kBuffers = 4;
+  static constexpr int kBuffers = 3;
   void Loop() {
+    AudioPriority priority;
+    FineTimer timer;
+    const size_t reserve = (size_t)kRate * kPlayReserveMs / 1000;
+    while (!stop_ && !started_) {   // the first buffers go out together, once a reserve has built up
+      if (ring_.Size() >= reserve) { started_ = true; break; }
+      Sleep(2);
+    }
     while (!stop_) {
       WaitForSingleObject(ev_, 50);
       for (int i = 0; i < kBuffers && !stop_; ++i) {
         if (!(hdr_[i].dwFlags & WHDR_DONE)) continue;
         if (hdr_[i].dwUser) queued_ -= (size_t)hdr_[i].dwUser;
         size_t want = bufs_[i].size();
+        for (int grace = 0; grace < 3 && ring_.Size() < want; ++grace) Sleep(1);   // the renderer may be a frame late
         size_t got = ring_.Pop(bufs_[i].data(), want);
         if (got < want) {
           std::fill(bufs_[i].begin() + got, bufs_[i].end(), (int16_t)0);
-          if (started_) underruns_++;
-        } else {
-          started_ = true;
+          underruns_++;
         }
         hdr_[i].dwFlags &= ~WHDR_DONE;
         hdr_[i].dwUser = want;
@@ -229,15 +287,19 @@ class WinmmPlayback {
   std::thread thread_;
   std::atomic<bool> stop_{false};
   std::atomic<size_t> queued_{0};
-  bool started_ = false;
+  std::atomic<bool> started_{false};
 };
 
 // ── the call's audio: one object is both the recorder and the renderer FakeAudioDeviceModule drives ─────────────────
 class CallAudio : public std::enable_shared_from_this<CallAudio> {
  public:
-  CallAudio(int mode, int toneHz)
+  CallAudio(int mode, int toneHz, bool micAllowed = true)
       : mode_(mode), toneHz_(toneHz), capRing_(kRate / 2), playRing_(kRate / 2), frame_(kFrame * kChannels),
-        capture_(capRing_, overruns_), playback_(playRing_, underruns_) {}
+        capture_(capRing_, overruns_), playback_(playRing_, underruns_), micAllowed_(micAllowed) {}
+
+  // A group call is joined muted and tgcalls polls the recorder from the start: until the first unmute the microphone
+  // stays closed (no Windows "in use" mark, no WinMM capture) - the recorder just says "nothing yet".
+  void SetMicAllowed(bool allowed) { micAllowed_ = allowed; }
   ~CallAudio() {
     capture_.Stop();
     playback_.Stop();
@@ -252,7 +314,7 @@ class CallAudio : public std::enable_shared_from_this<CallAudio> {
     f.samples_per_sec = kRate;
     f.elapsed_time_ms = -1;
     f.ntp_time_ms = -1;
-    if (mode_ == TGN_AUDIO_TEST) {
+    if (mode_ == TGN_AUDIO_TEST || mode_ == TGN_AUDIO_SPEAKER_TEST) {
       for (int i = 0; i < kFrame; ++i)
         frame_[i] = (int16_t)(8000.0 * std::sin(2.0 * 3.141592653589793 * toneHz_ * (double)(phase_++) / kRate));
       f.audio_samples = frame_.data();
@@ -260,6 +322,7 @@ class CallAudio : public std::enable_shared_from_this<CallAudio> {
       recorded_++;
       return f;
     }
+    if (!micAllowed_) { f.num_samples = 0; return f; }
     if (!capStarted_) { capStarted_ = true; capture_.Start(); }
     if (capRing_.Size() < frame_.size()) { f.num_samples = 0; return f; }
     capRing_.Pop(frame_.data(), frame_.size());
@@ -269,7 +332,8 @@ class CallAudio : public std::enable_shared_from_this<CallAudio> {
     return f;
   }
   int32_t RecordWaitUs() {
-    if (mode_ == TGN_AUDIO_TEST) return Deadline(recNext_);
+    if (mode_ == TGN_AUDIO_TEST || mode_ == TGN_AUDIO_SPEAKER_TEST) return Deadline(recNext_);
+    if (!micAllowed_) return 10000;
     return capRing_.Size() >= frame_.size() ? 0 : 2000;
   }
 
@@ -296,19 +360,23 @@ class CallAudio : public std::enable_shared_from_this<CallAudio> {
     }
     if (mode_ == TGN_AUDIO_TEST) return true;
     if (!playStarted_) { playStarted_ = true; playback_.Start(); }
-    if (f.num_channels == 1) playRing_.Push(s, f.num_samples);
-    else {
-      std::vector<int16_t> mono(f.num_samples);
-      for (size_t i = 0; i < f.num_samples; ++i) mono[i] = s[i * f.num_channels];
-      playRing_.Push(mono.data(), mono.size());
+    std::vector<int16_t> &mono = mono_;
+    mono.resize(f.num_samples);
+    for (size_t i = 0; i < f.num_samples; ++i) {
+      int v = s[i * f.num_channels];
+      if (mode_ == TGN_AUDIO_SPEAKER_TEST) v /= 10;   // the speaker self-test: quietly
+      mono[i] = (int16_t)v;
     }
+    playRing_.Push(mono.data(), mono.size());
     return true;
   }
+  // The ring alone sets the pace: below the reserve, at once; above it, a wait for the excess (at most 10 ms), so the
+  // speaker's own clock pulls the call's audio.
   int32_t RenderWaitUs() {
     if (mode_ == TGN_AUDIO_TEST) return Deadline(renNext_);
-    size_t ahead = playRing_.Size() + playback_.Queued();
-    const size_t target = kRate * 60 / 1000;
-    return ahead > target ? (int32_t)((ahead - target) * 1000000LL / kRate) : 0;
+    const size_t ring = playRing_.Size(), reserve = (size_t)kRate * kPlayReserveMs / 1000;
+    if (ring < reserve) return 0;
+    return (int32_t)std::min<int64_t>(10000, (int64_t)(ring - reserve) * 1000000LL / kRate + 1000);
   }
 
   void Stats(tgn_audio_stats *o) {
@@ -345,6 +413,8 @@ class CallAudio : public std::enable_shared_from_this<CallAudio> {
   int16_t lastSample_ = 0;
   int64_t crossingsTotal_ = 0, samplesAudible_ = 0;
   int rmsLast_ = 0;
+  std::vector<int16_t> mono_;
+  std::atomic<bool> micAllowed_;
 };
 
 class RecorderAdapter final : public tgcalls::FakeAudioDeviceModule::Recorder {
@@ -397,12 +467,56 @@ void CopyOut(const std::string &s, char *buf, int len) {
 
 }  // namespace
 
+namespace tgn {
+void Log(const std::string &line) { ::Log(line); }
+void EnsureInit() { ::EnsureInit(); }
+
+// tgcalls tears an instance (and a video capture) down by POSTING tasks to its threads (ThreadLocalObject). Left queued
+// until the process exits, they run inside the static threads' destructors after ExitProcess has killed the threads they
+// BlockingCall into, and the process never ends (measured: V1 calls, 2.7.7 / 5.0.0, hung 3 exits of 4). So finish them
+// now, while every thread is alive: an empty blocking call on each thread waits for everything posted before it.
+void Drain(rtc::Thread *own) {
+  auto threads = tgcalls::StaticThreads::getThreads();
+  for (int round = 0; round < 2; ++round) {   // a teardown may post on to another thread: twice round covers that
+    if (own) own->BlockingCall([] {});
+    threads->getMediaThread()->BlockingCall([] {});
+    threads->getNetworkThread()->BlockingCall([] {});
+    threads->getWorkerThread()->BlockingCall([] {});
+  }
+}
+
+std::shared_ptr<void> MakeCallAudio(int mode, int toneHz, bool micAllowed) {
+  return std::make_shared<CallAudio>(mode, toneHz > 0 ? toneHz : 440, micAllowed);
+}
+
+std::function<webrtc::scoped_refptr<webrtc::AudioDeviceModule>(webrtc::TaskQueueFactory *)> AudioDeviceCreator(
+    const std::shared_ptr<void> &audio) {
+  auto a = std::static_pointer_cast<CallAudio>(audio);
+  tgcalls::FakeAudioDeviceModule::Options options;
+  options.samples_per_sec = kRate;
+  options.num_channels = kChannels;
+  options.scheduler_ = AudioScheduler;
+  return tgcalls::FakeAudioDeviceModule::Creator(std::make_shared<RendererAdapter>(a), std::make_shared<RecorderAdapter>(a), options);
+}
+
+void SetMicAllowed(const std::shared_ptr<void> &audio, bool allowed) {
+  if (audio) std::static_pointer_cast<CallAudio>(audio)->SetMicAllowed(allowed);
+}
+
+void AudioStatsOf(const std::shared_ptr<void> &audio, tgn_audio_stats *out) {
+  std::memset(out, 0, sizeof(*out));
+  if (audio) std::static_pointer_cast<CallAudio>(audio)->Stats(out);
+}
+}  // namespace tgn
+
 // ── the call ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 struct tgn_call {
   std::unique_ptr<tgcalls::Instance> instance;
   std::shared_ptr<CallAudio> audio;
+  std::shared_ptr<tgn::RemoteVideo> remote = tgn::MakeRemoteVideo();   // tgcalls holds it weakly
   tgn_callbacks cb = {};
   std::atomic<bool> alive{true};   // false once stopping: late callbacks are dropped
+  std::atomic<rtc::Thread *> own{nullptr};   // the thread tgcalls calls us on (V1: its own "WebRTC-Manager"), for Drain
   bool stopped = false;
 };
 
@@ -486,7 +600,7 @@ TGN_API tgn_call *TGN_CALL tgn_call_create(const tgn_call_params *p, const tgn_c
     config.enableP2P = p->enable_p2p != 0;
     config.allowTCP = p->allow_tcp != 0;
     // The test tone is a steady sine: exactly what noise suppression removes. Real calls get the full processing.
-    const bool processing = p->audio_mode != TGN_AUDIO_TEST;
+    const bool processing = p->audio_mode == TGN_AUDIO_DEVICES;
     config.enableAEC = processing;
     config.enableNS = processing;
     config.enableAGC = processing;
@@ -500,6 +614,7 @@ TGN_API tgn_call *TGN_CALL tgn_call_create(const tgn_call_params *p, const tgn_c
     tgcalls::FakeAudioDeviceModule::Options options;
     options.samples_per_sec = kRate;
     options.num_channels = kChannels;
+    options.scheduler_ = AudioScheduler;   // our threads: audio priority, a 1 ms timer (see AudioScheduler)
 
     tgcalls::Descriptor d{
         .version = p->version,
@@ -508,7 +623,9 @@ TGN_API tgn_call *TGN_CALL tgn_call_create(const tgn_call_params *p, const tgn_c
         .rtcServers = std::move(servers),
         .initialNetworkType = tgcalls::NetworkType::WiFi,
         .encryptionKey = tgcalls::EncryptionKey(key, p->is_outgoing != 0),
+        .videoCapture = tgn::CaptureOf(p->camera),   // a video call sends from the start (V2 offers it at once)
         .stateUpdated = [raw](tgcalls::State s) {
+          if (!raw->own.load()) raw->own = rtc::Thread::Current();
           if (raw->alive && raw->cb.state) raw->cb.state(raw->cb.user, (int32_t)s);
         },
         .signalBarsUpdated = [raw](int bars) {
@@ -524,6 +641,7 @@ TGN_API tgn_call *TGN_CALL tgn_call_create(const tgn_call_params *p, const tgn_c
           if (raw->alive && raw->cb.remote_media) raw->cb.remote_media(raw->cb.user, (int32_t)a, (int32_t)v);
         },
         .signalingDataEmitted = [raw](const std::vector<uint8_t> &data) {
+          if (!raw->own.load()) raw->own = rtc::Thread::Current();
           if (raw->alive && raw->cb.signaling) raw->cb.signaling(raw->cb.user, data.data(), (int32_t)data.size());
         },
         .createAudioDeviceModule = tgcalls::FakeAudioDeviceModule::Creator(
@@ -534,6 +652,7 @@ TGN_API tgn_call *TGN_CALL tgn_call_create(const tgn_call_params *p, const tgn_c
       Log(std::string("tgn: no implementation for version ") + p->version);
       return nullptr;
     }
+    tgn::AttachRemoteVideo(call->remote, *call->instance);   // once: V2 would deliver twice if attached twice
     return call.release();
   } catch (const std::exception &e) {
     Log(std::string("tgn: create failed: ") + e.what());
@@ -554,6 +673,7 @@ TGN_API int TGN_CALL tgn_call_stop(tgn_call *c, char *debug_log, int32_t len, in
   if (!c || !c->instance) return 0;
   if (c->stopped) { CopyOut("", debug_log, len); return 0; }
   c->stopped = true;
+  tgn::SetRemoteVideo(*c->remote, nullptr, nullptr, 0, 0);   // no picture callback once stopping
   struct Done {
     std::mutex m;
     std::condition_variable cv;
@@ -579,8 +699,24 @@ TGN_API void TGN_CALL tgn_call_destroy(tgn_call *c) {
   if (!c->stopped) tgn_call_stop(c, nullptr, 0, 5000);
   c->alive = false;
   c->instance.reset();
+  tgn::Drain(c->own.load());
   c->audio.reset();
   delete c;
+}
+
+TGN_API void TGN_CALL tgn_call_set_camera(tgn_call *c, tgn_camera *cam) {
+  if (c && c->instance && !c->stopped) c->instance->setVideoCapture(tgn::CaptureOf(cam));
+}
+
+TGN_API void TGN_CALL tgn_call_set_remote_video(tgn_call *c, tgn_frame_fn cb, void *user, int32_t max_w, int32_t max_h) {
+  if (c && c->remote) tgn::SetRemoteVideo(*c->remote, c->stopped ? nullptr : cb, user, max_w, max_h);
+}
+
+TGN_API int TGN_CALL tgn_call_video_stats(tgn_call *c, tgn_video_stats *out) {
+  if (!c || !out || !c->remote) return -1;
+  std::memset(out, 0, sizeof(*out));
+  tgn::RemoteVideoStats(*c->remote, out);
+  return 0;
 }
 
 TGN_API int TGN_CALL tgn_call_audio_stats(tgn_call *c, tgn_audio_stats *out) {
@@ -592,6 +728,10 @@ TGN_API int TGN_CALL tgn_call_audio_stats(tgn_call *c, tgn_audio_stats *out) {
 
 // ── the loopback self-test ───────────────────────────────────────────────────────────────────────────────────────────
 TGN_API int TGN_CALL tgn_selftest_loopback(int32_t seconds, char *report, int32_t len) {
+  return tgn_selftest_audio(TGN_AUDIO_TEST, seconds, report, len);
+}
+
+TGN_API int TGN_CALL tgn_selftest_audio(int32_t b_mode, int32_t seconds, char *report, int32_t len) {
   EnsureInit();
   struct Side {
     tgn_call *call = nullptr;
@@ -617,14 +757,14 @@ TGN_API int TGN_CALL tgn_selftest_loopback(int32_t seconds, char *report, int32_
   uint8_t key[256];
   for (int i = 0; i < 256; ++i) key[i] = (uint8_t)(i * 13 + 7);
 
-  auto make = [&](Side &s, bool outgoing, int hz) {
+  auto make = [&](Side &s, bool outgoing, int hz, int mode) {
     tgn_call_params p = {};
     p.version = version.c_str();
     p.key = key;
     p.is_outgoing = outgoing;
     p.enable_p2p = 1;
     p.max_layer = tgn_max_layer();
-    p.audio_mode = TGN_AUDIO_TEST;
+    p.audio_mode = mode;
     p.test_tone_hz = hz;
     tgn_callbacks cb = {};
     cb.user = &s;
@@ -632,8 +772,8 @@ TGN_API int TGN_CALL tgn_selftest_loopback(int32_t seconds, char *report, int32_
     cb.signaling = onSignal;
     s.call = tgn_call_create(&p, &cb);
   };
-  make(a, true, 440);
-  make(b, false, 1000);
+  make(a, true, 440, TGN_AUDIO_TEST);
+  make(b, false, 1000, b_mode);   // TGN_AUDIO_SPEAKER_TEST: B plays what it hears through this PC's speaker
   std::string r = "version " + version + "\n";
   if (!a.call || !b.call) {
     r += "create failed\n";
@@ -662,7 +802,7 @@ TGN_API int TGN_CALL tgn_selftest_loopback(int32_t seconds, char *report, int32_
     if (a.state == 2 && b.state == 2 && sa.frames_audible > 50 && sb.frames_audible > 50 &&
         std::abs(sa.rendered_hz - 1000) < 60 && std::abs(sb.rendered_hz - 440) < 30) {
       heard = true;
-      break;
+      if (b_mode == TGN_AUDIO_TEST) break;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
   }
@@ -675,6 +815,11 @@ TGN_API int TGN_CALL tgn_selftest_loopback(int32_t seconds, char *report, int32_
                 sa.rendered_rms, b.state.load(), b.sent.load(), sb.rendered_hz, sb.frames_audible, sb.frames_rendered,
                 sb.rendered_rms);
   r += line;
+  if (b_mode == TGN_AUDIO_SPEAKER_TEST) {
+    std::snprintf(line, sizeof(line), "B's speaker: %d gaps (underruns) in %lld ms, %d capture overruns\n", sb.playback_underruns,
+                  (long long)ms, sb.capture_overruns);
+    r += line;
+  }
   int sta = tgn_call_stop(a.call, nullptr, 0, 5000), stb = tgn_call_stop(b.call, nullptr, 0, 5000);
   r += std::string("stop: A ") + (sta ? "TIMED OUT" : "ok") + ", B " + (stb ? "TIMED OUT" : "ok") + "\n";
   tgn_call_destroy(a.call);

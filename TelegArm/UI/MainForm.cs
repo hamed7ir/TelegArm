@@ -359,6 +359,7 @@ namespace TelegArm.UI
                 try { _kbTimer?.Stop(); _kbTimer?.Dispose(); } catch { }
                 try { _perfTimer?.Stop(); _perfTimer?.Dispose(); } catch { }
                 try { _scrollWatch?.Stop(); _scrollWatch?.Dispose(); } catch { }
+                ShutdownCalls();                      // a live call: hang up and stop it while the service still exists
                 _service.StopConnectionWatchdog();   // stop the liveness timer before teardown
                 DisposeAllWarm();                     // STEP 1: close all background warm connections
                 // SAVESTATE-DEADLOCK: persist pts/qts/seq/date for the next-launch resume, but OFF the UI thread and

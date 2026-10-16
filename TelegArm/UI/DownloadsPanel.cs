@@ -34,6 +34,7 @@ namespace TelegArm.UI
 
         public DownloadIndicator(TelegramService service)
         {
+            TabStop = false;   // R6: no key handling here, so not a Tab stop (TabStop only: Selectable stays, for the touch keyboard)
             _service = service;
             Size = new Size(Dpi.Px(Side, CurDpi), Dpi.Px(Side, CurDpi));
             Cursor = Cursors.Hand;
@@ -97,7 +98,7 @@ namespace TelegArm.UI
             float F(float v) => Dpi.F(v, dpi);
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.Clear(Parent != null ? Parent.BackColor : (ThemeHelper.PaletteFor(_dark).DownloadBtnBg));
+            WindowBackdrop.ClearBehind(g, this, Parent, ClientRectangle, ThemeHelper.PaletteFor(_dark).DownloadBtnBg);   // step 5.9 / owner 2026-10-16: the window backdrop when it is on
             var all = _service.SnapshotTransfers().Where(t => t.PanelVisible).ToArray();   // badge/ring = visible rows only
             long got = 0, total = 0; int activeOrPaused = 0;
             foreach (var t in all)
@@ -151,6 +152,7 @@ namespace TelegArm.UI
     /// </summary>
     public sealed class DownloadsPanel : Form, IDpiHost
     {
+        private bool _shownOnce;   // dismisses itself only after Show() is done (RT trip 2026-10-16)
         private readonly TelegramService _service;
         private readonly bool _dark;
         private readonly Color _accent;
@@ -175,7 +177,10 @@ namespace TelegArm.UI
             BackColor = ThemeHelper.PaletteFor(dark).DownloadsBg;
             KeyPreview = true;
             KeyDown += (s, e) => { if (e.KeyCode == Keys.Escape) Close(); };
-            Deactivate += (s, e) => { try { Close(); } catch { } };
+            // RT trip 2026-10-16: a Deactivate or WM_DPICHANGED that arrives while Show() is still making the window closed and
+            // DISPOSED it inside Show() (ObjectDisposedException, crash.log). Dismissal counts only once it has been shown.
+            Shown += (s, e) => _shownOnce = true;
+            Deactivate += (s, e) => { if (_shownOnce) try { Close(); } catch { } };
             TelegArm.Helpers.AppIcon.Set(this);
 
             var header = new Panel { Dock = DockStyle.Top, Height = Px(42), BackColor = ThemeHelper.PaletteFor(dark).DownloadsHeaderBg };
@@ -257,7 +262,7 @@ namespace TelegArm.UI
             if (m.Msg == WindowDpi.WM_DPICHANGED)
             {
                 m.Result = IntPtr.Zero;
-                try { Close(); } catch { }
+                if (_shownOnce) try { Close(); } catch { }   // not while Show() is still making it (see the ctor)
                 return;
             }
             base.WndProc(ref m);
@@ -360,6 +365,7 @@ namespace TelegArm.UI
 
             public PillButton(string text, Pic glyph, bool primary, bool dark, Color accent, int dpi)
             {
+                TabStop = false;   // R6: no key handling here, so not a Tab stop (TabStop only: Selectable stays, for the touch keyboard)
                 Text = text; _glyph = glyph; _primary = primary; _dark = dark; _accent = accent; _dpi = dpi;
                 Cursor = Cursors.Hand;
                 SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
@@ -428,6 +434,7 @@ namespace TelegArm.UI
 
             public Row(TelegramService svc, TelegramService.TransferInfo ti, bool dark, Color accent, int dpi)
             {
+                TabStop = false;   // R6: no key handling here, so not a Tab stop (TabStop only: Selectable stays, for the touch keyboard)
                 _svc = svc; _ti = ti; _dark = dark; _accent = accent; _dpi = dpi;
                 Height = P(58);
                 Margin = new Padding(P(3));   // the default 3 px margin, made logical (the panel sizes the row by it)

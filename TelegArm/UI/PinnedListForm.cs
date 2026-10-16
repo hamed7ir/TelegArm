@@ -64,6 +64,7 @@ namespace TelegArm.UI
             };
             _close = new Button
             {
+                AccessibleName = "Close",   // R6: a drawn glyph has no text to read
                 Text = "✕",
                 Dock = DockStyle.Right,
                 FlatStyle = FlatStyle.Flat,

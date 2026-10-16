@@ -72,6 +72,7 @@ namespace TelegArm.UI.Controls
 
         public ChatListItemControl(ChatEntry entry)
         {
+            TabStop = false;   // R6: no key handling here, so not a Tab stop (TabStop only: Selectable stays, for the touch keyboard)
             Entry = entry;
             Height = Dpi.Px(RowH, CurDpi);
             Margin = new Padding(0);

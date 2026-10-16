@@ -14,6 +14,7 @@ namespace TelegArm.SelfTest
             t.Add(new KeyValuePair<string, Action>("composer (T7): slow mode waits until the server's next send; admins, the creator and a past date don't", SlowMode));
             t.Add(new KeyValuePair<string, Action>("composer (T8): <u>underline</u> and \"> \" quotes parse; the old markers are unchanged", Markdown));
             t.Add(new KeyValuePair<string, Action>("privacy (T22): a new main setting keeps every exception; edited people lists replace theirs", Privacy));
+            t.Add(new KeyValuePair<string, Action>("composer (R4): a paragraph's direction is its first strong letter (digits, marks and emoji skipped)", Direction));
         }
 
         private static string Rules(InputPrivacyRule[] r)
@@ -30,6 +31,30 @@ namespace TelegArm.SelfTest
                 parts.Add(s);
             }
             return string.Join(" ", parts.ToArray());
+        }
+
+        private static void Direction()
+        {
+            var cases = new[]
+            {
+                new KeyValuePair<string, bool>("", false), new KeyValuePair<string, bool>("abc", false),
+                new KeyValuePair<string, bool>("\u0633\u0644\u0627\u0645", true),                           // Persian "salam"
+                new KeyValuePair<string, bool>("123 \u0633\u0644\u0627\u0645", true),                       // digits are weak
+                new KeyValuePair<string, bool>("\u06F1\u06F2\u06F3 hello", false),                         // so are Persian digits
+                new KeyValuePair<string, bool>("\u0661\u0662 hello", false),                                // and Arabic-Indic ones
+                new KeyValuePair<string, bool>("\uD83D\uDE00 \u0633\u0644\u0627\u0645", true),            // an emoji first
+                new KeyValuePair<string, bool>("\uD83D\uDE00 hello", false),
+                new KeyValuePair<string, bool>("\u200Fhello", true), new KeyValuePair<string, bool>("\u200E\u0633\u0644\u0627\u0645", false),   // RLM / LRM
+                new KeyValuePair<string, bool>("\u061Chello", true),                                         // ALM
+                new KeyValuePair<string, bool>("\u05E9\u05DC\u05D5\u05DD", true),                           // Hebrew
+                new KeyValuePair<string, bool>("(\u0633\u0644\u0627\u0645)", true),                         // punctuation first
+                new KeyValuePair<string, bool>("\u060C hello", false),                                       // the Arabic comma is not a letter
+                new KeyValuePair<string, bool>("\u064E\u0650 hello", false),                                // nor are its vowel marks
+                new KeyValuePair<string, bool>("Hello \u0633\u0644\u0627\u0645", false),
+                new KeyValuePair<string, bool>("   \n\t", false),
+            };
+            foreach (var c in cases)
+                Check.True(TelegArm.Helpers.TextDirection.FirstStrongIsRtl(c.Key) == c.Value, "\"" + c.Key + "\" -> " + (c.Value ? "RTL" : "LTR"));
         }
 
         private static void Privacy()

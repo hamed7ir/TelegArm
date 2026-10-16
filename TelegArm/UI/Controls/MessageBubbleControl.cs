@@ -1026,6 +1026,7 @@ namespace TelegArm.UI.Controls
 
         public MessageBubbleControl(string text, string sender, bool outgoing, DateTime date)
         {
+            TabStop = false;   // R6: no key handling here, so not a Tab stop (TabStop only: Selectable stays, for the touch keyboard)
             _text = string.IsNullOrEmpty(text) ? "" : text;
             _sender = sender;
             _outgoing = outgoing;

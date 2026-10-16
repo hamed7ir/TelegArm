@@ -80,6 +80,7 @@ namespace TelegArm.UI.Controls
         public VoiceBubbleControl(long id, int durationSec, bool isAudio, string fileName, string sizeText,
                                   bool outgoing, string cachedPath, Func<DownloadHandle> startDownload)
         {
+            TabStop = false;   // R6: no key handling here, so not a Tab stop (TabStop only: Selectable stays, for the touch keyboard)
             _id = id; _durationSec = durationSec; _isAudio = isAudio; _sizeText = sizeText; _outgoing = outgoing;
             _startDownload = startDownload;
             _path = cachedPath;

@@ -70,7 +70,7 @@ namespace TelegArm.UI.Admin
             // the creator/admin_rights re-check guarantees a non-admin never sees the control.
             if (_isBroadcast && IsChannelAdmin())
             {
-                _discussionBtn = new RoundedButton { Text = "…", Kind = RoundedButtonKind.Secondary, Modern = true, Enabled = false };
+                _discussionBtn = new RoundedButton { Text = "…", Kind = RoundedButtonKind.Secondary, Modern = true, Enabled = false };   // a11y-ok: its Text is set once loaded
                 _discussionBtn.Click += DiscussionClick;
                 _discussionState = new StatusRow("Loading…", Tone.Normal, _discussionBtn, 240, true, 2);
                 rows.Add(new SectionHeader("Discussion group (comments)"));
@@ -271,6 +271,7 @@ namespace TelegArm.UI.Admin
                 : base(text, false)
             {
                 _tone = tone;
+                AccessibleRole = AccessibleRole.StaticText;   // R6: a status line, not a control
                 _button = button;
                 _buttonWidth = buttonLogicalWidth;
                 _below = buttonBelow;

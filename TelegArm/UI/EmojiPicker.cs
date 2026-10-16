@@ -25,6 +25,7 @@ namespace TelegArm.UI
     /// </summary>
     public class EmojiPicker : Form, IDpiHost, IDpiAware
     {
+        private bool _shownOnce;   // a popup dismisses itself only after Show() is done (RT trip 2026-10-16)
         private readonly TelegramService _service;
         private readonly bool _dark;
         private readonly Color _accent;
@@ -92,7 +93,10 @@ namespace TelegArm.UI
                 // every single time the user typed.
                 KeyPreview = true;
                 KeyDown += (s, e) => { if (e.KeyCode == Keys.Escape) Close(); };
-                Deactivate += (s, e) => { try { Close(); } catch { } };
+                // RT trip 2026-10-16: a Deactivate or WM_DPICHANGED that arrives while Show() is still making the window closed and
+                // DISPOSED it inside Show() (ObjectDisposedException, crash.log). Dismissal counts only once it has been shown.
+                Shown += (s, e) => _shownOnce = true;
+                Deactivate += (s, e) => { if (_shownOnce) try { Close(); } catch { } };
             }
 
             BuildTabs();
@@ -131,7 +135,7 @@ namespace TelegArm.UI
             if (m.Msg == WindowDpi.WM_DPICHANGED && !_embedded)
             {
                 m.Result = IntPtr.Zero;
-                try { Close(); } catch { }
+                if (_shownOnce) try { Close(); } catch { }   // not while Show() is still making it (see the ctor)
                 return;
             }
             base.WndProc(ref m);
@@ -744,6 +748,7 @@ namespace TelegArm.UI
 
             public Canvas(List<EmojiRenderer.EmojiCell> cells, bool dark, int dpi)
             {
+                TabStop = false;   // R6: no key handling here, so not a Tab stop (TabStop only: Selectable stays, for the touch keyboard)
                 _cells = cells ?? new List<EmojiRenderer.EmojiCell>();
                 _dark = dark;
                 _dpi = dpi;

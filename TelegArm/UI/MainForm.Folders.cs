@@ -212,6 +212,7 @@ namespace TelegArm.UI
 
             public StoryChip(long peerId, string name, bool unseen, bool dark, Color accent, Func<long, Image> avatarGetter, int dpi)
             {
+                TabStop = false;   // R6: no key handling here, so not a Tab stop (TabStop only: Selectable stays, for the touch keyboard)
                 _peerId = peerId; _name = name ?? ""; _unseen = unseen; _dark = dark; _accent = accent; _avatar = avatarGetter; _dpi = dpi;
                 ApplyMetrics(); Cursor = Cursors.Hand;
                 SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true);
@@ -409,6 +410,7 @@ namespace TelegArm.UI
 
             public FolderTabItem(string label, int unread, bool active, bool dark, Color accent, int dpi)
             {
+                TabStop = false;   // R6: no key handling here, so not a Tab stop (TabStop only: Selectable stays, for the touch keyboard)
                 _label = label; _unread = unread; _active = active; _dark = dark; _accent = accent; _dpi = dpi;
                 Height = P(28); Margin = new Padding(P(2), P(3), P(2), P(3));
                 Cursor = Cursors.Hand;
@@ -485,6 +487,7 @@ namespace TelegArm.UI
 
             public FolderRailItem(string icon, string label, int unread, bool active, bool dark, Color accent, int dpi)
             {
+                TabStop = false;   // R6: no key handling here, so not a Tab stop (TabStop only: Selectable stays, for the touch keyboard)
                 _icon = icon; _label = label; _unread = unread; _active = active; _dark = dark; _accent = accent; _dpi = dpi;
                 Height = P(60); Margin = new Padding(0);
                 Cursor = Cursors.Hand;
@@ -500,7 +503,7 @@ namespace TelegArm.UI
                 var g = e.Graphics;
                 g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
                 Color bg = ThemeHelper.PaletteFor(_dark).FolderRailBg;
-                g.Clear(bg);
+                WindowBackdrop.ClearBehind(g, this, Parent, ClientRectangle, bg);   // step 5.9 / owner 2026-10-16: the window backdrop when it is on
                 if (_active)
                 {
                     using (var tint = new SolidBrush(ColorMath.WithAlpha(_accent, 30))) g.FillRectangle(tint, 0, 0, Width, Height);

@@ -20,7 +20,7 @@ namespace TelegArm.UI.Controls
         private int _tilesDpi;
         public event EventHandler Changed;
 
-        public ChatPresetRow(string caption, bool dark, int selected) : base(caption, true) { _dark = dark; _sel = selected; Refit(); }
+        public ChatPresetRow(string caption, bool dark, int selected) : base(caption, true) { _dark = dark; _sel = selected; AccessibleRole = AccessibleRole.RadioButton; Refit(); }   // R6: a role
 
         /// <summary>The mode whose tiles are shown (Settings edits one mode at a time).</summary>
         public bool Dark { get { return _dark; } set { if (_dark == value) return; _dark = value; DropTiles(); Invalidate(); } }

@@ -218,7 +218,7 @@ namespace TelegArm.UI
         {
             if (_optionBoxes.Count >= MaxOptions) return;
             var tb = new TextBox { BackColor = _field, ForeColor = _fg, BorderStyle = BorderStyle.FixedSingle };
-            var del = new RoundedButton { Text = "✕", Kind = RoundedButtonKind.Neutral, Radius = 6 };
+            var del = new RoundedButton { Text = "✕", AccessibleName = "Remove option", Kind = RoundedButtonKind.Neutral, Radius = 6 };
             tb.Tag = del;   // first: SizeRow reads it
             SizeRow(tb);
             del.Click += (s, e) =>

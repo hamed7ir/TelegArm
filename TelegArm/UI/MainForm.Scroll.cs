@@ -128,6 +128,7 @@ namespace TelegArm.UI
             public int Alpha = 255;
             public DateFlyoutPill()
             {
+                TabStop = false;   // R6: no key handling here, so not a Tab stop (TabStop only: Selectable stays, for the touch keyboard)
                 SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.SupportsTransparentBackColor, true);
                 BackColor = Color.Transparent;
             }

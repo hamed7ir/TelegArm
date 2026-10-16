@@ -73,6 +73,10 @@
     <Compile Include="..\TelegArm\Core\Calls\CallCrypto.cs"><Link>Linked\Core\Calls\CallCrypto.cs</Link></Compile>
     <Compile Include="..\TelegArm\Core\Calls\TgCalls.cs"><Link>Linked\Core\Calls\TgCalls.cs</Link></Compile>
     <Compile Include="..\TelegArm\Core\Calls\NativeCall.cs"><Link>Linked\Core\Calls\NativeCall.cs</Link></Compile>
+    <Compile Include="..\TelegArm\Core\Calls\CallVideoSink.cs"><Link>Linked\Core\Calls\CallVideoSink.cs</Link></Compile>
+    <Compile Include="..\TelegArm\Core\Calls\NativeGroupCall.cs"><Link>Linked\Core\Calls\NativeGroupCall.cs</Link></Compile>
+    <Compile Include="..\TelegArm\Core\Calls\GroupParticipants.cs"><Link>Linked\Core\Calls\GroupParticipants.cs</Link></Compile>
+    <Compile Include="..\TelegArm\Core\Media\VideoFrameStore.cs"><Link>Linked\Core\Media\VideoFrameStore.cs</Link></Compile>
     <Content Include="..\TelegArm\tgcalls\x86\*.dll">
       <Link>tgcalls\x86\%(Filename)%(Extension)</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
@@ -88,6 +92,7 @@
     <Compile Include="..\TelegArm\Helpers\DpiScaler.cs"><Link>Linked\Helpers\DpiScaler.cs</Link></Compile>
     <Compile Include="..\TelegArm\Helpers\FontCache.cs"><Link>Linked\Helpers\FontCache.cs</Link></Compile>
     <Compile Include="..\TelegArm\Helpers\FontHelper.cs"><Link>Linked\Helpers\FontHelper.cs</Link></Compile>
+    <Compile Include="..\TelegArm\Helpers\TextDirection.cs"><Link>Linked\Helpers\TextDirection.cs</Link></Compile>
     <Compile Include="..\TelegArm\Helpers\Palette.cs"><Link>Linked\Helpers\Palette.cs</Link></Compile>
     <Compile Include="..\TelegArm\Helpers\ColorMath.cs"><Link>Linked\Helpers\ColorMath.cs</Link></Compile>
     <Compile Include="..\TelegArm\Helpers\ThemeHelper.cs"><Link>Linked\Helpers\ThemeHelper.cs</Link></Compile>

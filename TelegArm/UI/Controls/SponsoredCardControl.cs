@@ -69,6 +69,7 @@ namespace TelegArm.UI.Controls
         public SponsoredCardControl(string label, string title, string body, MessageEntity[] entities,
                                     string buttonText, bool hasMedia, Func<long, Image> emojiResolver)
         {
+            TabStop = false;   // R6: no key handling here, so not a Tab stop (TabStop only: Selectable stays, for the touch keyboard)
             _label = label ?? "Sponsored";
             _title = title ?? "";
             _buttonText = string.IsNullOrEmpty(buttonText) ? "Open" : buttonText;

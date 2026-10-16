@@ -451,8 +451,8 @@ namespace TelegArm.UI
             picker.Picked += InsertEmoji;
             picker.DocumentPicked += SendDocument;
             picker.Location = new Point(p.X - picker.Width + _emojiButton.Width, p.Y - picker.Height - Dpi.Px(4, dpi)); // above the button (logical gap at the popup's DPI)
-            picker.Show(this);
-            picker.Activate();
+            try { picker.Show(this); picker.Activate(); }
+            catch (ObjectDisposedException) { Logger.Diag("[EMOJI] the picker closed while it opened"); }   // RT trip 2026-10-16
         }
 
         /// <summary>Sends a picked sticker/GIF document to the open chat (optimistic bubble + chat list).</summary>

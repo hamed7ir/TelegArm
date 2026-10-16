@@ -96,6 +96,10 @@ try {
     # 2026-10-16: no *.zip any more: the libVLC zips are gone (FFmpeg below), and a stale one left in bin\Release by an
     # older build must not ship.
     Copy-Item (Join-Path $rel '*.png'), (Join-Path $rel '*.ico') $files
+    # The colour emoji (Helpers\EmojiRenderer): the one zip that ships. Named, not a wildcard - the *.zip wildcard went with
+    # libVLC on 2026-10-16 and took this file along (the RT trip had no emoji); the check below keeps it from going again.
+    Copy-Item (Join-Path $rel 'noto-emoji.zip') $files
+    if (-not (Test-Path (Join-Path $files 'noto-emoji.zip'))) { throw 'noto-emoji.zip is missing from the payload' }
     # Licence + notices must ACCOMPANY the binary (GPL-3.0 s4, LGPL-2.1 s6, MIT/BSD/Apache/OFL).
     Copy-Item (Join-Path $root 'LICENSE') (Join-Path $files 'LICENSE.txt')
     Copy-Item (Join-Path $root 'THIRD-PARTY-NOTICES.txt') $files

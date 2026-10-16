@@ -71,9 +71,15 @@
     <Compile Include="Core\Calls\TgCalls.cs" />
     <Compile Include="Core\Calls\NativeCall.cs" />
     <Compile Include="Core\Calls\CallManager.cs" />
+    <Compile Include="Core\Calls\CallVideo.cs" />
+    <Compile Include="Core\Calls\CallVideoSink.cs" />
+    <Compile Include="Core\Calls\NativeGroupCall.cs" />
+    <Compile Include="Core\Calls\GroupParticipants.cs" />
+    <Compile Include="Core\Calls\GroupCall.cs" />
     <Compile Include="Helpers\DibBlit.cs" />
     <Compile Include="Helpers\SvgPath.cs" />
     <Compile Include="Core\Media\MediaPlayback.cs" />
+    <Compile Include="Core\Media\VideoFrameStore.cs" />
     <Compile Include="Core\Media\LegacyVlcCleanup.cs" />
     <Compile Include="Core\AuthManager.cs" />
     <Compile Include="Core\AvatarStore.cs" />
@@ -106,6 +112,8 @@
     <Compile Include="Core\Camera\CameraCapture.cs" />
     <Compile Include="Core\Camera\FrameReaderCameraRecorder.cs" />
     <Compile Include="Core\Camera\WinRtCameraRecorder.cs" />
+    <Compile Include="Core\Camera\FrameReaderCallSource.cs" />
+    <Compile Include="Core\Camera\SinkCallSource.cs" />
     <Compile Include="Core\ApiCredentials.cs" />
     <!-- Real api_id/api_hash. Gitignored; conditioned on existence so a fresh clone (without it) still
          compiles against the ApiCredentials.cs placeholders. -->
@@ -125,6 +133,7 @@
     <Compile Include="Helpers\WinRtKeyboard.cs" />
     <Compile Include="Helpers\EmojiRenderer.cs" />
     <Compile Include="Helpers\FontHelper.cs" />
+    <Compile Include="Helpers\TextDirection.cs" />
     <Compile Include="Helpers\ImageDecoder.cs" />
     <Compile Include="Helpers\NativeLibraries.cs" />
     <Compile Include="Helpers\RLottie.cs" />
@@ -170,6 +179,10 @@
     <Compile Include="UI\MainForm.ChatOpen.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
     <Compile Include="UI\MainForm.Calls.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
     <Compile Include="UI\CallWindow.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="UI\MainForm.GroupCalls.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
+    <Compile Include="UI\GroupCallWindow.cs">
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="UI\MainForm.Columns.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>

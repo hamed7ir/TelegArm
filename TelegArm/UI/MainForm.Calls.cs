@@ -36,6 +36,7 @@ namespace TelegArm.UI
                     _calls = new CallManager(_service, SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext());
                     _calls.Incoming += OnIncomingCall;
                     _calls.Changed += OnCallChanged;
+                    _calls.OtherBusy = () => InVoiceChat;
                 }
                 return _calls;
             }
@@ -44,6 +45,7 @@ namespace TelegArm.UI
         /// <summary>updatePhoneCall / updatePhoneCallSignalingData, from the update handler (UI thread).</summary>
         private bool TryHandleCallUpdate(Update update)
         {
+            if (TryHandleGroupCallUpdate(update)) return true;   // voice chats (MainForm.GroupCalls)
             if (!(update is UpdatePhoneCall) && !(update is UpdatePhoneCallSignalingData)) return false;
             if (!CallManager.Available)
             {
@@ -75,7 +77,9 @@ namespace TelegArm.UI
                 _callWindow = new CallWindow(Calls, s, id => GetCachedAvatar(id), CallPeerName);
                 _callWindow.StartPosition = FormStartPosition.Manual;
                 var wa = Screen.FromControl(this).WorkingArea;
-                _callWindow.Location = new Point(wa.Right - _callWindow.Width - Px(24), wa.Top + Px(24));
+                _callWindow.Height = Math.Min(_callWindow.Height, wa.Height - Px(16));   // a video call's window on a small screen
+                _callWindow.Location = new Point(Math.Max(wa.Left, wa.Right - _callWindow.Width - Px(24)),
+                                                 Math.Max(wa.Top, Math.Min(wa.Top + Px(24), wa.Bottom - _callWindow.Height)));
                 _callWindow.Show(this);
             }
             else _callWindow.Bind(s);
@@ -113,24 +117,55 @@ namespace TelegArm.UI
         {
             if (e == null || !(e.Peer is InputPeerUser)) return false;
             var u = e.PeerInfo as User;
+            if (u == null && _service != null && _service.Updates != null && _service.Updates.Users != null)
+                _service.Updates.Users.TryGetValue(e.PeerId, out u);   // an entry opened from the contacts carries no PeerInfo
             if (u == null || u.IsBot) return false;
             var me = _service != null ? _service.Me : null;
             return me == null || u.id != me.id;
         }
 
-        private async void StartCallWith(ChatEntry e)
+        private async void StartCallWith(ChatEntry e, bool video = false)
         {
             var calls = Calls;
             if (calls == null || !CanCall(e)) return;
             if (calls.Busy) { ShowCallWindow(calls.Current); return; }
+            if (InVoiceChat) { ShowGroupCallWindow(_groupCalls.Current); return; }
             if (!CallManager.Available)
             {
-                ThemedDialog.Show(this, "Call", "Calls are not available on this computer.\n\n" + TgCalls.Status, "OK");
+                ThemedDialog.Show(this, video ? "Video call" : "Call", "Calls are not available on this computer.\n\n" + TgCalls.Status, "OK");
                 return;
             }
-            var task = calls.StartAsync((User)e.PeerInfo);
+            var task = calls.StartAsync((User)e.PeerInfo, video);
             if (calls.Current != null) ShowCallWindow(calls.Current);   // StartAsync sets Current before its first await
             await task;
+        }
+
+        /// <summary>Call / Video call (the phone's right-click and the chat's ⋮ menu): Telegram Desktop starts a video call
+        /// from the phone's menu too.</summary>
+        private void AddCallMenuItems(ContextMenuStrip menu, ChatEntry e)
+        {
+            if (!CanCall(e)) { AddVoiceChatMenuItems(menu, e); return; }   // a group or channel: its voice chat
+            AddMenuItem(menu, "Call", () => StartCallWith(e));
+            AddMenuItem(menu, "Video call", () => StartCallWith(e, true));
+        }
+
+        private void ShowCallMenu()
+        {
+            var entry = _selectedChat;
+            if (entry == null || _callBtn == null || _callBtn.IsDisposed || !(CanCall(entry) || CanVoiceChat(entry))) return;
+            var menu = new ThemedContextMenuStrip();
+            AddCallMenuItems(menu, entry);
+            menu.Closed += (s, e) => BeginInvoke((Action)menu.Dispose);
+            menu.ShowAt(_callBtn.PointToScreen(new Point(0, _callBtn.Height)));
+        }
+
+        /// <summary>The app is closing: a live call is hung up (the peer is told) and the call library and camera stopped,
+        /// bounded, while the account's service still exists.</summary>
+        private void ShutdownCalls()
+        {
+            var calls = _calls;
+            if (calls != null) try { calls.Shutdown(3000); } catch (Exception ex) { Logger.Diag("[CALL] shutdown: " + ex.Message); }
+            ShutdownGroupCalls();
         }
 
         /// <summary>Loads the call library off the UI thread during idle startup, as the media engine is.</summary>

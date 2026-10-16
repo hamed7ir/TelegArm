@@ -49,6 +49,7 @@ namespace TelegArm.UI.Controls
 
         public MiniPlayerBar()
         {
+            TabStop = false;   // R6: no key handling here, so not a Tab stop (TabStop only: Selectable stays, for the touch keyboard)
             Dock = DockStyle.Top;
             Height = Dpi.Px(BarH, CurDpi);
             BackColor = BarColor;
@@ -106,7 +107,7 @@ namespace TelegArm.UI.Controls
             int P(int v) => Dpi.Px(v, dpi);
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.Clear(BarColor);
+            WindowBackdrop.Paint(g, this, ClientRectangle, BarColor);   // step 5.9 / owner 2026-10-16: the window backdrop when it is on (else the plain colour)
 
             int h = Height, cd = P(30), cy = h / 2, gap = P(6);
             _prevR = new Rectangle(P(10), cy - cd / 2, cd, cd);

@@ -381,7 +381,7 @@ namespace TelegArm.UI
                 if (_kbFocusSink != null && !_kbFocusSink.IsDisposed) return;
                 // A Button IS selectable (ActiveControl can rest on it); a Panel is not. TabStop keeps it a valid
                 // active-control target even if WinForms ever falls back to SelectNextControl during the restore.
-                _kbFocusSink = new Button { Size = new Size(1, 1), Left = -100, Top = -100, TabStop = true };
+                _kbFocusSink = new Button { Size = new Size(1, 1), Left = -100, Top = -100, TabStop = true, AccessibleRole = AccessibleRole.None };   // R6: hidden from screen readers
                 Controls.Add(_kbFocusSink);
             }
             catch { }

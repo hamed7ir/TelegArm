@@ -35,6 +35,7 @@ namespace TelegArm.UI.Controls
 
         public PinnedBar()
         {
+            TabStop = false;   // R6: no key handling here, so not a Tab stop (TabStop only: Selectable stays, for the touch keyboard)
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer
                      | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
             Cursor = Cursors.Hand;
@@ -76,7 +77,7 @@ namespace TelegArm.UI.Controls
             var g = e.Graphics;
             g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
 
-            g.Clear(ThemeHelper.PaletteFor(IsDark).PinnedBarBg);
+            WindowBackdrop.Paint(g, this, ClientRectangle, ThemeHelper.PaletteFor(IsDark).PinnedBarBg);   // step 5.9 / owner 2026-10-16: the window backdrop when it is on (else the plain colour)
 
             // Accent bar at the leading edge.
             using (var b = new SolidBrush(ColorMath.Ink(AccentColor, ThemeHelper.PaletteFor(IsDark).PinnedBarBg, 3.0)))

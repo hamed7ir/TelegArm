@@ -1123,6 +1123,9 @@ namespace TelegArm.UI.Controls
             {
                 int top = Dpi.Px(12, dpi), capH = 0, capGap = 0;
                 if (Text.Length > 0) { capH = LineHeight(FontHelper.ForAt(Text, CaptionPt, dpi)); capGap = Dpi.Px(8, dpi); }
+                // the subtitle sits under the caption (DrawCaption): the strip goes below both, not over the subtitle
+                // (RT trip 2026-10-16: "When I close the window" covered "The X button and Alt+F4")
+                if (!string.IsNullOrEmpty(Subtitle)) capH += Dpi.Px(2, dpi) + LineHeight(FontHelper.ForAt(Subtitle, SubtitlePt, dpi));
                 geo.Caption = new Rectangle(padX, top, avail, capH);
                 geo.Strip = new Rectangle(padX, top + capH + capGap, stripW, stripH);
                 geo.Height = geo.Strip.Bottom + Dpi.Px(12, dpi);

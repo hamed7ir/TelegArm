@@ -33,6 +33,7 @@ namespace TelegArm.UI.Controls
 
         public StoryThumb(TelegramService service, StoryItem story, bool dark)
         {
+            TabStop = false;   // R6: no key handling here, so not a Tab stop (TabStop only: Selectable stays, for the touch keyboard)
             _dark = dark;
             var vdoc = (story.media as MessageMediaDocument)?.document as Document;
             if (vdoc != null)

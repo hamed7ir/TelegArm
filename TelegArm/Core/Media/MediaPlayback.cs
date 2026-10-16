@@ -11,45 +11,6 @@ namespace TelegArm.Core.Media
     public enum MediaState { NothingSpecial, Opening, Buffering, Playing, Paused, Stopped, Ended, Error }
 
     /// <summary>
-    /// The newest decoded video frame, shared between the video thread (writes the back buffer, swaps) and the UI (paints
-    /// the front one under <see cref="Sync"/>). BGRA, 32 bpp, top-down, stride = width * 4.
-    /// </summary>
-    public sealed class VideoFrameStore
-    {
-        public readonly object Sync = new object();
-        public byte[] Front;
-        public int FrontWidth, FrontHeight;
-        public int Serial;                 // bumps with every new frame
-        internal byte[] Back;
-        internal GCHandle BackPin;
-        internal int BackWidth, BackHeight;
-
-        internal void EnsureBack(int w, int h)
-        {
-            if (Back != null && BackWidth == w && BackHeight == h) return;
-            if (BackPin.IsAllocated) BackPin.Free();
-            Back = new byte[w * h * 4];
-            BackPin = GCHandle.Alloc(Back, GCHandleType.Pinned);
-            BackWidth = w; BackHeight = h;
-        }
-
-        internal void Swap()
-        {
-            lock (Sync)
-            {
-                var b = Front; int bw = FrontWidth, bh = FrontHeight;
-                Front = Back; FrontWidth = BackWidth; FrontHeight = BackHeight;
-                if (BackPin.IsAllocated) BackPin.Free();
-                Back = b; BackWidth = bw; BackHeight = bh;
-                if (Back != null) BackPin = GCHandle.Alloc(Back, GCHandleType.Pinned);
-                Serial++;
-            }
-        }
-
-        internal void Free() { if (BackPin.IsAllocated) BackPin.Free(); }
-    }
-
-    /// <summary>
     /// Plays one file through the FFmpeg shim (2026-10-16: replaces libVLC's MediaPlayer). Opening runs off the calling
     /// thread. Audio: the shim's s16 48 kHz stereo (resampled, and tempo-stretched by atempo) into an NAudio waveOut, the
     /// same winmm path VoiceRecorder records through. Video: a thread decodes frames at the size the surface asks for and

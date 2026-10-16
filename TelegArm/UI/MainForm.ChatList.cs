@@ -640,6 +640,9 @@ namespace TelegArm.UI
             if (surface == ChatMenuSurface.ChatHeader)
                 AddMenuItem(menu, "ℹ   " + InfoLabelFor(c), OpenSelectedProfile);
 
+            // calls (2026-10-16): a voice or a video call with a person, from the chat you are in
+            if (surface == ChatMenuSurface.ChatHeader) AddCallMenuItems(menu, entry);
+
             // BATCH-TA-10 — the Pin item is offered in All, in Archive, and in a real custom folder.
             // Each of those three routes to a DIFFERENT write, and TogglePin picks by _activeFolder:
             //   All / Archive  → Messages_ToggleDialogPin (no folder_id; the server pins the dialog in

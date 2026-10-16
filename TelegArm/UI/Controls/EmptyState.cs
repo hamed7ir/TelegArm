@@ -57,7 +57,7 @@ namespace TelegArm.UI.Controls
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             SetStyle(ControlStyles.Selectable, false);   // the panel is not a tab stop; its button is
             TabStop = false;
-            _button = new RoundedButton { Kind = RoundedButtonKind.Primary, Modern = true, Visible = false };
+            _button = new RoundedButton { Kind = RoundedButtonKind.Primary, Modern = true, Visible = false };   // a11y-ok: its Text is the ButtonText property
             _button.Click += OnButtonClick;
             Controls.Add(_button);
             ThemeHelper.ThemeChanged += OnThemeChanged;
