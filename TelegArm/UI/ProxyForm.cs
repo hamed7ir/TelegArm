@@ -40,11 +40,13 @@ namespace TelegArm.UI
 
         private readonly List<string> _list;            // working copy; committed on Save
         private bool _enabled;
+        private bool _tunnel;                   // step 6.5: the WebSocket tunnel is the mode (AppSettings.WsTunnelEnabled)
+        private readonly bool _tunnelAtOpen;
         private int _active;
         private bool _changed;
 
         private Panel _page;                    // the dialog body: everything below parents here
-        private SegmentedRow _mode;             // "Don't use a proxy" | "Use a proxy" (was two RadioButtons)
+        private SegmentedRow _mode;             // "Direct" | "Proxy" | "WebSocket tunnel" (step 6.5; was two RadioButtons)
         private NoteRow _note;
         private Panel _listHost;                // a 1 px Divider frame around the list
         private NoNativeScrollPanel _listPanel;
@@ -63,9 +65,12 @@ namespace TelegArm.UI
         {
             _service = service;
             _s = AppSettings.Instance;
-            _list = new List<string>(_s.ProxyList ?? new List<string>());
-            _enabled = _s.ProxyEnabled;
-            _active = _s.ProxyActive;
+            _list = _s.SavedProxies;                        // step 6.6: MTProto and SOCKS5 links, one list on screen
+            _enabled = _s.ProxyEnabled || _s.Socks5Enabled;
+            _tunnel = _tunnelAtOpen = _s.WsTunnelEnabled;
+            if (_tunnel) _enabled = false;   // the tunnel wins over a hand-edited file (AppSettings.ActiveProxyUrl agrees)
+            string selected = _s.SelectedProxy;
+            _active = selected != null ? _list.FindIndex(u => string.Equals(u, selected, StringComparison.OrdinalIgnoreCase)) : -1;
 
             BuildUi();
             RebuildRows();
@@ -84,11 +89,11 @@ namespace TelegArm.UI
             _page.SizeChanged += (s, e) => LayoutPage();
             UseOwnBody(_page);
 
-            _mode = new SegmentedRow("Proxy", new[] { "Don't use a proxy", "Use a proxy" }, _enabled ? 1 : 0);
+            _mode = new SegmentedRow("Connection", new[] { "Direct", "Proxy", "WebSocket tunnel" }, ModeIndex());
             _mode.SelectedIndexChanged += OnModeChanged;
             _page.Controls.Add(_mode);
 
-            _note = new NoteRow("A proxy can help when Telegram is blocked on your network. Only MTProto proxies are supported.", 2);
+            _note = new NoteRow(ModeNote(), 3);
             _page.Controls.Add(_note);
 
             // ── the list ────────────────────────────────────────────────────────────────────────────────────
@@ -107,7 +112,7 @@ namespace TelegArm.UI
             _hint = new ThemedLabel { Role = LabelRole.Dim, PointSize = TextRoles.Points(TextRole.Field), Ellipsis = true };
             _page.Controls.Add(_hint);
 
-            _pasteBox = new ThemedTextBox(false) { Hint = "Paste a tg:// or t.me/proxy link", AccessibleName = "Proxy link" };
+            _pasteBox = new ThemedTextBox(false) { Hint = "Paste a proxy link (MTProto or SOCKS5)", AccessibleName = "Proxy link" };
             _pasteBox.Inner.AccessibleName = "Proxy link";
             _pasteBox.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; AddFromBox(); } };
             _page.Controls.Add(_pasteBox);
@@ -125,7 +130,8 @@ namespace TelegArm.UI
             _doneBtn.Click += (s, e) => { Save(); DialogResult = DialogResult.OK; };
 
             _testAllBtn = AddFooterButton("Test all", RoundedButtonKind.Secondary, DialogResult.None, 104);
-            _testAllBtn.Click += (s, e) => { if (_testing) CancelTests(); else TestAll(); };
+            _testAllBtn.Click += (s, e) => { if (_testing) CancelTests(); else if (_tunnel) TestTunnel(); else TestAll(); };
+            if (_tunnel) _testAllBtn.Text = "Test tunnel";
 
             var delAll = AddFooterButton("Delete all", RoundedButtonKind.Secondary, DialogResult.None, 108);
             delAll.Click += (s, e) => DeleteAll();
@@ -222,22 +228,35 @@ namespace TelegArm.UI
 
         // ── mode ─────────────────────────────────────────────────────────────────────────────────────────────
 
-        /// <summary>The user flipped Don't-use / Use (the two radio buttons' CheckedChanged, in one event).</summary>
+        private int ModeIndex() { return _tunnel ? 2 : _enabled ? 1 : 0; }
+
+        /// <summary>Step 6.1/6.5 — what the chosen mode means, in the note under the strip.</summary>
+        private string ModeNote()
+        {
+            if (_tunnel) return "The WebSocket tunnel reaches Telegram through Telegram Web's gateway, the way tg-ws-proxy does, with nothing to install. Accounts on DC 2 and 4 by default; other DCs connect directly. More in Settings > Connection.";
+            if (_enabled) return "A proxy can help when Telegram is blocked on your network. MTProto and SOCKS5 links work, including the one tg-ws-proxy prints when it runs on a PC on your network (start it with --host 0.0.0.0).";
+            return "Connecting to Telegram directly. If it's blocked on your network, use a proxy or the WebSocket tunnel.";
+        }
+
+        /// <summary>The user picked Direct / Proxy / WebSocket tunnel.</summary>
         private void OnModeChanged(object sender, EventArgs e)
         {
             // An arrow key off the first segment would leave the strip with nothing selected: put the real state back.
-            if (_mode.SelectedIndex < 0) { _mode.SetSelected(_enabled ? 1 : 0, false); return; }
+            if (_mode.SelectedIndex < 0) { _mode.SetSelected(ModeIndex(), false); return; }
+            _tunnel = _mode.SelectedIndex == 2;
             _enabled = _mode.SelectedIndex == 1;
             _changed = true;
+            ShowMode();
             RebuildRows();
         }
 
-        /// <summary>Shows the mode WITHOUT raising <see cref="OnModeChanged"/> — the caller has already set _enabled,
-        /// _changed and calls <see cref="RebuildRows"/> itself (setting a RadioButton's Checked used to run its handler,
-        /// which rebuilt the rows a second time for nothing).</summary>
-        private void ShowMode(bool enabled)
+        /// <summary>Shows the current mode (strip, note, footer button) WITHOUT raising <see cref="OnModeChanged"/> — the
+        /// caller has already set _enabled / _tunnel and _changed and calls <see cref="RebuildRows"/> itself.</summary>
+        private void ShowMode()
         {
-            if (_mode != null) _mode.SetSelected(enabled ? 1 : 0, false);
+            if (_mode != null) _mode.SetSelected(ModeIndex(), false);
+            if (_note != null) { _note.Text = ModeNote(); LayoutPage(); }
+            if (_testAllBtn != null && !_testing) _testAllBtn.Text = _tunnel ? "Test tunnel" : "Test all";
         }
 
         // ── list ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -337,7 +356,8 @@ namespace TelegArm.UI
         private void UpdateHint()
         {
             if (_hint == null) return;
-            if (_list.Count == 0) _hint.Text = "No proxies yet — paste a tg:// or t.me/proxy link below.";
+            if (_tunnel) _hint.Text = _tunnelResult ?? ("Using the WebSocket tunnel" + (_list.Count > 0 ? " · " + _list.Count + " proxies saved" : ""));
+            else if (_list.Count == 0) _hint.Text = "No proxies yet — paste a t.me/proxy or t.me/socks link below.";
             else if (!_enabled) _hint.Text = _list.Count + " saved · proxy is off";
             else if (_active < 0 || _active >= _list.Count) _hint.Text = _list.Count + " saved · none selected — tap one to use it";
             else _hint.Text = _list.Count + " saved · using " + ProxyUrl.SafeForLog(_list[_active]);
@@ -367,7 +387,8 @@ namespace TelegArm.UI
             if (index < 0 || index >= _list.Count) return;
             _active = index;
             _enabled = true;
-            ShowMode(true);
+            _tunnel = false;   // choosing a proxy is choosing the Proxy mode
+            ShowMode();
             _changed = true;
             RebuildRows();
         }
@@ -394,7 +415,7 @@ namespace TelegArm.UI
             _list.Clear();
             _active = -1;
             _enabled = false;
-            ShowMode(false);
+            ShowMode();
             _changed = true;
             if (Logger.Enabled) Logger.Diag("[PROXY] deleted all saved proxies");
             RebuildRows();
@@ -427,7 +448,8 @@ namespace TelegArm.UI
                 return;
             }
             _list.Add(norm);
-            if (_active < 0) { _active = _list.Count - 1; _enabled = true; ShowMode(true); }
+            // the first link becomes the active one; it switches to Proxy only from Direct, never out of the tunnel
+            if (_active < 0) { _active = _list.Count - 1; if (!_tunnel) _enabled = true; ShowMode(); }
             _changed = true;
             _pasteBox.Text = "";
             if (Logger.Enabled) Logger.Diag("[PROXY] added " + ProxyUrl.SafeForLog(norm) + " (" + _list.Count + " total)");
@@ -436,13 +458,15 @@ namespace TelegArm.UI
 
         private void Save()
         {
-            _s.ProxyList = new List<string>(_list);
-            _s.ProxyEnabled = _enabled;
-            _s.ProxyActive = (_active >= 0 && _active < _list.Count) ? _active : -1;
+            // Step 6.2/6.6: neither the tunnel nor a SOCKS5 link ever lives in ProxyList, and while either is in use
+            // ProxyEnabled is false — so a 1.9.x build reading this file connects directly, never through a broken entry.
+            _s.WsTunnelEnabled = _tunnel;
+            _s.SetSavedProxies(_list, (_active >= 0 && _active < _list.Count) ? _list[_active] : null, _enabled && !_tunnel);
+            if (_tunnel != _tunnelAtOpen) { WsRoutes.Reset(); WsTunnelStats.Reset(); }
             try { _s.Save(); } catch { }
             if (Logger.Enabled)
-                Logger.Diag("[PROXY] saved enabled=" + _s.ProxyEnabled + " count=" + _s.ProxyList.Count
-                            + " active=" + ProxyUrl.SafeForLog(_s.ActiveProxyUrl));
+                Logger.Diag("[PROXY] saved enabled=" + _s.ProxyEnabled + " tunnel=" + _s.WsTunnelEnabled + " count=" + _s.ProxyList.Count
+                            + " socks=" + _s.Socks5List.Count + " active=" + ProxyUrl.SafeForLog(_s.ActiveProxyUrl ?? _s.ActiveSocksUrl));
         }
 
         // ── BATCH-TA-17 — THE TCP "REACHABILITY" PROBE IS GONE. It was showing FALSE INFORMATION. ──
@@ -482,6 +506,36 @@ namespace TelegArm.UI
             await RunTests(new List<string> { _list[index] });
         }
 
+        private string _tunnelResult;   // the last "Test tunnel" outcome, shown on the hint line while in tunnel mode
+
+        /// <summary>Step 6.5 — one strict handshake through the tunnel (ProxyTester.TestTunnelAsync, a throwaway session).</summary>
+        private async void TestTunnel()
+        {
+            if (_testing) return;
+            _testing = true;
+            _stopRequested = false;
+            if (_testAllBtn != null) _testAllBtn.Text = "Stop";
+            try { if (_tests != null) _tests.Dispose(); } catch { }
+            _tests = new CancellationTokenSource();
+            _tunnelResult = "Testing the WebSocket tunnel…";
+            UpdateHint();
+            try
+            {
+                var res = await ProxyTester.TestTunnelAsync(null, _tests.Token).ConfigureAwait(true);
+                if (IsDisposed) return;
+                _tunnelResult = res.Ok ? "Tunnel works · " + res.Ms + " ms · " + (res.Route ?? "") : (res.Error ?? "Failed");
+            }
+            finally
+            {
+                _testing = false;
+                if (!IsDisposed)
+                {
+                    if (_testAllBtn != null && !_testAllBtn.IsDisposed) _testAllBtn.Text = _tunnel ? "Test tunnel" : "Test all";
+                    UpdateHint();
+                }
+            }
+        }
+
         private async void TestAll()
         {
             if (_testing || _list.Count == 0) return;
@@ -517,7 +571,7 @@ namespace TelegArm.UI
             finally
             {
                 _testing = false;
-                if (_testAllBtn != null && !_testAllBtn.IsDisposed) _testAllBtn.Text = "Test all";
+                if (_testAllBtn != null && !_testAllBtn.IsDisposed) _testAllBtn.Text = _tunnel ? "Test tunnel" : "Test all";
                 // BATCH-TA-16f/F4 — a sweep must not end in silence. Logged HERE rather than in
                 // CancelTests because only this scope knows how many actually completed, and because
                 // pressing Stop does not guarantee the sweep stopped where the user thinks: the

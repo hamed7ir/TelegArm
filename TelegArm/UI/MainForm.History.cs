@@ -375,8 +375,8 @@ namespace TelegArm.UI
             try
             {
                 var s = AppSettings.Instance;
-                if (s.ProxyList == null) s.ProxyList = new List<string>();
-                int existing = s.ProxyList.FindIndex(u => string.Equals(u, norm, StringComparison.OrdinalIgnoreCase));
+                var all = s.SavedProxies;   // step 6.6: MTProto and SOCKS5 links, each kept in its own field
+                int existing = all.FindIndex(u => string.Equals(u, norm, StringComparison.OrdinalIgnoreCase));
                 Logger.Diag("[PROXYLINK] tapped " + ProxyUrl.SafeForLog(norm) + (existing >= 0 ? " (already saved)" : " (new)"));
 
                 ProxyLinkAction action;
@@ -390,24 +390,27 @@ namespace TelegArm.UI
 
                 if (action == ProxyLinkAction.Cancel) { Logger.Diag("[PROXYLINK] dismissed"); return; }
 
-                int idx = existing;
-                if (idx < 0) { s.ProxyList.Add(norm); idx = s.ProxyList.Count - 1; }
+                if (existing < 0) all.Add(norm);
 
                 if (action == ProxyLinkAction.AddOnly)
                 {
-                    // Deliberately does NOT touch ProxyEnabled/ProxyActive: "collect now, test later" must
+                    // Deliberately does NOT change what is in use: "collect now, test later" must
                     // not move the user off a connection that is currently working.
+                    s.SetSavedProxies(all, s.SelectedProxy, s.ProxyEnabled || s.Socks5Enabled);
                     try { s.Save(); } catch { }
                     Logger.Diag("[PROXYLINK] added " + ProxyUrl.SafeForLog(norm) + " without switching ("
-                                + s.ProxyList.Count + " total)");
+                                + all.Count + " total)");
                     ShowToast("Proxy added to your list");
                     return;
                 }
 
-                s.ProxyActive = idx;
-                s.ProxyEnabled = true;
+                // Connect = THIS proxy, so also out of the WebSocket tunnel (step 6.5): otherwise the tunnel, which wins
+                // over a selected proxy, would silently keep carrying the connection.
+                s.WsTunnelEnabled = false;
+                s.SetSavedProxies(all, norm, true);
                 try { s.Save(); } catch { }
-                Logger.Diag("[PROXYLINK] connect → " + ProxyUrl.SafeForLog(norm) + " (index " + idx + ")");
+                Logger.Diag("[PROXYLINK] connect → " + ProxyUrl.DisplayLabel(norm));
+                ProxyStatus.Reset();   // like the other doors: the pill must stop wording itself for the old transport
 
                 // EVERY DOOR MUST APPLY WHAT IT PERSISTED (§2d — the settings-door bug the device log caught).
                 // This is a fourth door into the proxy setting, so it applies live like the other three:

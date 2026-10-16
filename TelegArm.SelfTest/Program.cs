@@ -28,6 +28,8 @@ namespace TelegArm.SelfTest
             PaletteTests.Register(tests);
             ChromeTests.Register(tests);
             EmojiTests.Register(tests);
+            WsTunnelTests.Register(tests);
+            ProxyTests.Register(tests);
 
             string filter = args.Length > 0 ? args[0] : null;
             int pass = 0, fail = 0;

@@ -215,6 +215,7 @@ namespace TelegArm.UI
                 // ProxyStatus decides "failed" on WALL CLOCK, not on this attempt counter (see its remarks:
                 // one visible attempt can hide a minute of invisible WTC retries). Nothing here changes the
                 // retry behaviour — FAILED is display only.
+                if (attempt == 1) ProxyStatus.Reset();   // a cold start: read the configured transport before the first word
                 ProxyStatus.NoteAttempt();
 
                 var loginTask = _service.LoginAsync(silentResume: true);   // silent: stored phone, no code/password block; MAY hang
@@ -230,6 +231,7 @@ namespace TelegArm.UI
                     if (_service.IsAuthorized)
                     {
                         PerfLog.Boot("LoginAsync returned AUTHORIZED (attempt " + attempt + ")");
+                        try { var c = _service.Client; if (c != null && c.TLConfig != null) ProxyStatus.MainDc = c.TLConfig.this_dc; } catch { }
                         ProxyStatus.NoteAuthorized();   // the ONLY evidence a proxy actually works (TA-15/X4)
                         return true;
                     }   // connected + authorized

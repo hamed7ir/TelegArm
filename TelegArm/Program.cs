@@ -130,6 +130,16 @@ namespace TelegArm
             }
             if (gallery) { RunGallery(probe, inputLab); return; }
 
+            // STEP 6.4 — the hidden "--probe-tunnel <file>": the WebSocket gateway probe plus one STRICT handshake through
+            // the tunnel, written to <file>. Before the mutex like the rigs: it never opens an account (ProxyTester's
+            // throwaway temp session) and never reads or writes settings.json (explicit default options).
+            for (int i = 1; i < cmd.Length; i++)
+                if (string.Equals(cmd[i], "--probe-tunnel", StringComparison.OrdinalIgnoreCase))
+                {
+                    RunTunnelProbe(System.IO.Path.GetFullPath(i + 1 < cmd.Length ? cmd[i + 1] : "tunnel-probe.txt"));
+                    return;
+                }
+
             Mutex mutex;
             try
             {
@@ -428,6 +438,34 @@ namespace TelegArm
             if (light.HasValue || dark.HasValue)
                 Logger.Diag("[ACCENT] base light=" + (light.HasValue ? ThemeHelper.FormatAccent(light) : "default")
                             + " dark=" + (dark.HasValue ? ThemeHelper.FormatAccent(dark) : "default"));
+        }
+
+        /// <summary>Step 6.4 — see the "--probe-tunnel" switch in Main. Writes the [WSTUN]/[PROXYTEST] trace and a summary.</summary>
+        private static void RunTunnelProbe(string file)
+        {
+            using (var w = new System.IO.StreamWriter(file, false, new System.Text.UTF8Encoding(false)) { AutoFlush = true })
+            {
+                var listener = new System.Diagnostics.TextWriterTraceListener(w);
+                System.Diagnostics.Trace.Listeners.Add(listener);
+                Helpers.Logger.Enabled = true;
+                try
+                {
+                    string errors;
+                    var o = new Core.WsTunnelOptions { Pins = Core.WsRoutes.ParsePins(Environment.GetEnvironmentVariable("TELEGARM_WSPINS"), out errors) };
+                    w.WriteLine("pins: " + Core.WsRoutes.FormatPins(o.Pins) + (errors != null ? "  (" + errors + ")" : ""));
+                    foreach (var line in Core.WsTunnel.ProbeAsync(o).GetAwaiter().GetResult()) w.WriteLine("probe " + line);
+                    var res = Core.ProxyTester.TestTunnelAsync(o, System.Threading.CancellationToken.None).GetAwaiter().GetResult();
+                    w.WriteLine("handshake: " + (res.Ok ? "OK in " + res.Ms + " ms" : "FAILED: " + res.Error + "  raw=" + res.RawError));
+                    w.WriteLine("route: " + (res.Route ?? "(none)"));
+                    // the data path: big frames both ways, media and DC4 — strict unless TELEGARM_WSSTRICT=0 (then a DC
+                    // without a pin, or a failing gateway, shows the direct fallback)
+                    o.Strict = Environment.GetEnvironmentVariable("TELEGARM_WSSTRICT") != "0";
+                    Core.WsTunnelStats.Reset();
+                    foreach (var line in Core.ProxyTester.TunnelBulkProbeAsync(o).GetAwaiter().GetResult()) w.WriteLine("bulk " + line);
+                }
+                catch (Exception ex) { w.WriteLine("probe crashed: " + ex); }
+                finally { System.Diagnostics.Trace.Listeners.Remove(listener); }
+            }
         }
 
         /// <summary>The one DPI declaration, shared by Run() and the --shoot rig so both declare exactly the same thing

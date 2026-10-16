@@ -130,10 +130,11 @@ namespace TelegArm.Helpers
         private static string ProxyLine()
         {
             var s = AppSettings.Instance;
-            string active = s.ActiveProxyUrl;
-            int n = s.ProxyList != null ? s.ProxyList.Count : 0;
-            return active != null ? "MTProxy " + ProxyUrl.SafeForLog(active) + " (" + n + " saved)"
-                                  : "direct (" + n + " saved)";
+            // step 6.5 review: every transport, not only MTProxy — this is the text users paste when asking for help
+            string line = s.TransportLabel + " (" + s.SavedProxies.Count + " saved)";
+            if (s.WsTunnelEnabled)
+                line += (s.WsTunnelStrict ? ", strict" : "") + ", routes: " + (WsTunnelStats.Summary() ?? "none yet");
+            return line;
         }
     }
 }

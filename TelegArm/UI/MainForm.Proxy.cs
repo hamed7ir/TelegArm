@@ -77,7 +77,9 @@ namespace TelegArm.UI
         {
             if (_proxyPill == null) return;
             bool proxied = false;
-            try { proxied = AppSettings.Instance.ActiveProxyUrl != null; } catch { }
+            // step 6.5 review: the tunnel and SOCKS5 are "proxied" too (ActiveProxyUrl is MTProxy-only by design)
+            try { proxied = AppSettings.Instance.Transport != ProxyKind.Direct; } catch { }
+            try { var c = _service != null ? _service.Client : null; if (c != null && c.TLConfig != null) ProxyStatus.MainDc = c.TLConfig.this_dc; } catch { }
             var st = ProxyStatus.State;
             bool overlayUp = _connectingShown;   // a field, not _connectingPanel.Visible: that reads false in the tray (review 2.7b F2)
 
@@ -145,7 +147,7 @@ namespace TelegArm.UI
         private async System.Threading.Tasks.Task ApplyProxyChangeAsync()
         {
             string via = "(direct)";
-            try { var u = AppSettings.Instance.ActiveProxyUrl; via = u == null ? "(direct)" : ProxyUrl.SafeForLog(u); } catch { }
+            try { via = AppSettings.Instance.TransportLabel; } catch { }
             Logger.Diag("[PROXY] APPLY-LIVE start → " + via + "  warm=" + _warm.Count);
 
             ProxyStatus.NoteAttempt();   // the pill says "Connecting…" for the whole swap

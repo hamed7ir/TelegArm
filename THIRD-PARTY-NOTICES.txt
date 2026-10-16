@@ -236,6 +236,17 @@ COMPONENTS
     a single pass across all of this author's applications; until that lands,
     the attribution above stands as-is.
 
+17. tg-ws-proxy (design reference for the built-in WebSocket tunnel)
+    TelegArm's built-in WebSocket tunnel (TelegArm/Core/WsTunnel/) follows
+    the design of tg-ws-proxy: Telegram Web's kws*.web.telegram.org gateway,
+    the /apiws path and "binary" subprotocol, the default address for DC 2
+    and 4, and one MTProto packet per WebSocket message. No tg-ws-proxy code
+    is copied, and its domain-fronting and Cloudflare-proxy lists are not
+    used.
+    Copyright (c) 2026 Flowseal
+    License: MIT
+    Source:  https://github.com/Flowseal/tg-ws-proxy
+
 
 ================================================================================
 PROVENANCE OF THE REPRODUCED LICENSE TEXTS
@@ -284,8 +295,9 @@ substitute link.
 --------------------------------------------------------------------------------
 The MIT License (MIT)
   Applies to: WTelegramClient, Newtonsoft.Json, QRCoder,
-  rlottie, IndexRange, and the Microsoft / .NET Foundation compatibility
-  assemblies (each under the copyright(s) named for that component above).
+  rlottie, IndexRange, the Microsoft / .NET Foundation compatibility
+  assemblies, and tg-ws-proxy (each under the copyright(s) named for that
+  component above).
 --------------------------------------------------------------------------------
 
 Permission is hereby granted, free of charge, to any person obtaining a copy

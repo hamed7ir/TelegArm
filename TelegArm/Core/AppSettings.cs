@@ -4,6 +4,9 @@ using Newtonsoft.Json;
 
 namespace TelegArm.Core
 {
+    /// <summary>Redesign step 6.2 — how a connection reaches Telegram (<see cref="AppSettings.Transport"/>).</summary>
+    public enum ProxyKind { Direct, MtProto, Socks5, WebSocket }
+
     /// <summary>
     /// User-configurable media auto-download settings, persisted to
     /// settings.json next to the executable.
@@ -159,11 +162,129 @@ namespace TelegArm.Core
         {
             get
             {
-                if (!ProxyEnabled) return null;
+                // step 6.2/6.6: the tunnel, then a SOCKS5 proxy, win over a hand-edited file that also enables this
+                if (!ProxyEnabled || WsTunnelEnabled || ActiveSocksUrl != null) return null;
                 var list = ProxyList;
                 if (list == null || ProxyActive < 0 || ProxyActive >= list.Count) return null;
                 string u = list[ProxyActive];
                 return string.IsNullOrWhiteSpace(u) ? null : u;
+            }
+        }
+
+        // ── WebSocket tunnel (redesign step 6.2) ─────────────────────────────
+        // ⚠ ITS OWN FIELDS, NEVER AN ENTRY IN ProxyList: a 1.9.x build hands every ProxyList entry to WTC's MTProxyUrl,
+        //   and a pseudo-link there would fail every connect. Turning the tunnel on also turns ProxyEnabled off, so an
+        //   older build reading this file simply connects directly. Additive: absent = these defaults.
+        /// <summary>The built-in WebSocket tunnel (Core/WsTunnel). FALSE (default) = not used (decision D5).</summary>
+        public bool WsTunnelEnabled { get; set; } = false;
+
+        /// <summary>Never connect directly while the tunnel is on: a DC without a gateway address, or a gateway that
+        /// fails, fails the connection (WTC retries) instead of falling back to direct TCP.</summary>
+        public bool WsTunnelStrict { get; set; } = false;
+
+        /// <summary>Gateway addresses per DC, "2=149.154.167.220;4=149.154.167.220". Empty = the defaults
+        /// (<see cref="WsRoutes.DefaultPins"/>). IPv4 only.</summary>
+        public string WsTunnelDcIps { get; set; } = "";
+
+        /// <summary>Decision D6: accept a certificate CHAIN error (an old device's stale root store) for
+        /// *.web.telegram.org only — never a name mismatch — and log each time. FALSE (default) = strict.</summary>
+        public bool WsTunnelAcceptChainErrors { get; set; } = false;
+
+        // ── SOCKS5 (redesign step 6.6) ───────────────────────────────────────
+        // ⚠ Same rule as the tunnel: SOCKS5 links live in THEIR OWN list, never in ProxyList (1.9.x would hand them to
+        //   MTProxyUrl and fail every connect), and while one is in use ProxyEnabled is false.
+        /// <summary>Saved SOCKS5 links, normalised to tg://socks?server=..&amp;port=..[&amp;user=..&amp;pass=..] by
+        /// <see cref="ProxyUrl"/>. Credentials are stored in plain text, as MTProxy secrets are (TA-15/X7).</summary>
+        public System.Collections.Generic.List<string> Socks5List { get; set; } = new System.Collections.Generic.List<string>();
+
+        /// <summary>Index into <see cref="Socks5List"/> of the selected SOCKS5 proxy; -1 = none.</summary>
+        public int Socks5Active { get; set; } = -1;
+
+        /// <summary>A SOCKS5 proxy is in use.</summary>
+        public bool Socks5Enabled { get; set; } = false;
+
+        /// <summary>The SOCKS5 link in use, or null (off, the tunnel on, or nothing valid selected).</summary>
+        [JsonIgnore]
+        public string ActiveSocksUrl
+        {
+            get
+            {
+                if (!Socks5Enabled || WsTunnelEnabled) return null;
+                var list = Socks5List;
+                if (list == null || Socks5Active < 0 || Socks5Active >= list.Count) return null;
+                string u = list[Socks5Active];
+                return string.IsNullOrWhiteSpace(u) ? null : u;
+            }
+        }
+
+        /// <summary>Every saved proxy link, MTProto ones first, then SOCKS5 — as the Proxy dialog lists them.</summary>
+        [JsonIgnore]
+        public System.Collections.Generic.List<string> SavedProxies
+        {
+            get
+            {
+                var all = new System.Collections.Generic.List<string>();
+                if (ProxyList != null) all.AddRange(ProxyList);
+                if (Socks5List != null) all.AddRange(Socks5List);
+                return all;
+            }
+        }
+
+        /// <summary>The remembered proxy (in use or not), whichever kind; null when none is selected.</summary>
+        [JsonIgnore]
+        public string SelectedProxy
+        {
+            get
+            {
+                bool socksOk = Socks5List != null && Socks5Active >= 0 && Socks5Active < Socks5List.Count;
+                bool mtOk = ProxyList != null && ProxyActive >= 0 && ProxyActive < ProxyList.Count;
+                if (socksOk && (Socks5Enabled || !mtOk)) return Socks5List[Socks5Active];
+                return mtOk ? ProxyList[ProxyActive] : null;
+            }
+        }
+
+        /// <summary>Stores a combined list of links, each in its kind's own field, and the selection: <paramref name="use"/>
+        /// = connect through <paramref name="selected"/> (or "proxy on, none selected" when it is null).</summary>
+        public void SetSavedProxies(System.Collections.Generic.IEnumerable<string> all, string selected, bool use)
+        {
+            var mt = new System.Collections.Generic.List<string>();
+            var sx = new System.Collections.Generic.List<string>();
+            foreach (var u in all) { if (string.IsNullOrWhiteSpace(u)) continue; if (ProxyUrl.IsSocks(u)) sx.Add(u); else mt.Add(u); }
+            ProxyList = mt;
+            Socks5List = sx;
+            bool socks = selected != null && ProxyUrl.IsSocks(selected);
+            ProxyActive = selected != null && !socks ? mt.FindIndex(u => string.Equals(u, selected, StringComparison.OrdinalIgnoreCase)) : -1;
+            Socks5Active = socks ? sx.FindIndex(u => string.Equals(u, selected, StringComparison.OrdinalIgnoreCase)) : -1;
+            ProxyEnabled = use && !socks;
+            Socks5Enabled = use && socks;
+        }
+
+        /// <summary>The transport in one secret-free phrase, for logs and the diagnostics report: "WebSocket tunnel",
+        /// "SOCKS5 host:port", "MTProxy host:port" or "direct".</summary>
+        [JsonIgnore]
+        public string TransportLabel
+        {
+            get
+            {
+                switch (Transport)
+                {
+                    case ProxyKind.WebSocket: return "WebSocket tunnel";
+                    case ProxyKind.Socks5: return ProxyUrl.DisplayLabel(ActiveSocksUrl);
+                    case ProxyKind.MtProto: return "MTProxy " + ProxyUrl.SafeForLog(ActiveProxyUrl);
+                    default: return "direct";
+                }
+            }
+        }
+
+        /// <summary>How the next connection reaches Telegram. The ONE place that ranks the transports.</summary>
+        [JsonIgnore]
+        public ProxyKind Transport
+        {
+            get
+            {
+                if (WsTunnelEnabled) return ProxyKind.WebSocket;
+                if (ActiveSocksUrl != null) return ProxyKind.Socks5;
+                return ActiveProxyUrl != null ? ProxyKind.MtProto : ProxyKind.Direct;
             }
         }
 
@@ -267,6 +388,12 @@ namespace TelegArm.Core
         {
             if (SendKey == null) SendKey = "Enter";
             if (ProxyList == null) ProxyList = new System.Collections.Generic.List<string>();
+            if (Socks5List == null) Socks5List = new System.Collections.Generic.List<string>();
+            if (WsTunnelDcIps == null) WsTunnelDcIps = "";
+            // A hand-edited file with several transports on: keep what 2.x uses (tunnel > SOCKS5 > MTProto) and turn
+            // the rest off, so the next save cannot leave a 1.9.x reader on an MTProxy the user is not using.
+            if (WsTunnelEnabled) { ProxyEnabled = false; Socks5Enabled = false; }
+            else if (Socks5Enabled && ActiveSocksUrl != null) ProxyEnabled = false;
             if (ThemeMode == null) ThemeMode = "System";
             if (DefaultSaveFolder == null)
                 DefaultSaveFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "TelegArm");

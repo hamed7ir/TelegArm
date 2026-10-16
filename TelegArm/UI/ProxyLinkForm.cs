@@ -92,7 +92,10 @@ namespace TelegArm.UI
             // ── the details ──
             var serverRow = new DetailRow("Server", host, DetailRow.ValueStyle.Line, false, DetailRow.RowH);
             var portRow = new DetailRow("Port", port, DetailRow.ValueStyle.Line, false, DetailRow.RowH);
-            var secretRow = new DetailRow("Secret", secret, DetailRow.ValueStyle.Mono, false, DetailRow.RowH);
+            // step 6.6: a SOCKS5 link has no secret; its third line is the user name (the password is never shown)
+            var secretRow = ProxyUrl.IsSocks(_url)
+                ? new DetailRow("User", ProxyUrl.UserOf(_url) ?? "None", DetailRow.ValueStyle.Line, false, DetailRow.RowH)
+                : new DetailRow("Secret", secret, DetailRow.ValueStyle.Mono, false, DetailRow.RowH);
 
             // ── Status: test the server BEFORE committing to it ──────────────────────────────────
             // The whole point of this row is that "Add to list" and "Connect" are decisions, and a user

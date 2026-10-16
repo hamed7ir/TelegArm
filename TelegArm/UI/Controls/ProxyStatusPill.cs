@@ -40,6 +40,7 @@ namespace TelegArm.UI.Controls
         private ProxyConnectState _state = ProxyConnectState.Off;
         private string _detail;             // e.g. "velvory.co.uk.:443" — NEVER the secret (ProxyUrl.SafeForLog)
         private bool _viaProxy;             // wording modifier — see Caption()
+        private bool _viaTunnel;            // step 6.5: the "proxy" is the WebSocket tunnel
         private bool _hover, _pressed;
         private Size _sizeForText = Size.Empty;
         private readonly ToolTip _tip = new ToolTip();
@@ -95,6 +96,10 @@ namespace TelegArm.UI.Controls
         {
             // ProxyStatus may be raised from a background continuation — marshal before touching the UI.
             if (IsDisposed) return;
+            // ⚠ Step 6.5: the tunnel raises this from relay threads on every connection. Without a window handle
+            //   InvokeRequired is FALSE on any thread, so the update (and the ToolTip) would run on a pool thread:
+            //   wait for the handle instead — OnHandleCreated syncs then.
+            if (!IsHandleCreated) return;
             try
             {
                 if (InvokeRequired) BeginInvoke((Action)SyncFromStatus);
@@ -103,10 +108,17 @@ namespace TelegArm.UI.Controls
             catch { /* handle gone / form closing */ }
         }
 
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            SyncFromStatus();   // whatever changed while there was no window to show it
+        }
+
         private void SyncFromStatus()
         {
             if (IsDisposed) return;
             _viaProxy = ProxyStatus.ViaProxy;
+            _viaTunnel = ProxyStatus.ViaTunnel;
             SetState(ProxyStatus.State, ProxyStatus.Detail);
         }
 
@@ -128,6 +140,14 @@ namespace TelegArm.UI.Controls
         /// ProxyStatus carries ViaProxy.</summary>
         private string Caption()
         {
+            if (_viaTunnel)
+                switch (_state)
+                {
+                    case ProxyConnectState.Connecting: return "Connecting via tunnel…";
+                    // only the route log may say "tunnelled": a main connection that fell back is direct
+                    case ProxyConnectState.Connected: return WsTunnelStats.Tunnelled(ProxyStatus.MainDc) ? "Tunnel connected" : "Connected directly";
+                    case ProxyConnectState.Failed: return "Tunnel not working";
+                }
             switch (_state)
             {
                 case ProxyConnectState.Connecting: return _viaProxy ? "Connecting via proxy…" : "Connecting…";
@@ -137,9 +157,26 @@ namespace TelegArm.UI.Controls
             }
         }
 
+        /// <summary>The collapsed "you are protected" shield — only while the connection really goes the way the user chose.
+        /// A tunnel that fell back to a direct connection (a DC without a gateway) keeps the wide pill and says so: the
+        /// tooltip alone would be invisible on a touch screen (step 6.5 review).</summary>
+        private bool ShowsShield()
+        {
+            return _state == ProxyConnectState.Connected && !(_viaTunnel && !WsTunnelStats.Tunnelled(ProxyStatus.MainDc));
+        }
+
         private string TooltipText()
         {
             string d = string.IsNullOrEmpty(_detail) ? "" : "\n" + _detail;
+            if (_viaTunnel)
+                switch (_state)
+                {
+                    case ProxyConnectState.Connecting: return "Trying to reach Telegram through the WebSocket tunnel." + d;
+                    case ProxyConnectState.Connected:
+                        return (WsTunnelStats.Tunnelled(ProxyStatus.MainDc) ? "Connected to Telegram through the WebSocket tunnel."
+                                                              : "Connected, but directly: the tunnel had no route for this DC.") + d;
+                    case ProxyConnectState.Failed: return "Couldn't reach Telegram through the WebSocket tunnel.\nClick to change or turn it off." + d;
+                }
             switch (_state)
             {
                 case ProxyConnectState.Connecting:
@@ -149,7 +186,7 @@ namespace TelegArm.UI.Controls
                 case ProxyConnectState.Failed:
                     return _viaProxy ? "Couldn't reach Telegram through your proxy.\nClick to change or turn it off." + d
                                      : "Couldn't reach Telegram.\nIt may be blocked on your network — click to set up a proxy.";
-                default: return "Set up an MTProto proxy if Telegram is blocked on your network.";
+                default: return "Set up a proxy or the WebSocket tunnel if Telegram is blocked on your network.";
             }
         }
 
@@ -166,7 +203,7 @@ namespace TelegArm.UI.Controls
             // (connecting / failed / off) keeps the wide pill, because those have something to SAY.
             // Still one figure, so the Region's FillMode rule is unaffected: a square fed to
             // RoundedRect with radius = h/2 IS a circle.
-            int w = _state == ProxyConnectState.Connected ? h : t.Width + h + Dpi.Px(22, dpi);
+            int w = ShowsShield() ? h : t.Width + h + Dpi.Px(22, dpi);
             var want = new Size(w, h);
             if (want != _sizeForText) { _sizeForText = want; Size = want; }
             RebuildRegion();
@@ -178,7 +215,7 @@ namespace TelegArm.UI.Controls
             int dpi = Dpi.Of(this);
             var t = TextRenderer.MeasureText(Caption(), FontHelper.UiAt(9f, dpi, FontStyle.Bold));   // shared font: never dispose
             int h = Math.Max(Dpi.Px(28, dpi), t.Height + Dpi.Px(8, dpi));
-            int w = _state == ProxyConnectState.Connected ? h : t.Width + h + Dpi.Px(14, dpi);
+            int w = ShowsShield() ? h : t.Width + h + Dpi.Px(14, dpi);
             var want = new Size(w, h);
             if (want != _sizeForText)
             {
@@ -259,7 +296,7 @@ namespace TelegArm.UI.Controls
                     g.DrawPath(p, path);
             }
 
-            if (_state == ProxyConnectState.Connected)
+            if (ShowsShield())
             {
                 // The collapsed steady state: an accent shield, centred, no text.
                 float s = body.Height * 0.52f;
@@ -315,7 +352,7 @@ namespace TelegArm.UI.Controls
             using (var fb = new SolidBrush(fill))
                 g.FillPath(fb, path);
 
-            if (_state == ProxyConnectState.Connected)
+            if (ShowsShield())
             {
                 float s = body.Height * 0.56f;
                 var sr = new RectangleF((body.Width - s) / 2f, (body.Height - s) / 2f, s, s);

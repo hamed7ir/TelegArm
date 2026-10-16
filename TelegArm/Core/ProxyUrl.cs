@@ -44,6 +44,7 @@ namespace TelegArm.Core
 
             if (string.IsNullOrWhiteSpace(input)) { error = "Paste a proxy link first."; return false; }
             string s = input.Trim();
+            bool socks = LooksSocks(s);   // step 6.6: tg://socks / t.me/socks — the one place the kind is decided
 
             int q = s.IndexOf('?');
             if (q < 0)
@@ -53,7 +54,7 @@ namespace TelegArm.Core
                 return false;
             }
 
-            string server = null, port = null, secret = null;
+            string server = null, port = null, secret = null, user = null, pass = null;
             foreach (var pair in s.Substring(q + 1).Split('&'))
             {
                 if (pair.Length == 0) continue;
@@ -65,10 +66,17 @@ namespace TelegArm.Core
                 if (k.Equals("server", StringComparison.OrdinalIgnoreCase)) server = v;
                 else if (k.Equals("port", StringComparison.OrdinalIgnoreCase)) port = v;
                 else if (k.Equals("secret", StringComparison.OrdinalIgnoreCase)) secret = v;
+                else if (k.Equals("user", StringComparison.OrdinalIgnoreCase)) user = v;
+                else if (k.Equals("pass", StringComparison.OrdinalIgnoreCase)) pass = v;
             }
 
             if (string.IsNullOrWhiteSpace(server)) { error = "The link has no server address."; return false; }
             if (server.IndexOf(' ') >= 0) { error = "The server address contains a space."; return false; }
+            // Step 6.6 review: the server goes back into the link UNESCAPED, so a '&', '%', '=' or '#' in it would split
+            // or re-decode the link later (Field). No host name or address has those: refuse anything that isn't one.
+            foreach (char ch in server)
+                if (!(char.IsLetterOrDigit(ch) || ch == '.' || ch == '-' || ch == '_' || ch == ':' || ch == '[' || ch == ']'))
+                { error = "The server address contains characters a host name can't have."; return false; }
 
             int portNum;
             if (string.IsNullOrWhiteSpace(port)) { error = "The link has no port."; return false; }
@@ -79,10 +87,25 @@ namespace TelegArm.Core
                 return false;
             }
 
+            if (socks)
+            {
+                // SOCKS5 (RFC 1928/1929): no secret; an optional user name and password, each at most 255 bytes.
+                if (user != null && Encoding.UTF8.GetByteCount(user) > 255 || pass != null && Encoding.UTF8.GetByteCount(pass) > 255)
+                { error = "The user name or password is too long for SOCKS5 (255 bytes at most)."; return false; }
+                normalized = "tg://socks?server=" + server + "&port=" + portNum
+                           + (string.IsNullOrEmpty(user) ? "" : "&user=" + Uri.EscapeDataString(user) + "&pass=" + Uri.EscapeDataString(pass ?? ""));
+                return true;
+            }
+
             if (string.IsNullOrWhiteSpace(secret)) { error = "The link has no secret."; return false; }
             string secretError;
             if (DecodeSecret(secret, out secretError) == null) { error = secretError; return false; }
 
+            // Step 6.6 review: a standard-base64 secret is stored URL-safe ('+' → '-', '/' → '_'). WTC reads the link with
+            // HttpUtility.ParseQueryString, which turns '+' into a space that Convert.FromBase64String then DROPS — the
+            // secret came out a byte short and the connect failed with "Invalid/unsupported secret". WTC maps '-'/'_'
+            // back itself (src/Client.cs:887), so the bytes are the same. Hex secrets have neither character.
+            secret = secret.Replace('+', '-').Replace('/', '_');
             normalized = "tg://proxy?server=" + server + "&port=" + portNum + "&secret=" + secret;
             return true;
         }
@@ -155,7 +178,24 @@ namespace TelegArm.Core
             return port == null ? host : host + ":" + port;
         }
 
-        /// <summary>BATCH-TA-18 — is this URL a link to an MTProto PROXY, whatever form it arrived in?
+        /// <summary>Step 6.6 — a normalised link (from <see cref="TryNormalize"/>) is a SOCKS5 proxy, not an MTProxy.</summary>
+        public static bool IsSocks(string url)
+        {
+            return url != null && url.TrimStart().StartsWith("tg://socks", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>The raw link names SOCKS5: tg://socks?… or a Telegram host's /socks path.</summary>
+        private static bool LooksSocks(string s)
+        {
+            if (s.StartsWith("tg://socks", StringComparison.OrdinalIgnoreCase)) return true;
+            if (s.StartsWith("tg://", StringComparison.OrdinalIgnoreCase)) return false;
+            bool hasScheme = System.Text.RegularExpressions.Regex.IsMatch(s, @"^[a-zA-Z][a-zA-Z0-9+.\-]*:");
+            Uri uri;
+            if (!Uri.TryCreate(hasScheme ? s : "https://" + s, UriKind.Absolute, out uri)) return false;
+            return uri.AbsolutePath.Trim('/').Equals("socks", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>BATCH-TA-18 — is this URL a link to a PROXY (MTProto, or SOCKS5 since step 6.6), whatever form it arrived in?
         /// SHAPE ONLY: it answers "should this be intercepted instead of shelled out to a browser", and
         /// deliberately does NOT parse the settings. The moment the answer is yes, the WHOLE url goes to
         /// <see cref="TryNormalize"/> — the same call the paste box makes — so there is exactly ONE parser
@@ -164,14 +204,15 @@ namespace TelegArm.Core
         /// The three forms Telegram itself emits (tg://proxy, t.me/proxy, telegram.me/proxy) all mean the
         /// same thing; telegram.dog is included because <c>MainForm.ParseTgLink</c> already treats it as a
         /// Telegram host in the same reserved-segment list this mirrors.
-        /// ⚠ "socks" IS DELIBERATELY NOT HERE. t.me/socks?… is a SOCKS5 proxy, which this app cannot use —
-        /// WTC's <c>MTProxyUrl</c> is MTProto-only. Intercepting one would mean offering to connect through
-        /// something that cannot work, so socks links keep falling through to the browser unchanged.</summary>
+        /// Step 6.6: "socks" is handled now — tg://socks and t.me/socks are SOCKS5 proxies, which the app can use
+        /// through its own SOCKS5 client (Core/Socks5.cs; WTC's MTProxyUrl stays MTProto-only). Until 2.1 they fell
+        /// through to the browser because nothing here could connect through them.</summary>
         public static bool IsProxyLink(string url)
         {
             if (string.IsNullOrWhiteSpace(url)) return false;
             string s = url.Trim();
-            if (s.StartsWith("tg://proxy", StringComparison.OrdinalIgnoreCase)) return true;
+            if (s.StartsWith("tg://proxy", StringComparison.OrdinalIgnoreCase)
+                || s.StartsWith("tg://socks", StringComparison.OrdinalIgnoreCase)) return true;
 
             // Message links are often scheme-less ("t.me/proxy?…"), exactly as MainForm.NormalizeUrl handles.
             bool hasScheme = System.Text.RegularExpressions.Regex.IsMatch(s, @"^[a-zA-Z][a-zA-Z0-9+.\-]*:");
@@ -179,7 +220,8 @@ namespace TelegArm.Core
             if (!Uri.TryCreate(hasScheme ? s : "https://" + s, UriKind.Absolute, out uri)) return false;
             string host = uri.Host.ToLowerInvariant();
             if (host != "t.me" && host != "telegram.me" && host != "telegram.dog") return false;
-            return uri.AbsolutePath.Trim('/').Equals("proxy", StringComparison.OrdinalIgnoreCase);
+            string path = uri.AbsolutePath.Trim('/');
+            return path.Equals("proxy", StringComparison.OrdinalIgnoreCase) || path.Equals("socks", StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>Server host of a normalised link, or null.</summary>
@@ -189,6 +231,10 @@ namespace TelegArm.Core
         /// sheet shows it so a user can compare it against the channel post they tapped. It must NEVER be
         /// passed to a logger; see the rule in this class's remarks.</summary>
         public static string SecretOf(string url) { return Field(url, "secret"); }
+
+        /// <summary>Step 6.6 — a SOCKS5 link's user name / password, or null. ⚠ Credentials: never to a log.</summary>
+        public static string UserOf(string url) { return Field(url, "user"); }
+        public static string PassOf(string url) { return Field(url, "pass"); }
 
         /// <summary>Port of a normalised link as text, or null.</summary>
         public static string PortOf(string url) { return Field(url, "port"); }
@@ -217,10 +263,10 @@ namespace TelegArm.Core
             return null;
         }
 
-        /// <summary>A short label for the UI list: "MTPROTO host:port". Secret-free by construction.</summary>
+        /// <summary>A short label for the UI list: "MTPROTO host:port" or "SOCKS5 host:port". Secret-free by construction.</summary>
         public static string DisplayLabel(string url)
         {
-            var sb = new StringBuilder("MTPROTO ");
+            var sb = new StringBuilder(IsSocks(url) ? "SOCKS5 " : "MTPROTO ");
             sb.Append(SafeForLog(url));
             return sb.ToString();
         }

@@ -54,6 +54,8 @@
     <Compile Include="PaletteTests.cs" />
     <Compile Include="ChromeTests.cs" />
     <Compile Include="EmojiTests.cs" />
+    <Compile Include="WsTunnelTests.cs" />
+    <Compile Include="ProxyTests.cs" />
   </ItemGroup>
   <!-- The app sources under test. Add a file here when a test needs it (and whatever it depends on). -->
   <ItemGroup>
@@ -73,6 +75,13 @@
     <Compile Include="..\TelegArm\Helpers\KeyboardInset.cs"><Link>Linked\Helpers\KeyboardInset.cs</Link></Compile>
     <Compile Include="..\TelegArm\Helpers\EmojiRenderer.cs"><Link>Linked\Helpers\EmojiRenderer.cs</Link></Compile>
     <Compile Include="..\TelegArm\Helpers\PerfLog.cs"><Link>Linked\Helpers\PerfLog.cs</Link></Compile>
+    <Compile Include="..\TelegArm\Core\WsTunnel\Obfuscated2.cs"><Link>Linked\Core\WsTunnel\Obfuscated2.cs</Link></Compile>
+    <Compile Include="..\TelegArm\Core\WsTunnel\WsClient.cs"><Link>Linked\Core\WsTunnel\WsClient.cs</Link></Compile>
+    <Compile Include="..\TelegArm\Core\WsTunnel\WsRoutes.cs"><Link>Linked\Core\WsTunnel\WsRoutes.cs</Link></Compile>
+    <Compile Include="..\TelegArm\Core\WsTunnel\WsTunnel.cs"><Link>Linked\Core\WsTunnel\WsTunnel.cs</Link></Compile>
+    <Compile Include="..\TelegArm\Core\WsTunnel\WsTunnelStats.cs"><Link>Linked\Core\WsTunnel\WsTunnelStats.cs</Link></Compile>
+    <Compile Include="..\TelegArm\Core\ProxyUrl.cs"><Link>Linked\Core\ProxyUrl.cs</Link></Compile>
+    <Compile Include="..\TelegArm\Core\Socks5.cs"><Link>Linked\Core\Socks5.cs</Link></Compile>
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Fixtures\settings-1.9.0.json"><LogicalName>settings-1.9.0.json</LogicalName></EmbeddedResource>
@@ -80,6 +89,9 @@
   <ItemGroup>
     <PackageReference Include="Newtonsoft.Json">
       <Version>13.0.4</Version>
+    </PackageReference>
+    <PackageReference Include="WTelegramClient">
+      <Version>4.4.9</Version>
     </PackageReference>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />

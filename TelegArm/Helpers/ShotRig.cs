@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Drawing;
@@ -106,6 +106,26 @@ namespace TelegArm.Helpers
                         _log.AppendLine("  pill: in " + (pill.Parent != null ? pill.Parent.GetType().Name : "nothing") + ", shown="
                             + Field(f, "_proxyPillShown") + ", bounds " + pill.Bounds
                             + (pill.Parent != null ? " of " + pill.Parent.ClientSize : "") + ", front=" + (pill.Parent != null && pill.Parent.Controls.GetChildIndex(pill) == 0));
+                    // Step 6.5: the WebSocket tunnel's pill — the shield when DC 2 went through the gateway, the wide
+                    // "Connected directly" pill when it fell back (a touch screen has no tooltip to tell it apart).
+                    AppSettings.Instance.WsTunnelEnabled = true;
+                    ProxyStatus.MainDc = 2;
+                    WsTunnelStats.Record(2, false, WsRouteKind.WebSocket, "kws2.web.telegram.org", null, 1100);
+                    ProxyStatus.Reset();
+                    ProxyStatus.NoteAuthorized();
+                    Invoke(f, "RefreshProxyPill");
+                    Settle(f);
+                    Capture(f, "main-tunnel-ws-" + t);
+                    WsTunnelStats.Record(2, false, WsRouteKind.Direct, "149.154.167.50:443", "no address", 3);
+                    Invoke(f, "RefreshProxyPill");
+                    Settle(f);
+                    Capture(f, "main-tunnel-direct-" + t);
+                    var tunnelPill = Field(f, "_proxyPill") as Control;
+                    if (tunnelPill != null) _log.AppendLine("  tunnel pill: " + tunnelPill.Bounds + " caption via the tooltip state");
+                    AppSettings.Instance.WsTunnelEnabled = false;
+                    WsTunnelStats.Reset();
+                    ProxyStatus.MainDc = 0;
+                    ProxyStatus.Reset();
                     ProxyStatus.NoteAuthorized();   // direct: Off, the pill hides
                     Invoke(f, "RefreshProxyPill");
                     SeedChatList(f);
@@ -149,7 +169,20 @@ namespace TelegArm.Helpers
                 WithForm("dialog-" + t, NewThemedDialog, f => Capture(f, "dialog-" + t));
                 WithForm("about-" + t, () => new AboutForm(ThemeHelper.IsDark, ThemeHelper.GetWindowsAccentColor()),
                          f => Capture(f, "about-" + t));
-                WithForm("proxy-" + t, () => new ProxyForm(), f => Capture(f, "proxy-" + t));
+                WithForm("proxy-" + t, () => new ProxyForm(), f =>
+                {
+                    Capture(f, "proxy-" + t);
+                    // Step 6.5: the other two modes of the Connection strip (Proxy, WebSocket tunnel) — note, list and footer.
+                    var strip = Field(f, "_mode");
+                    foreach (var m in new[] { Tuple.Create(1, "proxy-mtproto-"), Tuple.Create(2, "proxy-tunnel-") })
+                    {
+                        strip.GetType().GetMethod("SetSelected").Invoke(strip, new object[] { m.Item1, true });
+                        Settle(f);
+                        Capture(f, m.Item2 + t);
+                    }
+                    // the dialog saves on close: leave it on Direct, or the next theme's shots start in tunnel mode
+                    strip.GetType().GetMethod("SetSelected").Invoke(strip, new object[] { 0, true });
+                });
                 WithForm("gallery-" + t, () => new DesignGalleryForm(), f =>
                 {
                     Capture(f, "gallery-" + t);   // step 1.3+

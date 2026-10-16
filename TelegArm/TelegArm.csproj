@@ -85,6 +85,12 @@
     <Compile Include="Core\ProxyStatus.cs" />
     <Compile Include="Core\ProxyTester.cs" />
     <Compile Include="Core\ProxyUrl.cs" />
+    <Compile Include="Core\Socks5.cs" />
+    <Compile Include="Core\WsTunnel\Obfuscated2.cs" />
+    <Compile Include="Core\WsTunnel\WsClient.cs" />
+    <Compile Include="Core\WsTunnel\WsRoutes.cs" />
+    <Compile Include="Core\WsTunnel\WsTunnel.cs" />
+    <Compile Include="Core\WsTunnel\WsTunnelStats.cs" />
     <Compile Include="Core\StoragePaths.cs" />
     <Compile Include="Core\Camera\ICameraRecorder.cs" />
     <Compile Include="Core\Camera\CameraCapture.cs" />

@@ -252,12 +252,51 @@ namespace TelegArm.Core
         private static void ApplyProxyTo(WTelegram.Client c, string why)
         {
             if (c == null) return;
-            string url = null;
-            try { url = AppSettings.Instance.ActiveProxyUrl; } catch { }
-            c.MTProxyUrl = url;                       // null is meaningful: it means "direct"
+            // WTC's own default factory, captured from the first client before we ever replace it (it is private in WTC,
+            // src/Client.cs:839), so switching the tunnel OFF restores exactly the library's behaviour.
+            if (_wtcTcpHandler == null && IsWtcOwn(c.TcpHandler)) _wtcTcpHandler = c.TcpHandler;
+            bool tunnel = false;
+            string url = null, socks = null;
+            try
+            {
+                tunnel = AppSettings.Instance.WsTunnelEnabled;
+                url = AppSettings.Instance.ActiveProxyUrl;
+                socks = AppSettings.Instance.ActiveSocksUrl;
+            }
+            catch { }
+            if (tunnel)
+            {
+                // Step 6.4: the WebSocket tunnel is a TRANSPORT, not an MTProxy — WTC connects "directly" (obfuscated2 to
+                // the DC) and the factory relays that through the gateway. Clones (media DCs) copy TcpHandler too
+                // (src/Client.cs:140), and a live switch drops them (ApplyProxyChangeAsync), so every route follows.
+                c.MTProxyUrl = null;
+                c.TcpHandler = WsTunnel.ConnectAsync;
+            }
+            else if (socks != null)
+            {
+                // Step 6.6: SOCKS5 is a transport too — the SOCKS server CONNECTs to the DC and WTC speaks through it.
+                string link = socks;
+                c.MTProxyUrl = null;
+                c.TcpHandler = (h, p) => Socks5.ConnectAsync(link, h, p);
+            }
+            else
+            {
+                c.MTProxyUrl = url;                   // null is meaningful: it means "direct"
+                if (_wtcTcpHandler != null) c.TcpHandler = _wtcTcpHandler;
+            }
             if (TelegArm.Helpers.Logger.Enabled)
-                TelegArm.Helpers.Logger.Diag("[PROXY] " + why + " → " + (url == null ? "DIRECT (no proxy)"
+                TelegArm.Helpers.Logger.Diag("[PROXY] " + why + " → " + (tunnel ? "WEBSOCKET TUNNEL"
+                                                                       : socks != null ? "via " + ProxyUrl.DisplayLabel(socks)
+                                                                       : url == null ? "DIRECT (no proxy)"
                                                                                      : "via " + ProxyUrl.SafeForLog(url)));
+        }
+
+        private static WTelegram.Client.TcpFactory _wtcTcpHandler;
+
+        /// <summary>The factory is WTC's own (declared in the library), not one of ours.</summary>
+        private static bool IsWtcOwn(WTelegram.Client.TcpFactory f)
+        {
+            return f != null && f.Method.DeclaringType != null && f.Method.DeclaringType.Assembly == typeof(WTelegram.Client).Assembly;
         }
 
         /// <summary>BATCH-TA-17 — apply a CHANGED proxy (or a switch back to direct) to THIS live client,

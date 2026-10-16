@@ -294,7 +294,7 @@ namespace TelegArm.UI
         private async System.Threading.Tasks.Task ApplyProxyChangeAsync()
         {
             string via = "(direct)";
-            try { var u = AppSettings.Instance.ActiveProxyUrl; via = u == null ? "(direct)" : ProxyUrl.SafeForLog(u); } catch { }
+            try { via = AppSettings.Instance.TransportLabel; } catch { }
             Logger.Diag("[PROXY] APPLY-LIVE (login) → " + via);
 
             ProxyStatus.NoteAttempt();      // pill says "Connecting…" across the swap

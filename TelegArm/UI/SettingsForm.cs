@@ -46,6 +46,8 @@ namespace TelegArm.UI
         private ToggleRow _photos, _videos, _documents, _voice, _audio, _gifs, _autoPlayGifs, _notifications, _animateWebm;
         private StepperRow _maxSize, _retention;
         private TextRow _cacheBox, _saveBox;
+        private ToggleRow _wsStrict, _wsChain;   // step 6.5: the WebSocket tunnel's options (committed in OnOk)
+        private TextRow _wsPins;
         private ActionRow _clearCacheRow, _proxyRow;
 
         // Security (two-step verification) page.
@@ -762,6 +764,39 @@ namespace TelegArm.UI
                 if (changed) ProxyChangeApplied?.Invoke();
             };
             page.Section("Connection", _proxyRow);
+
+            // Step 6.5 — the WebSocket tunnel's options. The tunnel itself is switched on in the Proxy dialog (the login
+            // screen reaches that dialog too, which matters when Telegram is blocked); these apply to its connections.
+            var s = AppSettings.Instance;
+            var note = new NoteRow("The WebSocket tunnel reaches Telegram through Telegram Web's gateway, the way tg-ws-proxy "
+                                   + "does. Turn it on in Proxy. These options apply while it is on.", 2);
+            _wsStrict = new ToggleRow("Never connect directly", s.WsTunnelStrict)
+            { Subtitle = "Fail rather than fall back to a direct connection" };
+            _wsPins = new TextRow("Gateway addresses (DC=IPv4; …)", string.IsNullOrWhiteSpace(s.WsTunnelDcIps) ? WsRoutes.DefaultPins : s.WsTunnelDcIps)
+            { Hint = WsRoutes.DefaultPins };
+            _wsChain = new ToggleRow("Accept certificate chain errors", s.WsTunnelAcceptChainErrors)
+            { Subtitle = "For outdated certificate stores; *.web.telegram.org only" };
+            var probe = new ActionRow("Probe the gateways", "Probe");
+            probe.Click += OnProbeGateways;
+            page.Section("WebSocket tunnel", note, _wsStrict, _wsPins, _wsChain, probe);
+        }
+
+        /// <summary>Step 6.5 — TLS + upgrade to every pinned gateway (no MTProto, no account), with the addresses as typed.</summary>
+        private async void OnProbeGateways(object sender, EventArgs e)
+        {
+            var row = sender as ActionRow;
+            string errors;
+            var o = new WsTunnelOptions { AcceptChainErrors = _wsChain.On, Pins = WsRoutes.ParsePins(_wsPins.Value, out errors) };
+            if (errors != null) { ThemedDialog.Show(this, "Gateway addresses", errors + "\n\nWrite one DC=address per entry, e.g. " + WsRoutes.DefaultPins, "OK"); return; }
+            if (row != null) { row.Enabled = false; row.ActionText = "Probing…"; }
+            List<string> lines;
+            try { lines = await System.Threading.Tasks.Task.Run(() => WsTunnel.ProbeAsync(o)).ConfigureAwait(true); }
+            catch (Exception ex) { lines = new List<string> { "Probe failed: " + ex.Message }; }
+            if (IsDisposed) return;
+            if (row != null) { row.Enabled = true; row.ActionText = "Probe"; }
+            string routes = WsTunnelStats.Summary();
+            ThemedDialog.Show(this, "WebSocket gateways", string.Join("\n", lines.ToArray())
+                              + (routes != null ? "\n\nLast connections: " + routes : ""), "OK");
         }
 
         /// <summary>Secret-free one-line summary of the proxy setting for the Settings row.</summary>
@@ -769,9 +804,10 @@ namespace TelegArm.UI
         {
             var s = AppSettings.Instance;
             string active = null;
-            try { active = s.ActiveProxyUrl; } catch { }
-            int n = s.ProxyList != null ? s.ProxyList.Count : 0;
-            if (active != null) return "Using " + TelegArm.Core.ProxyUrl.SafeForLog(active);
+            try { active = s.ActiveProxyUrl ?? s.ActiveSocksUrl; } catch { }
+            int n = s.SavedProxies.Count;
+            if (s.WsTunnelEnabled) return "WebSocket tunnel";
+            if (active != null) return "Using " + (TelegArm.Core.ProxyUrl.IsSocks(active) ? "SOCKS5 " : "") + TelegArm.Core.ProxyUrl.SafeForLog(active);
             if (n > 0) return "Off · " + n + " saved";
             return "Off — set one up if Telegram is blocked on your network";
         }
@@ -1333,7 +1369,37 @@ namespace TelegArm.UI
                 return;   // NOTHING has been touched yet — in memory or on disk. The dialog stays open.
             }
 
+            // Step 6.5 — the gateway addresses are free text: refused here, BEFORE any assignment (B1 above).
+            string pinErrors = null, pins = null;
+            if (_wsPins != null)
+            {
+                var map = WsRoutes.ParsePins(_wsPins.Value, out pinErrors);
+                pins = WsRoutes.FormatPins(map);
+                if (pinErrors == null && map.Count == 0) pinErrors = "No addresses.";
+            }
+            if (pinErrors != null)
+            {
+                ShowPage(PageConnection);
+                ThemedDialog.Show(this, "Gateway addresses", pinErrors + "\n\nWrite one DC=address per entry, e.g. " + WsRoutes.DefaultPins, "OK");
+                return;   // nothing touched yet
+            }
+
             var s = AppSettings.Instance;
+            if (_wsPins != null)
+            {
+                if (pins == WsRoutes.DefaultPins) pins = "";   // the default stays implicit, so a future default reaches this user
+                bool tunnelChanged = s.WsTunnelStrict != _wsStrict.On || s.WsTunnelAcceptChainErrors != _wsChain.On
+                                     || (s.WsTunnelDcIps ?? "") != pins;
+                s.WsTunnelStrict = _wsStrict.On;
+                s.WsTunnelAcceptChainErrors = _wsChain.On;
+                s.WsTunnelDcIps = pins;
+                if (tunnelChanged)
+                {
+                    WsRoutes.Reset();
+                    // the live connections were made with the old options: reconnect them, as a proxy change does
+                    if (s.WsTunnelEnabled) ProxyChangeApplied?.Invoke();
+                }
+            }
             s.AutoDownloadPhotos = _photos.On;
             s.AutoDownloadVideos = _videos.On;
             s.AutoDownloadDocuments = _documents.On;

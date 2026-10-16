@@ -54,6 +54,50 @@ namespace TelegArm.Core
         /// user in a blocked country needs the no-proxy wording to point at the fix.</summary>
         public static bool ViaProxy { get { lock (_gate) return _viaProxy; } }
 
+        /// <summary>Step 6.5 — the "proxy" in use is the built-in WebSocket tunnel; <see cref="Detail"/> is then the
+        /// route summary (WsTunnelStats), which is the only thing allowed to say what was actually tunnelled.</summary>
+        public static bool ViaTunnel { get { lock (_gate) return _viaTunnel; } }
+        private static bool _viaTunnel;
+
+        /// <summary>The ACTIVE account's main DC (WTC TLConfig.this_dc), set by the form that owns the connection; 0 =
+        /// not known yet. The pill asks the tunnel's route log about THIS DC only (WsTunnelStats.Tunnelled).</summary>
+        public static int MainDc { get { return System.Threading.Volatile.Read(ref _mainDc); } set { System.Threading.Volatile.Write(ref _mainDc, value); } }
+        private static int _mainDc;
+
+        static ProxyStatus()
+        {
+            // a route that changes (gateway → direct fallback, a new DC) changes what the pill may claim
+            WsTunnelStats.Changed += () =>
+            {
+                bool raise;
+                lock (_gate) { raise = _viaTunnel; if (raise) _detail = WsTunnelStats.Summary() ?? "WebSocket tunnel"; }
+                if (raise) Raise();
+            };
+        }
+
+        /// <summary>The configured transport, as the pill words it: via a proxy or the tunnel, and its detail.
+        /// Call under <see cref="_gate"/>.</summary>
+        private static void ReadConfiguredLocked()
+        {
+            string url = null, socks = null;
+            bool tunnel = false;
+            try
+            {
+                tunnel = AppSettings.Instance.WsTunnelEnabled;
+                url = AppSettings.Instance.ActiveProxyUrl;
+                socks = AppSettings.Instance.ActiveSocksUrl;
+            }
+            catch { }
+            // ⚠ NoteAuthorized runs this on EVERY update (TelegramService.NoteActivity): while already on the tunnel the
+            //   detail is kept current by the WsTunnelStats.Changed handler, so the summary is only built on the switch.
+            bool wasTunnel = _viaTunnel;
+            _viaTunnel = tunnel;
+            _viaProxy = tunnel || url != null || socks != null;
+            _detail = tunnel ? (wasTunnel && _detail != null ? _detail : WsTunnelStats.Summary() ?? "WebSocket tunnel")
+                    : socks != null ? ProxyUrl.DisplayLabel(socks)
+                    : url != null ? ProxyUrl.SafeForLog(url) : null;
+        }
+
         /// <summary>Raised whenever the state or detail changes. Subscribers are UI controls, so they must
         /// marshal themselves — this can be raised from a background continuation.</summary>
         public static event Action Changed;
@@ -69,10 +113,7 @@ namespace TelegArm.Core
         {
             lock (_gate)
             {
-                string url = null;
-                try { url = AppSettings.Instance.ActiveProxyUrl; } catch { }
-                _viaProxy = url != null;
-                _detail = _viaProxy ? ProxyUrl.SafeForLog(url) : null;
+                ReadConfiguredLocked();
                 _firstAttemptUtc = DateTime.MinValue;   // a newly-chosen proxy gets a full grace period
                 // ⚠ The STATE is deliberately NOT forced to Off here. Turning a proxy off does not mean the
                 // app is connected — the connect loop owns that, and clobbering it would make the pill lie.
@@ -105,15 +146,12 @@ namespace TelegArm.Core
             bool changed;
             lock (_gate)
             {
-                string url = null;
-                try { url = AppSettings.Instance.ActiveProxyUrl; } catch { }
-                _viaProxy = url != null;
+                ReadConfiguredLocked();
                 // Connected DIRECTLY is the ordinary healthy case and needs no chrome, so it maps to Off
-                // (MainForm hides the pill there). Connected VIA A PROXY is worth stating.
+                // (MainForm hides the pill there). Connected VIA A PROXY (or the tunnel) is worth stating.
                 var next = _viaProxy ? ProxyConnectState.Connected : ProxyConnectState.Off;
                 changed = next != _state;
                 _state = next;
-                _detail = _viaProxy ? ProxyUrl.SafeForLog(url) : null;
                 _firstAttemptUtc = DateTime.MinValue;                // a success resets the budget
             }
             if (changed) Raise();
