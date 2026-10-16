@@ -69,6 +69,19 @@ TGAV_API int  TGAV_CALL tgav_read_audio(tgav *t, int16_t *dst, int max_samples, 
 TGAV_API int  TGAV_CALL tgav_seek(tgav *t, int ms);
 TGAV_API void TGAV_CALL tgav_close(tgav *t);
 
+/* Camera frames (tgav 1.1): one raw frame (NV12, YUY2 or BGRA) to BGRA dst_w x dst_h, taken from a crop rectangle of the
+ * source (x and y rounded down to even), optionally mirrored left-right (a selfie view). A scaler caches its swscale
+ * context: one per thread. Returns 0, or < 0. */
+#define TGAV_PIX_NV12 0
+#define TGAV_PIX_YUY2 1
+#define TGAV_PIX_BGRA 2
+typedef struct tgav_scaler tgav_scaler;
+TGAV_API tgav_scaler *TGAV_CALL tgav_scaler_create(void);
+TGAV_API int  TGAV_CALL tgav_scale(tgav_scaler *s, int fmt, const uint8_t *plane0, int stride0, const uint8_t *plane1, int stride1,
+                                   int src_w, int src_h, int crop_x, int crop_y, int crop_w, int crop_h,
+                                   uint8_t *dst, int dst_stride, int dst_w, int dst_h, int mirror);
+TGAV_API void TGAV_CALL tgav_scaler_free(tgav_scaler *s);
+
 #ifdef __cplusplus
 }
 #endif

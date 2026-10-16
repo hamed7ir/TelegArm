@@ -195,13 +195,7 @@ namespace TelegArm.UI.Controls
             _pb.SetVideoTarget(r.Width, r.Height);
         }
 
-        internal static Rectangle Fit(int vw, int vh, Size box)
-        {
-            if (vw <= 0 || vh <= 0 || box.Width <= 0 || box.Height <= 0) return Rectangle.Empty;
-            double s = Math.Min((double)box.Width / vw, (double)box.Height / vh);
-            int w = Math.Max(2, (int)(vw * s)), h = Math.Max(2, (int)(vh * s));
-            return new Rectangle((box.Width - w) / 2, (box.Height - h) / 2, w, h);
-        }
+        internal static Rectangle Fit(int vw, int vh, Size box) { return DibBlit.Fit(vw, vh, box); }
 
         private void ShowFallback(string why)
         {
@@ -261,7 +255,7 @@ namespace TelegArm.UI.Controls
                         {
                             dest = Fit(pb.Width > 0 ? pb.Width : store.FrontWidth, pb.Height > 0 ? pb.Height : store.FrontHeight, ClientSize);
                             ClearAround(e.Graphics, dest);
-                            Blit(e.Graphics, store.Front, store.FrontWidth, store.FrontHeight, dest);
+                            DibBlit.Draw(e.Graphics, store.Front, store.FrontWidth, store.FrontHeight, dest);
                             return;
                         }
                     }
@@ -278,36 +272,6 @@ namespace TelegArm.UI.Controls
                     if (r.Right < Width) g.FillRectangle(b, r.Right, r.Top, Width - r.Right, r.Height);
                 }
             }
-
-            private static void Blit(Graphics g, byte[] px, int w, int h, Rectangle dest)
-            {
-                var bmi = new BITMAPINFOHEADER
-                {
-                    biSize = Marshal.SizeOf(typeof(BITMAPINFOHEADER)), biWidth = w, biHeight = -h,   // negative: top-down
-                    biPlanes = 1, biBitCount = 32, biCompression = 0
-                };
-                IntPtr hdc = g.GetHdc();
-                try
-                {
-                    SetStretchBltMode(hdc, COLORONCOLOR);
-                    StretchDIBits(hdc, dest.X, dest.Y, dest.Width, dest.Height, 0, 0, w, h, px, ref bmi, 0, SRCCOPY);
-                }
-                finally { g.ReleaseHdc(hdc); }
-            }
-
-            [StructLayout(LayoutKind.Sequential)]
-            private struct BITMAPINFOHEADER
-            {
-                public int biSize, biWidth, biHeight;
-                public short biPlanes, biBitCount;
-                public int biCompression, biSizeImage, biXPelsPerMeter, biYPelsPerMeter, biClrUsed, biClrImportant;
-            }
-
-            private const int SRCCOPY = 0x00CC0020, COLORONCOLOR = 3;
-            [DllImport("gdi32.dll")] private static extern int SetStretchBltMode(IntPtr hdc, int mode);
-            [DllImport("gdi32.dll")]
-            private static extern int StretchDIBits(IntPtr hdc, int xDest, int yDest, int wDest, int hDest, int xSrc, int ySrc, int wSrc, int hSrc,
-                                                    byte[] bits, ref BITMAPINFOHEADER bmi, uint usage, int rop);
         }
     }
 }

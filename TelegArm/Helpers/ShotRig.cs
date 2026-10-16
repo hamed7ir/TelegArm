@@ -70,6 +70,7 @@ namespace TelegArm.Helpers
             if (live == "keys") return RunLiveKeys(dir);
             if (live == "columns") return RunLiveColumns(dir);
             if (live == "media") return RunLiveMedia(dir);
+            if (live == "camera") return RunLiveCamera(dir);
 
             foreach (var mode in new[] { ThemeMode.Light, ThemeMode.Dark })
             {
@@ -597,6 +598,91 @@ namespace TelegArm.Helpers
             finally { if (f != null) { try { f.Close(); } catch { } try { f.Dispose(); } catch { } } }
             File.WriteAllText(Path.Combine(_dir, "shots.txt"), _log.ToString());
             return _failures == 0 ? 0 : 1;
+        }
+
+        /// <summary>2026-10-16 — the round-video camera, both backends, through CameraCapture (the recorder's own path). It
+        /// MEASURES and saves no picture (the camera may face the owner): preview frame rate, then a 3 s recording probed with
+        /// FFmpeg (size, length, audio) and deleted.</summary>
+        private static int RunLiveCamera(string dir)
+        {
+            ThemeHelper.InitMode(ThemeMode.Dark);
+            var trace = new System.Diagnostics.TextWriterTraceListener(Path.Combine(dir, "trace.txt"));
+            System.Diagnostics.Trace.Listeners.Add(trace);
+            System.Diagnostics.Trace.AutoFlush = true;
+            Logger.Enabled = true;
+            Action<bool, string> expect = (ok, what) => { _log.AppendLine("  " + (ok ? "PASS  " : "FAIL  ") + what); if (!ok) _failures++; };
+            foreach (string backend in new[] { "framereader", "winrt" })
+            {
+                Form f = null;
+                Core.Camera.ICameraRecorder rec = null;
+                string mp4 = Path.Combine(Path.GetTempPath(), "tgcam_rig_" + Guid.NewGuid().ToString("N") + ".mp4");
+                try
+                {
+                    _log.AppendLine("  -- " + backend);
+                    if (backend == "framereader") expect(Core.Camera.CameraCapture.FrameReaderSupported, "frame reader supported here");
+                    Core.Camera.CameraCapture.Forced = backend;
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    rec = RunSync(Core.Camera.CameraCapture.CreateAsync());
+                    expect(rec != null, backend + " opened in " + sw.ElapsedMilliseconds + " ms (" + (rec != null ? rec.GetType().Name : "null") + ")");
+                    if (rec == null) continue;
+                    f = new Form { Text = "camera rig", StartPosition = FormStartPosition.Manual, Bounds = new Rectangle(80, 80, 360, 400), TopMost = true };
+                    var host = new Panel { Dock = DockStyle.Fill, BackColor = Color.Black };
+                    f.Controls.Add(host);
+                    f.Show();
+                    expect(rec.TryAttachPreview(host), "preview attached");
+                    var fr = rec as Core.Camera.FrameReaderCameraRecorder;
+                    int d0 = fr != null ? fr.FramesDelivered : 0, p0 = fr != null ? fr.PreviewFrames : 0;
+                    LivePump(3000);
+                    if (fr != null)
+                    {
+                        double fps = (fr.FramesDelivered - d0) / 3.0, pfps = (fr.PreviewFrames - p0) / 3.0;
+                        _log.AppendLine("  info  stream " + fr.StreamDescription);
+                        expect(fps >= 12, "reader " + fps.ToString("0.0") + " fps over 3 s");
+                        expect(pfps >= 12, "preview " + pfps.ToString("0.0") + " fps over 3 s (the photo poll managed ~1.6 on the Surface)");
+                    }
+                    RunSync(rec.StartAsync(mp4));
+                    int r0 = fr != null ? fr.PreviewFrames : 0;
+                    LivePump(3000);
+                    if (fr != null) _log.AppendLine("  info  preview during recording: " + ((fr.PreviewFrames - r0) / 3.0).ToString("0.0") + " fps");
+                    string path = RunSync(rec.StopAsync());
+                    expect(File.Exists(path) && new FileInfo(path).Length > 1000, "recording written (" + (File.Exists(path) ? new FileInfo(path).Length + " bytes" : "missing") + ")");
+                    string err;
+                    using (var m = Core.Media.MediaFile.Open(path, 0, out err))
+                    {
+                        expect(m != null, "recording opens in FFmpeg (" + err + ")");
+                        if (m != null)
+                        {
+                            expect(m.Info.Width == 384 && m.Info.Height == 384, "384x384 (" + m.Info.Width + "x" + m.Info.Height + ")");
+                            expect(m.Info.DurationMs > 2000 && m.Info.DurationMs < 4500, "about 3 s (" + m.Info.DurationMs + " ms)");
+                            _log.AppendLine("  info  audio track: " + (m.HasAudio ? m.Info.SampleRate + " Hz x" + m.Info.Channels : "none"));
+                        }
+                    }
+                }
+                catch (Exception ex) { expect(false, backend + ": " + ex.GetType().Name + " " + ex.Message); }
+                finally
+                {
+                    try { if (rec != null) rec.Dispose(); } catch { }
+                    if (f != null) { try { f.Close(); } catch { } try { f.Dispose(); } catch { } }
+                    try { if (File.Exists(mp4)) File.Delete(mp4); } catch { }
+                    Core.Camera.CameraCapture.Forced = null;
+                    LivePump(500);
+                }
+            }
+            File.WriteAllText(Path.Combine(_dir, "shots.txt"), _log.ToString());
+            return _failures == 0 ? 0 : 1;
+        }
+
+        /// <summary>Waits for a task while pumping the UI (the camera's preview paints on the UI thread meanwhile).</summary>
+        private static T RunSync<T>(System.Threading.Tasks.Task<T> t)
+        {
+            while (!t.IsCompleted) LivePump(20);
+            return t.GetAwaiter().GetResult();
+        }
+
+        private static void RunSync(System.Threading.Tasks.Task t)
+        {
+            while (!t.IsCompleted) LivePump(20);
+            t.GetAwaiter().GetResult();
         }
 
         private static void FormShot(Form f, string name)

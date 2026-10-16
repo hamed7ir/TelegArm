@@ -66,6 +66,7 @@
     <Compile Include="Core\ThemeSettings.cs" />
     <Compile Include="Core\AudioPlayer.cs" />
     <Compile Include="Core\Media\Tgav.cs" />
+    <Compile Include="Helpers\DibBlit.cs" />
     <Compile Include="Core\Media\MediaPlayback.cs" />
     <Compile Include="Core\Media\LegacyVlcCleanup.cs" />
     <Compile Include="Core\AuthManager.cs" />
@@ -97,6 +98,7 @@
     <Compile Include="Core\StoragePaths.cs" />
     <Compile Include="Core\Camera\ICameraRecorder.cs" />
     <Compile Include="Core\Camera\CameraCapture.cs" />
+    <Compile Include="Core\Camera\FrameReaderCameraRecorder.cs" />
     <Compile Include="Core\Camera\WinRtCameraRecorder.cs" />
     <Compile Include="Core\ApiCredentials.cs" />
     <!-- Real api_id/api_hash. Gitignored; conditioned on existence so a fresh clone (without it) still
@@ -443,6 +445,13 @@
     <EmbeddedResource Include="Fonts\Roboto-Bold.ttf" />
     <EmbeddedResource Include="Fonts\Vazirmatn-Regular.ttf" />
     <EmbeddedResource Include="Fonts\Vazirmatn-Bold.ttf" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- 2026-10-16: the Windows 10 camera backend, compiled against the Windows 10 metadata (see its csproj) -->
+    <ProjectReference Include="..\TelegArm.Camera10\TelegArm.Camera10.csproj">
+      <Project>{3B0E7D2A-9C41-4F6E-8D52-6A1F0C7B5E93}</Project>
+      <Name>TelegArm.Camera10</Name>
+    </ProjectReference>
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="WTelegramClient">

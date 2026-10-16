@@ -25,7 +25,7 @@
 #include <libavfilter/buffersrc.h>
 
 #define TGAV_MAJOR 1
-#define TGAV_MINOR 0
+#define TGAV_MINOR 1   /* 1.1: tgav_scale (camera frames) */
 
 /* ── packet queue ───────────────────────────────────────────────────────────────────────────────────────────────── */
 typedef struct pnode { AVPacket *pkt; struct pnode *next; } pnode;
@@ -509,6 +509,62 @@ TGAV_API int TGAV_CALL tgav_read_audio(tgav *t, int16_t *dst, int max_samples, i
         if (r == 0) break;
     }
     return written;
+}
+
+/* ── camera frames (1.1) ─────────────────────────────────────────────────────────────────────────────────────────── */
+struct tgav_scaler { struct SwsContext *sws; };
+
+TGAV_API tgav_scaler *TGAV_CALL tgav_scaler_create(void) { return (tgav_scaler *)av_mallocz(sizeof(tgav_scaler)); }
+
+TGAV_API void TGAV_CALL tgav_scaler_free(tgav_scaler *s)
+{
+    if (!s) return;
+    if (s->sws) sws_freeContext(s->sws);
+    av_free(s);
+}
+
+TGAV_API int TGAV_CALL tgav_scale(tgav_scaler *s, int fmt, const uint8_t *plane0, int stride0, const uint8_t *plane1, int stride1,
+                                  int src_w, int src_h, int crop_x, int crop_y, int crop_w, int crop_h,
+                                  uint8_t *dst, int dst_stride, int dst_w, int dst_h, int mirror)
+{
+    const uint8_t *src[4] = { NULL, NULL, NULL, NULL };
+    int ls[4] = { 0, 0, 0, 0 };
+    uint8_t *d[4] = { NULL, NULL, NULL, NULL };
+    int dls[4] = { 0, 0, 0, 0 };
+    enum AVPixelFormat pf;
+    int y;
+    if (!s || !plane0 || !dst || dst_w <= 0 || dst_h <= 0 || dst_stride < dst_w * 4) return AVERROR(EINVAL);
+    crop_x &= ~1; crop_y &= ~1;   /* chroma is shared by 2x2 (NV12) or 2x1 (YUY2) pixels */
+    if (crop_x < 0 || crop_y < 0 || crop_w < 2 || crop_h < 2 || crop_x + crop_w > src_w || crop_y + crop_h > src_h) return AVERROR(EINVAL);
+    switch (fmt) {
+    case TGAV_PIX_NV12:
+        if (!plane1) return AVERROR(EINVAL);
+        pf = AV_PIX_FMT_NV12;
+        src[0] = plane0 + (size_t)crop_y * stride0 + crop_x; ls[0] = stride0;
+        src[1] = plane1 + (size_t)(crop_y / 2) * stride1 + crop_x; ls[1] = stride1;
+        break;
+    case TGAV_PIX_YUY2:
+        pf = AV_PIX_FMT_YUYV422;
+        src[0] = plane0 + (size_t)crop_y * stride0 + (size_t)crop_x * 2; ls[0] = stride0;
+        break;
+    case TGAV_PIX_BGRA:
+        pf = AV_PIX_FMT_BGRA;
+        src[0] = plane0 + (size_t)crop_y * stride0 + (size_t)crop_x * 4; ls[0] = stride0;
+        break;
+    default:
+        return AVERROR(EINVAL);
+    }
+    s->sws = sws_getCachedContext(s->sws, crop_w, crop_h, pf, dst_w, dst_h, AV_PIX_FMT_BGRA, SWS_BILINEAR, NULL, NULL, NULL);
+    if (!s->sws) return AVERROR(EINVAL);
+    d[0] = dst; dls[0] = dst_stride;
+    sws_scale(s->sws, src, ls, 0, crop_h, d, dls);
+    if (mirror)
+        for (y = 0; y < dst_h; y++) {
+            uint32_t *row = (uint32_t *)(dst + (size_t)y * dst_stride);
+            int a = 0, b = dst_w - 1;
+            while (a < b) { uint32_t tmp = row[a]; row[a++] = row[b]; row[b--] = tmp; }
+        }
+    return 0;
 }
 
 /* ── seek ───────────────────────────────────────────────────────────────────────────────────────────────────────── */

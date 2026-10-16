@@ -16,9 +16,10 @@ namespace TelegArm.Core.Camera
     }
 
     /// <summary>
-    /// Backend-agnostic round-video recorder. NO WinRT/VLC types cross this boundary — the UI talks only to
-    /// this, and the backend (WinRT MediaCapture by default, libVLC DirectShow as the Win7 fallback) is chosen
-    /// by <see cref="CameraCapture.CreateAsync"/>. Both backends produce the IDENTICAL 384×384 H.264+AAC MP4.
+    /// Backend-agnostic round-video recorder. NO WinRT types cross this boundary — the UI talks only to this, and
+    /// the backend (2026-10-16: the Windows 10 frame reader, else the Windows 8.1 photo poll) is chosen by
+    /// <see cref="CameraCapture.CreateAsync"/>. Both produce a 384×384 H.264+AAC MP4 (the Windows 10 one cropped to
+    /// the centre square, the 8.1 one scaled).
     /// </summary>
     public interface ICameraRecorder : IDisposable
     {

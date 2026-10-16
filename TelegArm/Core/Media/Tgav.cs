@@ -44,6 +44,11 @@ namespace TelegArm.Core.Media
             }
         }
 
+        private static int _version;
+
+        /// <summary>tgav 1.1+: the camera-frame scaler (tgav_scale).</summary>
+        public static bool HasScaler { get { return Available && _version >= 0x10001; } }
+
         /// <summary>For the diagnostics report: where it loaded from, or why not.</summary>
         public static string Status { get { bool ok = Available; return _why ?? (ok ? "loaded" : "not loaded"); } }
 
@@ -71,6 +76,7 @@ namespace TelegArm.Core.Media
                     return false;
                 }
                 int v = tgav_version(), ff = tgav_ffmpeg_version();
+                _version = v;
                 _why = "tgav " + (v >> 16) + "." + (v & 0xFFFF) + ", avcodec " + (ff >> 16) + "." + ((ff >> 8) & 0xFF) + "." + (ff & 0xFF)
                      + " (" + Path.GetFileName(Folder) + ")";
                 Logger.Diag("[MEDIA] " + _why);
@@ -110,6 +116,14 @@ namespace TelegArm.Core.Media
         public static extern int tgav_read_audio(IntPtr t, short[] dst, int maxSamples, out int ptsMs);
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] public static extern int tgav_seek(IntPtr t, int ms);
         [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] public static extern void tgav_close(IntPtr t);
+
+        // tgav 1.1: camera frames (NV12 / YUY2 / BGRA) → BGRA, cropped, scaled, optionally mirrored
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] public static extern IntPtr tgav_scaler_create();
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int tgav_scale(IntPtr s, int fmt, IntPtr plane0, int stride0, IntPtr plane1, int stride1,
+                                            int srcW, int srcH, int cropX, int cropY, int cropW, int cropH,
+                                            IntPtr dst, int dstStride, int dstW, int dstH, int mirror);
+        [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] public static extern void tgav_scaler_free(IntPtr s);
     }
 
     /// <summary>One open media file (a tgav handle). Not thread-safe by itself: MediaPlayback serializes its calls.</summary>

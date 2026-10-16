@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Windows 10 camera backend (2026-10-16, from the Venetium camera handoff): MediaFrameReader preview at ~30 fps and
+     a cropped-square recording. Compiled against the WINDOWS 10 Windows.winmd (UnionMetadata 10.0.19041.0) so the exe
+     can keep its 8.1 bindings (switching the exe to the Windows 10 metadata could change which overloads its existing 8.1
+     code binds to). Only Windows 10 1607 (contract v3) APIs are used: the Surface runs build 15035. The exe calls into
+     this assembly only after its capability check (Core\Camera\FrameReaderCameraRecorder.IsSupported), so on Windows 8.1
+     no method here is ever JIT-compiled and its Windows 10 types are never resolved. Same rails as the app: .NET 4.7,
+     C# 7.3, AnyCPU. No dependency on the exe: plain .NET types cross the boundary. -->
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{3B0E7D2A-9C41-4F6E-8D52-6A1F0C7B5E93}</ProjectGuid>
+    <OutputType>Library</OutputType>
+    <RootNamespace>TelegArm.Camera10</RootNamespace>
+    <AssemblyName>TelegArm.Camera10</AssemblyName>
+    <TargetFrameworkVersion>v4.7</TargetFrameworkVersion>
+    <TargetPlatformVersion>10.0.19041.0</TargetPlatformVersion>
+    <FileAlignment>512</FileAlignment>
+    <Deterministic>true</Deterministic>
+    <LangVersion>7.3</LangVersion>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Runtime.WindowsRuntime" />
+    <Reference Include="Windows">
+      <HintPath>D:\Windows Kits\10\UnionMetadata\10.0.19041.0\Windows.winmd</HintPath>
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="FrameReaderCamera.cs" />
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>

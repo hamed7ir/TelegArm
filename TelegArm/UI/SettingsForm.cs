@@ -1243,8 +1243,21 @@ namespace TelegArm.UI
 
         private void BuildAdvancedPage(PageStack page, AppSettings s)
         {
-            // 2026-10-16: the camera section (backend switch + the libVLC capture probe) went with libVLC; WinRT is the one
-            // backend until the camera phase brings the Windows 10 frame reader.
+            // 2026-10-16: the round-video camera backend, session-only (CameraCapture.Forced): Auto = the Windows 10 frame
+            // reader when this Windows has it, else the 8.1 photo poll. A way round a camera the live path misbehaves on.
+            string curB = TelegArm.Core.Camera.CameraCapture.Forced;
+            bool live = TelegArm.Core.Camera.CameraCapture.FrameReaderSupported;
+            var backend = new SegmentedRow("Camera backend", new[] { "Auto", "Live", "Photo" }, curB == "framereader" ? 1 : curB == "winrt" ? 2 : 0)
+            {
+                Subtitle = live ? "Live: 30 fps (Windows 10). Photo: the 8.1 way" : "Photo only on this Windows",
+                Enabled = live
+            };
+            backend.SelectedIndexChanged += (snd, ev) =>
+            {
+                int idx = backend.SelectedIndex;
+                TelegArm.Core.Camera.CameraCapture.Forced = idx == 1 ? "framereader" : idx == 2 ? "winrt" : null;
+            };
+            page.Section("Camera (round video)", backend);
 
             // Redesign R5 — what the main window's keys do (the list lives beside the code, MainForm.Shortcuts).
             var keys = new ActionRow("Keyboard shortcuts", "Show") { Subtitle = "Chats, folders, editing and the window" };
