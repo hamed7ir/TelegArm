@@ -41,8 +41,8 @@ namespace TelegArm.UI.Controls
         public event Action ForwardRequested;
         public event Action CloseRequested;
 
-        private Color BarColor => _isDark ? Color.FromArgb(34, 34, 36) : Color.FromArgb(236, 236, 238);
-        private Color TextColor => _isDark ? Color.White : Color.FromArgb(30, 30, 30);
+        private Color BarColor => ThemeHelper.PaletteFor(_isDark).ControlBarBg;
+        private Color TextColor => ThemeHelper.PaletteFor(_isDark).ControlBarText;
 
         public SelectionBar()
         {
@@ -147,7 +147,7 @@ namespace TelegArm.UI.Controls
             set { _isDark = value; BackColor = BgColor; Invalidate(); }
         }
 
-        public Color DotColor { get; set; } = Color.FromArgb(229, 57, 53);
+        public Color DotColor { get; set; } = ThemeHelper.Palette.RecordRed;
 
         private string _caption = "";
         public string Caption
@@ -156,8 +156,8 @@ namespace TelegArm.UI.Controls
             set { _caption = value ?? ""; Invalidate(); }
         }
 
-        private Color BgColor => _isDark ? Color.FromArgb(48, 48, 48) : Color.FromArgb(250, 250, 250);
-        private Color TextColor => _isDark ? Color.FromArgb(225, 225, 225) : Color.FromArgb(40, 40, 40);
+        private Color BgColor => ThemeHelper.PaletteFor(_isDark).RecordingBarBg;
+        private Color TextColor => ThemeHelper.PaletteFor(_isDark).RecordingBarText;
 
         public RecordingBar()
         {

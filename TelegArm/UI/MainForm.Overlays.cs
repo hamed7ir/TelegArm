@@ -27,7 +27,7 @@ namespace TelegArm.UI
             {
                 Visible = false,
                 Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
-                BackColor = _dark ? Color.FromArgb(26, 26, 29) : Color.FromArgb(244, 244, 247)
+                BackColor = ThemeHelper.PaletteFor(_dark).OverlayBg
             };
             _switchOverlay.Paint += PaintSwitchOverlay;
             Content.Controls.Add(_switchOverlay);   // 2.7a: under the title bar
@@ -51,7 +51,7 @@ namespace TelegArm.UI
             }
             string title = "Switching to " + (_switchOverlayName ?? "account") + new string('.', _switchDotCount);
             TextRenderer.DrawText(g, title, FontCache.Get("Segoe UI", 13.5f, FontStyle.Bold, dpi), new Rectangle(0, cy + Px(30), _switchOverlay.Width, Px(34)),
-                _dark ? Color.FromArgb(236, 236, 240) : Color.FromArgb(33, 33, 38),
+                ThemeHelper.PaletteFor(_dark).OverlayText,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
         }
 
@@ -115,12 +115,12 @@ namespace TelegArm.UI
             _connectingPanel = new Panel
             {
                 Size = new Size(Px(460), Px(172)),
-                BackColor = _dark ? Color.FromArgb(44, 44, 48) : Color.FromArgb(250, 250, 252),
+                BackColor = ThemeHelper.PaletteFor(_dark).OverlayCardBg,
                 Visible = false
             };
             _connectingPanel.Paint += (s, e) =>
             {
-                using (var pen = new Pen(_dark ? Color.FromArgb(72, 72, 78) : Color.FromArgb(214, 214, 220)))
+                using (var pen = new Pen(ThemeHelper.PaletteFor(_dark).OverlayCardBorder))
                     e.Graphics.DrawRectangle(pen, 0, 0, _connectingPanel.Width - 1, _connectingPanel.Height - 1);
             };
 
@@ -130,7 +130,7 @@ namespace TelegArm.UI
                 AutoSize = false, Size = new Size(Px(428), Px(34)), Location = new Point(Px(16), Px(20)),
                 TextAlign = ContentAlignment.MiddleCenter, BackColor = Color.Transparent,
                 Font = FontCache.Get("Segoe UI", 13.5f, FontStyle.Bold, WindowDpiValue),   // shared: never dispose
-                ForeColor = _dark ? Color.FromArgb(236, 236, 240) : Color.FromArgb(33, 33, 38)
+                ForeColor = ThemeHelper.PaletteFor(_dark).OverlayText
             };
             _connectingDetail = new Label
             {
@@ -138,7 +138,7 @@ namespace TelegArm.UI
                 AutoSize = false, Size = new Size(Px(428), Px(46)), Location = new Point(Px(16), Px(58)),
                 TextAlign = ContentAlignment.MiddleCenter, BackColor = Color.Transparent,
                 Font = FontCache.Get("Segoe UI", 9.75f, FontStyle.Regular, WindowDpiValue),   // shared: never dispose
-                ForeColor = _dark ? Color.FromArgb(170, 170, 176) : Color.FromArgb(108, 108, 114)
+                ForeColor = ThemeHelper.PaletteFor(_dark).OverlayDim
             };
             _retryButton = new RoundedButton   // 2.7a: was a MaterialButton (Contained)
             {
@@ -206,9 +206,9 @@ namespace TelegArm.UI
         private void RecolorConnectingUi()
         {
             if (_connectingPanel == null) return;
-            _connectingPanel.BackColor = _dark ? Color.FromArgb(44, 44, 48) : Color.FromArgb(250, 250, 252);
-            if (_connectingTitle != null) _connectingTitle.ForeColor = _dark ? Color.FromArgb(236, 236, 240) : Color.FromArgb(33, 33, 38);
-            if (_connectingDetail != null) _connectingDetail.ForeColor = _dark ? Color.FromArgb(170, 170, 176) : Color.FromArgb(108, 108, 114);
+            _connectingPanel.BackColor = ThemeHelper.PaletteFor(_dark).OverlayCardBg;
+            if (_connectingTitle != null) _connectingTitle.ForeColor = ThemeHelper.PaletteFor(_dark).OverlayText;
+            if (_connectingDetail != null) _connectingDetail.ForeColor = ThemeHelper.PaletteFor(_dark).OverlayDim;
             _connectingPanel.Invalidate(true);
         }
 

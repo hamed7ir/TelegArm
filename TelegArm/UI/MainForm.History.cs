@@ -201,13 +201,13 @@ namespace TelegArm.UI
             if ((sm.flags & SponsoredMessage.Flags.has_color) != 0 && sm.color is PeerColor pc)
                 switch (pc.color)   // base palette 0..6
                 {
-                    case 0: return Color.FromArgb(229, 57, 53);
-                    case 1: return Color.FromArgb(245, 124, 0);
-                    case 2: return Color.FromArgb(142, 36, 170);
-                    case 3: return Color.FromArgb(67, 160, 71);
-                    case 4: return Color.FromArgb(0, 172, 193);
-                    case 5: return Color.FromArgb(30, 136, 229);
-                    case 6: return Color.FromArgb(216, 27, 96);
+                    case 0: return ThemeHelper.Palette.SponsorPeerColor0;
+                    case 1: return ThemeHelper.Palette.SponsorPeerColor1;
+                    case 2: return ThemeHelper.Palette.SponsorPeerColor2;
+                    case 3: return ThemeHelper.Palette.SponsorPeerColor3;
+                    case 4: return ThemeHelper.Palette.SponsorPeerColor4;
+                    case 5: return ThemeHelper.Palette.SponsorPeerColor5;
+                    case 6: return ThemeHelper.Palette.SponsorPeerColor6;
                 }
             return _accent;
         }

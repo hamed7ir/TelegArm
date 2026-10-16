@@ -68,15 +68,15 @@ namespace TelegArm.UI.Controls
 
             // Match the surrounding input row (inherits the themed form background).
             Color bg = Parent != null ? Parent.BackColor
-                       : (ThemeHelper.IsDark ? Color.FromArgb(50, 50, 50) : Color.FromArgb(250, 250, 250));
+                       : ThemeHelper.Palette.GlyphButtonBg;
             g.Clear(bg);
 
-            Color glyph = ThemeHelper.GetWindowsAccentColor();
+            Color glyph = ThemeHelper.Palette.Accent;
             if (!Enabled)
-                glyph = ThemeHelper.IsDark ? Color.FromArgb(90, 90, 94) : Color.FromArgb(190, 190, 196);
+                glyph = ThemeHelper.Palette.GlyphButtonDisabled;
             else if (_hover)
             {
-                using (var hb = new SolidBrush(Color.FromArgb(ThemeHelper.IsDark ? 45 : 30, glyph)))
+                using (var hb = new SolidBrush(ColorMath.WithAlpha(glyph, ThemeHelper.Palette.Dark ? 45 : 30)))
                     g.FillEllipse(hb, P(2), P(2), Width - P(4), Height - P(4));
             }
 

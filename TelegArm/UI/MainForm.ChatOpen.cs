@@ -70,7 +70,7 @@ namespace TelegArm.UI
                 AutoSize = false, Height = Px(40), Width = ContentWidth(_chatListPanel),   // step 3.4: logical px
                 TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(Px(12), 0, 0, 0), Margin = new Padding(0),
                 Font = FontHelper.UiAt(9.5f, WindowDpiValue, FontStyle.Bold), Cursor = Cursors.Hand, ForeColor = _accent,   // shared: never dispose
-                BackColor = _dark ? Color.FromArgb(48, 48, 52) : Color.FromArgb(235, 238, 242)
+                BackColor = ThemeHelper.PaletteFor(_dark).PanelPlaceholderBg
             };
             chip.Click += (s, e) => ExitInChatSearch();
             _chatListPanel.Controls.Add(chip);

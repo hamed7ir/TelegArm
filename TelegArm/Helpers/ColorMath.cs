@@ -65,6 +65,20 @@ namespace TelegArm.Helpers
             return c;
         }
 
+        /// <summary>Step 5.1 — <paramref name="c"/> at another alpha (0-255, clamped): an overlay or a fade OF a palette or
+        /// accent colour. Same as Color.FromArgb(alpha, c), which only Palette / ColorMath may call.</summary>
+        public static Color WithAlpha(Color c, int alpha) { return Color.FromArgb(Math.Max(0, Math.Min(255, alpha)), c.R, c.G, c.B); }
+
+        /// <summary>Step 5.1 — a colour from COMPUTED channels (0-255, clamped): parsed hex, a lighten/darken, a fade.
+        /// ⚠ Never literal numbers: a fixed colour is a Palette token (check.ps1 rejects ColorMath.Rgb/Argb with a literal
+        ///   first argument).</summary>
+        public static Color Rgb(int r, int g, int b) { return Color.FromArgb(Clamp(r), Clamp(g), Clamp(b)); }
+
+        /// <summary>Step 5.1 — as <see cref="Rgb"/>, with a computed alpha.</summary>
+        public static Color Argb(int a, int r, int g, int b) { return Color.FromArgb(Clamp(a), Clamp(r), Clamp(g), Clamp(b)); }
+
+        private static int Clamp(int v) { return v < 0 ? 0 : v > 255 ? 255 : v; }
+
         /// <summary>A Color as "#RRGGBB" (alpha dropped) — for logs and the palette map.</summary>
         public static string Hex(Color c) { return "#" + (c.ToArgb() & 0xFFFFFF).ToString("X6"); }
     }

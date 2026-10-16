@@ -1,6 +1,7 @@
 using System;
 using System.Drawing;
 using System.Reflection;
+using TelegArm.Helpers;
 using System.Windows.Forms;
 
 namespace TelegArm.UI.Controls
@@ -31,7 +32,7 @@ namespace TelegArm.UI.Controls
         public ThemedListBox(bool dark, Color accent)
         {
             _scroll = new NoNativeScrollPanel { Dock = DockStyle.Fill, AutoScroll = true };
-            _canvas = new Panel { Left = 0, Top = 0, BackColor = dark ? Color.FromArgb(40, 40, 44) : Color.FromArgb(248, 248, 250) };
+            _canvas = new Panel { Left = 0, Top = 0, BackColor = ThemeHelper.PaletteFor(dark).ListBoxBg };
             SetDoubleBuffered(_canvas);
             _canvas.Paint += OnCanvasPaint;
             _canvas.MouseClick += OnCanvasClick;

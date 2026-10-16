@@ -443,18 +443,18 @@ namespace TelegArm.UI
                     g.InterpolationMode = InterpolationMode.HighQualityBicubic;
                     g.DrawImage(_curImage, r);
                 }
-                else if (_loading) DrawCenteredText(g, cw, ch, "Loading…", 12f, Color.FromArgb(180, 180, 180), dpi);
+                else if (_loading) DrawCenteredText(g, cw, ch, "Loading…", 12f, ThemeHelper.Palette.StoryLoadingText, dpi);
                 int scrimH = Px(96);
                 using (var scrim = new LinearGradientBrush(new Rectangle(0, 0, cw, scrimH),
-                           Color.FromArgb(150, 0, 0, 0), Color.FromArgb(0, 0, 0, 0), LinearGradientMode.Vertical))
+                           ThemeHelper.Palette.StoryScrimTop, ThemeHelper.Palette.StoryScrimClear, LinearGradientMode.Vertical))
                     g.FillRectangle(scrim, 0, 0, cw, scrimH);
             }
             else
             {
                 // VIDEO: the VLC child covers the inset middle; draw the chrome in the uncovered top/bottom strips.
                 g.Clear(Color.Black);
-                if (_loading) DrawCenteredText(g, cw, ch, "Loading…", 12f, Color.FromArgb(180, 180, 180), dpi);
-                else if (_videoFallback) DrawCenteredText(g, cw, ch, "Video story", 13f, Color.FromArgb(200, 200, 200), dpi);
+                if (_loading) DrawCenteredText(g, cw, ch, "Loading…", 12f, ThemeHelper.Palette.StoryLoadingText, dpi);
+                else if (_videoFallback) DrawCenteredText(g, cw, ch, "Video story", 13f, ThemeHelper.Palette.StoryMutedText, dpi);
             }
 
             DrawProgress(g, cw);
@@ -477,7 +477,7 @@ namespace TelegArm.UI
         private static void DrawChevron(Graphics g, int cx, int cy, bool left, int dpi)
         {
             int r = Dpi.Px(17, dpi), d = Dpi.Px(6, dpi);
-            using (var b = new SolidBrush(Color.FromArgb(70, 0, 0, 0)))
+            using (var b = new SolidBrush(ThemeHelper.Palette.StoryChevronBg))
                 g.FillEllipse(b, cx - r, cy - r, r * 2, r * 2);
             using (var pen = new Pen(Color.White, Dpi.F(2.4f, dpi)) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
             {
@@ -497,7 +497,7 @@ namespace TelegArm.UI
             for (int i = 0; i < n; i++)
             {
                 float x = pad + i * (segW + gap);
-                using (var bg = new SolidBrush(Color.FromArgb(90, 255, 255, 255))) g.FillRectangle(bg, x, y, segW, h);
+                using (var bg = new SolidBrush(ThemeHelper.Palette.StoryProgressTrack)) g.FillRectangle(bg, x, y, segW, h);
                 float f = i < _storyIdx ? 1f : (i == _storyIdx ? _progress : 0f);
                 if (f > 0f) using (var fb = new SolidBrush(Color.White)) g.FillRectangle(fb, x, y, segW * f, h);
             }
@@ -525,7 +525,7 @@ namespace TelegArm.UI
             TextRenderer.DrawText(g, p.Name ?? "", FontHelper.ForAt(p.Name ?? "", 10.5f, dpi, FontStyle.Bold),   // shared: never dispose
                 new Rectangle(tx, ay, cw - tx - Px(60), Px(18)), Color.White,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
-            TextRenderer.DrawText(g, time, FontHelper.UiAt(8.5f, dpi), new Rectangle(tx, ay + Px(16), Px(200), Px(14)), Color.FromArgb(200, 200, 200),
+            TextRenderer.DrawText(g, time, FontHelper.UiAt(8.5f, dpi), new Rectangle(tx, ay + Px(16), Px(200), Px(14)), ThemeHelper.Palette.StoryMutedText,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
             _closeRect = new Rectangle(cw - Px(46), Px(16), Px(34), Px(34));
             int k = Px(9);   // the ✕'s inset in its tap square
@@ -546,9 +546,9 @@ namespace TelegArm.UI
             int y = ch - h - Px(26);
             int top = y - Px(40), sh = h + Px(66);
             using (var scrim = new LinearGradientBrush(new Rectangle(0, top, cw, sh),
-                       Color.FromArgb(0, 0, 0, 0), Color.FromArgb(180, 0, 0, 0), LinearGradientMode.Vertical))
+                       ThemeHelper.Palette.StoryScrimClear, ThemeHelper.Palette.StoryScrimBottom, LinearGradientMode.Vertical))
                 g.FillRectangle(scrim, 0, top, cw, sh);
-            _caption.Paint(g, Px(12), y, Color.White, Color.FromArgb(130, 190, 255), f, true, _accent, false);
+            _caption.Paint(g, Px(12), y, Color.White, ThemeHelper.Palette.StoryCaptionLink, f, true, _accent, false);
         }
 
         private void MeasureCaption(string capText)

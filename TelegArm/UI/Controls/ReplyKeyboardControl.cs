@@ -102,12 +102,12 @@ namespace TelegArm.UI.Controls
             int P(int v) => Dpi.Px(v, dpi);
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            Color bg = IsDark ? Color.FromArgb(28, 28, 30) : Color.FromArgb(236, 236, 238);
+            Color bg = ThemeHelper.PaletteFor(IsDark).ReplyKbBg;
             g.Clear(bg);
             _rects.Clear(); _hideRect = Rectangle.Empty; _showRect = Rectangle.Empty;
             if (!HasButtons) return;
 
-            Color sub = IsDark ? Color.FromArgb(160, 160, 160) : Color.FromArgb(110, 110, 110);
+            Color sub = ThemeHelper.PaletteFor(IsDark).ReplyKbSub;
 
             if (Collapsed)
             {
@@ -122,8 +122,8 @@ namespace TelegArm.UI.Controls
             TextRenderer.DrawText(g, "▾", FontHelper.UiAt(10f, dpi), _hideRect, sub,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
 
-            Color cell = IsDark ? Color.FromArgb(58, 58, 62) : Color.White;
-            Color text = IsDark ? Color.FromArgb(228, 228, 230) : Color.FromArgb(25, 25, 28);
+            Color cell = ThemeHelper.PaletteFor(IsDark).ReplyKbKey;
+            Color text = ThemeHelper.PaletteFor(IsDark).ReplyKbKeyText;
 
             int rowH = P(RowH), gap = P(Gap), pad = P(Pad);
             int y = P(HideH);

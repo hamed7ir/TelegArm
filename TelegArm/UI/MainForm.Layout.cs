@@ -76,8 +76,8 @@ namespace TelegArm.UI
                 TabStop = false
             };
             _hamburger.FlatAppearance.BorderSize = 0;
-            _hamburger.FlatAppearance.MouseOverBackColor = Color.FromArgb(40, _accent);
-            _hamburger.FlatAppearance.MouseDownBackColor = Color.FromArgb(70, _accent);
+            _hamburger.FlatAppearance.MouseOverBackColor = ColorMath.WithAlpha(_accent, 40);
+            _hamburger.FlatAppearance.MouseDownBackColor = ColorMath.WithAlpha(_accent, 70);
             _hamburger.Click += (s, e) => ShowDrawer();
             // Draw the hamburger as a FIXED GDI+ shape (3 rounded accent lines), NOT a font glyph: the glyph
             // (☰ U+2630 / Segoe UI Symbol) rendered inconsistently across fonts/DPI/RT — 2-vs-3 lines and a
@@ -122,7 +122,7 @@ namespace TelegArm.UI
                 Margin = new Padding(0),
                 WrapContents = false,
                 AutoScroll = true,
-                BackColor = _dark ? Color.FromArgb(40, 40, 40) : Color.White
+                BackColor = ThemeHelper.PaletteFor(_dark).ListBg
             };
 
             if (sidebar)
@@ -137,7 +137,7 @@ namespace TelegArm.UI
                     AutoScroll = true,
                     Margin = new Padding(0),
                     Padding = new Padding(0),
-                    BackColor = _dark ? Color.FromArgb(34, 34, 36) : Color.FromArgb(244, 244, 246)
+                    BackColor = ThemeHelper.PaletteFor(_dark).FolderRailBg
                 };
                 RebuildFolderRail();
 
@@ -175,7 +175,7 @@ namespace TelegArm.UI
                     Margin = new Padding(0, Px(1), Px(8), Px(1)),   // flush left: "All" now aligns with the chat-row avatars below
                     WrapContents = false,
                     AutoScroll = true,
-                    BackColor = _dark ? Color.FromArgb(40, 40, 40) : Color.White
+                    BackColor = ThemeHelper.PaletteFor(_dark).ListBg
                 };
                 RebuildFolderBar();   // starts with just "All" until folders load
 
@@ -539,7 +539,7 @@ namespace TelegArm.UI
                 Visible = false   // shown only while a chat is open — toggled beside _chatSearchBtn
             };
             _chatMenuBtn.FlatAppearance.BorderSize = 0;
-            _chatMenuBtn.FlatAppearance.MouseOverBackColor = Color.FromArgb(40, _accent);
+            _chatMenuBtn.FlatAppearance.MouseOverBackColor = ColorMath.WithAlpha(_accent, 40);
             _chatMenuBtn.Paint += (s, e) => DrawKebab(e.Graphics, _chatMenuBtn.ClientRectangle, _accent);
             _chatMenuBtn.Click += (s, e) => ShowChatHeaderMenu();
             topBar.Controls.Add(_chatMenuBtn);
@@ -552,7 +552,7 @@ namespace TelegArm.UI
                 Visible = false   // shown only while a chat is open (toggled in OpenChat / on leaving a chat)
             };
             _chatSearchBtn.FlatAppearance.BorderSize = 0;
-            _chatSearchBtn.FlatAppearance.MouseOverBackColor = Color.FromArgb(40, _accent);
+            _chatSearchBtn.FlatAppearance.MouseOverBackColor = ColorMath.WithAlpha(_accent, 40);
             _chatSearchBtn.Paint += (s, e) => DrawMagnifier(e.Graphics, _chatSearchBtn.ClientRectangle, _accent);
             _chatSearchBtn.Click += (s, e) => EnterInChatSearch();
             topBar.Controls.Add(_chatSearchBtn);
@@ -570,7 +570,7 @@ namespace TelegArm.UI
                 Visible = false
             };
             _dockBtn.FlatAppearance.BorderSize = 0;
-            _dockBtn.FlatAppearance.MouseOverBackColor = Color.FromArgb(40, _accent);
+            _dockBtn.FlatAppearance.MouseOverBackColor = ColorMath.WithAlpha(_accent, 40);
             _dockBtn.Paint += (s, e) => DrawDockGlyph(e.Graphics, _dockBtn.ClientRectangle, _accent,
                                                       _dock != null && _dock.Visible);
             _dockBtn.Click += (s, e) => ToggleDock();
@@ -663,8 +663,8 @@ namespace TelegArm.UI
             {
                 Text = "", Anchor = AnchorStyles.None, Width = Px(44), Height = Px(38), Visible = false,
                 FlatStyle = FlatStyle.Flat, Font = FontHelper.UiAt(13f, WindowDpiValue), Cursor = Cursors.Hand,   // shared: never dispose
-                BackColor = _dark ? Color.FromArgb(54, 54, 58) : Color.FromArgb(225, 225, 228),
-                ForeColor = _dark ? Color.FromArgb(225, 225, 228) : Color.FromArgb(40, 40, 44)
+                BackColor = ThemeHelper.PaletteFor(_dark).BotMenuBg,
+                ForeColor = ThemeHelper.PaletteFor(_dark).BotMenuFg
             };
             PerfLog.Boot("    BuildRightPanel: after first FontHelper.Ui call (fonts registered)");
             _botMenuButton.FlatAppearance.BorderSize = 0;
@@ -833,7 +833,7 @@ namespace TelegArm.UI
             // FORUM-TOPICS: topic chip bar at row 4 (above the messages) — horizontal scrollable, mirrors _folderBar.
             // Hidden (row height 0) unless a forum group is open. Because it's a sibling row ABOVE _msgHost, the date pill
             // (a child of _msgHost) sits below it naturally → DateFlyoutTopOffset stays 0.
-            _forumTopicBar = new NoNativeScrollFlowPanel { Dock = DockStyle.Fill, Margin = new Padding(Px(2), Px(1), Px(2), Px(1)), WrapContents = false, AutoScroll = true, BackColor = _dark ? Color.FromArgb(40, 40, 40) : Color.White };   // FORUM-TOPICS: symmetric L/R (was 0/8); "All" lands ~10px, aligning with the mini/pinned bars
+            _forumTopicBar = new NoNativeScrollFlowPanel { Dock = DockStyle.Fill, Margin = new Padding(Px(2), Px(1), Px(2), Px(1)), WrapContents = false, AutoScroll = true, BackColor = ThemeHelper.PaletteFor(_dark).ListBg };   // FORUM-TOPICS: symmetric L/R (was 0/8); "All" lands ~10px, aligning with the mini/pinned bars
             layout.Controls.Add(_forumTopicBar, 0, 4);   // FORUM-TOPICS: added DIRECTLY (no WrapWithHScrollbar) → NO visible scrollbar; NoNativeScroll suppresses the native bar + TouchScroller gives drag-scroll
             TouchScroller.Enable(_forumTopicBar, horizontal: true);
             _msgHost = WrapWithScrollbar(_messagePanel);

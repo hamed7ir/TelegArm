@@ -273,7 +273,7 @@ namespace TelegArm.UI.Controls
 
             Color bubble = _outgoing ? AccentColor : (ThemeHelper.PaletteFor(IsDark).BubbleIn);
             Color fg = _outgoing ? Color.White : (ThemeHelper.PaletteFor(IsDark).BubbleInText);
-            Color sub = _outgoing ? Color.FromArgb(210, 255, 255, 255) : (ThemeHelper.PaletteFor(IsDark).BubbleInSub);
+            Color sub = _outgoing ? ThemeHelper.PaletteFor(IsDark).BubbleOutSub : (ThemeHelper.PaletteFor(IsDark).BubbleInSub);
 
             using (var b = new SolidBrush(bubble))
             using (var path = DrawHelper.RoundedRect(card, P(12)))
@@ -283,7 +283,7 @@ namespace TelegArm.UI.Controls
             if (_cover != null)
                 DrawHelper.DrawAudioCover(g, btn, _cover);   // cover art clipped into the circle (shared with album rows)
             else
-                using (var cb = new SolidBrush(_outgoing ? Color.FromArgb(70, 255, 255, 255) : AccentColor))
+                using (var cb = new SolidBrush(_outgoing ? ThemeHelper.PaletteFor(IsDark).BubbleOutIconDisc : AccentColor))
                     g.FillEllipse(cb, btn);   // plain circle fallback (voice / no embedded art) — unchanged
             DrawButtonGlyph(g, btn, dpi);
 
@@ -316,7 +316,7 @@ namespace TelegArm.UI.Controls
         private void DrawSelectionCheck(Graphics g, int dpi)
         {
             if (_flashTicks > 0)
-                using (var fb = new SolidBrush(Color.FromArgb(70, AccentColor)))
+                using (var fb = new SolidBrush(ColorMath.WithAlpha(AccentColor, 70)))
                     g.FillRectangle(fb, ClientRectangle);   // brief "jump to message" pulse
             if (!SelectionMode) return;
             int d = Dpi.Px(18, dpi), sideGap = Dpi.Px(SideGap, dpi), two = Dpi.Px(2, dpi);
@@ -335,14 +335,14 @@ namespace TelegArm.UI.Controls
             }
             else
             {
-                using (var pen = new Pen(IsDark ? Color.FromArgb(120, 120, 120) : Color.FromArgb(170, 170, 170), 1.6f * k))
+                using (var pen = new Pen(ThemeHelper.PaletteFor(IsDark).BubbleSelectRing, 1.6f * k))
                     g.DrawEllipse(pen, circle);
             }
         }
 
         private static Color Blend(Color a, Color b, float t)
         {
-            return Color.FromArgb(
+            return ColorMath.Rgb(
                 (int)(a.R * t + b.R * (1 - t)),
                 (int)(a.G * t + b.G * (1 - t)),
                 (int)(a.B * t + b.B * (1 - t)));
@@ -359,7 +359,7 @@ namespace TelegArm.UI.Controls
                 // Real progress ring filling to % + an ✕ in the center (tap = cancel).
                 int inset = Dpi.Px(5, dpi);
                 DrawHelper.DrawProgressRing(g, Rectangle.Inflate(btn, -inset, -inset), _handle.Fraction,
-                    Color.White, Color.FromArgb(120, 255, 255, 255), cancel: true);
+                    Color.White, ThemeHelper.PaletteFor(IsDark).MediaRingTrack, cancel: true);
                 return;
             }
 

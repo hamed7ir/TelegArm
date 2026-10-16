@@ -92,8 +92,8 @@ namespace TelegArm.UI.Controls
             var g = e.Graphics;
             g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
 
-            Color baseBg = IsDark ? Color.FromArgb(36, 36, 39) : Color.White;
-            Color hoverBg = IsDark ? Color.FromArgb(50, 50, 54) : Color.FromArgb(238, 240, 244);
+            Color baseBg = ThemeHelper.PaletteFor(IsDark).PinnedRowBg;
+            Color hoverBg = ThemeHelper.PaletteFor(IsDark).PinnedRowHover;
             g.Clear(_hover ? hoverBg : baseBg);
 
             using (var b = new SolidBrush(AccentColor))
@@ -110,14 +110,14 @@ namespace TelegArm.UI.Controls
             // shared fonts: never dispose
             TextRenderer.DrawText(g, _label, FontHelper.UiAt(8.25f, dpi, FontStyle.Bold), new Rectangle(x, P(6), cw, P(15)), AccentColor, baseFlags | TextFormatFlags.Left);
 
-            Color prevColor = IsDark ? Color.FromArgb(190, 190, 195) : Color.FromArgb(80, 80, 85);
+            Color prevColor = ThemeHelper.PaletteFor(IsDark).PinnedRowPreview;
             bool rtl = IsRtl(_preview);
             var prevFlags = baseFlags | (rtl ? (TextFormatFlags.Right | TextFormatFlags.RightToLeft) : TextFormatFlags.Left);
             var prevRect = new Rectangle(x, P(22), cw, Math.Max(P(14), Height - P(22) - P(6)));
             TextRenderer.DrawText(g, _preview, FontHelper.ForAt(_preview, 9f, dpi), prevRect, prevColor, prevFlags);
             g.Clip = oldClip;
 
-            using (var p = new Pen(IsDark ? Color.FromArgb(52, 52, 56) : Color.FromArgb(232, 232, 236)))
+            using (var p = new Pen(ThemeHelper.PaletteFor(IsDark).PinnedRowDivider))
                 g.DrawLine(p, x, Height - 1, Width, Height - 1);
         }
 

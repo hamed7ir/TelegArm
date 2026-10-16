@@ -74,7 +74,7 @@ namespace TelegArm.UI.Controls
             bool dark = pal.Dark;
             Color accent = pal.Accent;
             int dpi = _modern ? Dpi.Of(this) : Dpi.Logical;
-            Color pbg = Parent != null ? Parent.BackColor : (dark ? Color.FromArgb(40, 40, 44) : Color.FromArgb(248, 248, 250));
+            Color pbg = Parent != null ? Parent.BackColor : pal.DialogPanelBg;
             g.Clear(pbg);   // so the rounded corners reveal the form behind, not a square
 
             Color fill, text; Color border = Color.Empty;
@@ -89,8 +89,8 @@ namespace TelegArm.UI.Controls
                         // with a hairline reads as a button on any surface, both themes.
                         fill = pal.Card; text = pal.Text; border = pal.Divider; break;
                     }
-                    fill = dark ? Color.FromArgb(60, 60, 64) : Color.FromArgb(234, 234, 238);
-                    text = dark ? Color.FromArgb(230, 230, 234) : Color.FromArgb(35, 35, 40); break;
+                    fill = pal.RoundedBtnNeutralFill;
+                    text = pal.RoundedBtnNeutralText; break;
                 case RoundedButtonKind.Secondary:
                     fill = pbg; text = _modern ? pal.AccentFg : accent; border = accent; break;
                 default:   // Primary
@@ -99,8 +99,8 @@ namespace TelegArm.UI.Controls
 
             if (!Enabled)
             {
-                fill = dark ? Color.FromArgb(55, 55, 58) : Color.FromArgb(226, 226, 229);
-                text = dark ? Color.FromArgb(120, 120, 124) : Color.FromArgb(150, 150, 154);
+                fill = pal.RoundedBtnDisabledFill;
+                text = pal.RoundedBtnDisabledText;
                 border = Color.Empty;
             }
             else if (_down) fill = Blend(fill, Color.Black, 0.16f);
@@ -135,7 +135,7 @@ namespace TelegArm.UI.Controls
 
         private static Color Blend(Color a, Color b, float t)
         {
-            return Color.FromArgb(
+            return ColorMath.Rgb(
                 (int)(a.R + (b.R - a.R) * t),
                 (int)(a.G + (b.G - a.G) * t),
                 (int)(a.B + (b.B - a.B) * t));

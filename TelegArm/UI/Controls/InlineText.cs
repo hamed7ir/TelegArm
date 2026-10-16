@@ -625,11 +625,11 @@ namespace TelegArm.UI.Controls
             EnsureFonts(baseFont);
             var flags = TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix;
 
-            Color codeBg = outgoing ? Color.FromArgb(46, 255, 255, 255) : (dark ? Color.FromArgb(60, 255, 255, 255) : Color.FromArgb(26, 0, 0, 0));
-            Color preBg = outgoing ? Color.FromArgb(55, 0, 0, 0) : (dark ? Color.FromArgb(90, 0, 0, 0) : Color.FromArgb(22, 0, 0, 0));
+            Color codeBg = outgoing ? ThemeHelper.PaletteFor(dark).InlineCodeBgOut : ThemeHelper.PaletteFor(dark).InlineCodeBgIn;
+            Color preBg = outgoing ? ThemeHelper.PaletteFor(dark).InlinePreBgOut : ThemeHelper.PaletteFor(dark).InlinePreBgIn;
             Color barColor = outgoing ? Color.White : accent;
-            Color quoteBg = Color.FromArgb(outgoing ? 28 : (dark ? 34 : 20), barColor);
-            Color spoilerBg = dark ? Color.FromArgb(150, 150, 156) : Color.FromArgb(168, 168, 176);
+            Color quoteBg = ColorMath.WithAlpha(barColor, outgoing ? 28 : (dark ? 34 : 20));
+            Color spoilerBg = ThemeHelper.PaletteFor(dark).InlineSpoilerBg;
 
             // Pass A — Pre panels (group consecutive pre lines into one full-width panel).
             for (int i = 0; i < _lines.Count;)

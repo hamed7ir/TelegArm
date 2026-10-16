@@ -45,7 +45,7 @@ namespace TelegArm.UI.Controls
                      | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             Size = new Size(Dpi.Px(Side, CurDpi), Dpi.Px(Side, CurDpi));
             Cursor = Cursors.Hand;
-            BackColor = Color.FromArgb(28, 28, 28); // matches the control bar
+            BackColor = ThemeHelper.Palette.PlayerControlBg; // matches the control bar
             TabStop = false;
         }
 
@@ -77,8 +77,8 @@ namespace TelegArm.UI.Controls
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.Clear(BackColor);
 
-            Color bg = _hover ? Color.FromArgb(80, 80, 80) : Color.FromArgb(45, 45, 48);
-            if (_active) bg = ThemeHelper.GetWindowsAccentColor();
+            Color bg = _hover ? ThemeHelper.Palette.PlayerButtonHover : ThemeHelper.Palette.PlayerButtonFace;
+            if (_active) bg = ThemeHelper.Palette.Accent;
             using (var brush = new SolidBrush(bg))
                 g.FillEllipse(brush, P(2), P(2), Width - P(4), Height - P(4));
 

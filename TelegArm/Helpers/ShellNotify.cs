@@ -594,7 +594,7 @@ namespace TelegArm.Helpers
             catch { }
             Color fill;
             try { fill = ThemeHelper.GetWindowsAccentColor(); }
-            catch { fill = Color.FromArgb(0, 120, 212); }
+            catch { fill = ThemeHelper.Palette.NotifyBadgeFallback; }
             using (var bmp = new Bitmap(side, side))
             {
                 using (var g = Graphics.FromImage(bmp))
@@ -604,7 +604,7 @@ namespace TelegArm.Helpers
                     float rim = Math.Max(1f, side / 16f);
                     using (var b = new SolidBrush(fill))
                         g.FillEllipse(b, 0, 0, side - 1, side - 1);
-                    using (var p = new Pen(Color.FromArgb(235, 255, 255, 255), rim))
+                    using (var p = new Pen(ThemeHelper.Palette.NotifyBadgeRim, rim))
                         g.DrawEllipse(p, rim / 2f, rim / 2f, side - 1 - rim, side - 1 - rim);
                     float size = (text.Length == 2 ? 0.58f : 0.68f) * side;
                     using (var f = new Font("Segoe UI", size, FontStyle.Bold, GraphicsUnit.Pixel))

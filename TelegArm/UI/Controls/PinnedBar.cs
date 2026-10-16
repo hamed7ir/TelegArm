@@ -76,7 +76,7 @@ namespace TelegArm.UI.Controls
             var g = e.Graphics;
             g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
 
-            g.Clear(IsDark ? Color.FromArgb(45, 45, 48) : Color.FromArgb(248, 248, 250));
+            g.Clear(ThemeHelper.PaletteFor(IsDark).PinnedBarBg);
 
             // Accent bar at the leading edge.
             using (var b = new SolidBrush(AccentColor))
@@ -84,11 +84,11 @@ namespace TelegArm.UI.Controls
 
             int x = P(24), iconBox = P(IconBox);
             int cw = Math.Max(0, Width - x - iconBox);   // reserve the right-edge list icon
-            Color prevColor = IsDark ? Color.FromArgb(180, 180, 185) : Color.FromArgb(90, 90, 95);
+            Color prevColor = ThemeHelper.PaletteFor(IsDark).PinnedBarPreview;
 
             // "Show all pinned" list icon (stacked lines) at the right edge.
             int iconW = P(16), ix = Width - iconBox + (iconBox - iconW) / 2, iy = Height / 2 - P(5);
-            using (var ip = new Pen(IsDark ? Color.FromArgb(170, 170, 175) : Color.FromArgb(110, 110, 115), Dpi.F(2f, dpi)))
+            using (var ip = new Pen(ThemeHelper.PaletteFor(IsDark).PinnedBarIcon, Dpi.F(2f, dpi)))
             {
                 g.DrawLine(ip, ix, iy, ix + iconW, iy);
                 g.DrawLine(ip, ix, iy + P(5), ix + iconW, iy + P(5));
@@ -115,7 +115,7 @@ namespace TelegArm.UI.Controls
 
             g.Clip = oldClip;
 
-            using (var p = new Pen(IsDark ? Color.FromArgb(60, 60, 63) : Color.FromArgb(230, 230, 233)))
+            using (var p = new Pen(ThemeHelper.PaletteFor(IsDark).PinnedBarDivider))
                 g.DrawLine(p, 0, Height - 1, Width, Height - 1);
         }
 

@@ -56,13 +56,13 @@ namespace TelegArm.UI.Controls
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             Color bg = Parent != null ? Parent.BackColor
-                       : (ThemeHelper.IsDark ? Color.FromArgb(50, 50, 50) : Color.FromArgb(250, 250, 250));
+                       : ThemeHelper.Palette.GlyphButtonBg;
             g.Clear(bg);
 
-            Color c = Enabled ? ThemeHelper.GetWindowsAccentColor()
-                              : (ThemeHelper.IsDark ? Color.FromArgb(90, 90, 94) : Color.FromArgb(190, 190, 196));
+            Color c = Enabled ? ThemeHelper.Palette.Accent
+                              : ThemeHelper.Palette.GlyphButtonDisabled;
             if (Enabled && _hover)
-                using (var hb = new SolidBrush(Color.FromArgb(ThemeHelper.IsDark ? 45 : 30, c)))
+                using (var hb = new SolidBrush(ColorMath.WithAlpha(c, ThemeHelper.Palette.Dark ? 45 : 30)))
                     g.FillEllipse(hb, P(2), P(2), Width - P(4), Height - P(4));
 
             float cx = Width / 2f, cy = Height / 2f, r = 9f * k;

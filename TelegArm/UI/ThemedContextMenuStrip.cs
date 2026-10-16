@@ -363,16 +363,16 @@ namespace TelegArm.UI
         // Restyled (redesign 1.6, on in 2.0): the cached Palette — no registry read per menu paint. Otherwise 1.x's values.
         private static bool R => ThemedContextMenuStrip.Restyled;
         public static bool Dark => R ? ThemeHelper.Palette.Dark : ThemeHelper.IsDark;
-        public static Color Background => R ? ThemeHelper.Palette.Card : Dark ? Color.FromArgb(43, 43, 46) : Color.FromArgb(245, 245, 247);
-        public static Color Text => R ? ThemeHelper.Palette.Text : Dark ? Color.FromArgb(235, 235, 235) : Color.FromArgb(25, 25, 25);
-        public static Color Disabled => R ? ThemeHelper.Palette.TextDisabled : Dark ? Color.FromArgb(120, 120, 120) : Color.FromArgb(165, 165, 165);
+        public static Color Background => R ? ThemeHelper.Palette.Card : ThemeHelper.PaletteFor(Dark).MenuLegacyBg;
+        public static Color Text => R ? ThemeHelper.Palette.Text : ThemeHelper.PaletteFor(Dark).MenuLegacyText;
+        public static Color Disabled => R ? ThemeHelper.Palette.TextDisabled : ThemeHelper.PaletteFor(Dark).MenuLegacyDisabled;
         public static Color Accent => R ? ThemeHelper.Palette.Accent : ThemeHelper.GetWindowsAccentColor();
         public static Color Highlight => R ? ThemeHelper.Palette.AccentSoft : Blend(Accent, Background, Dark ? 0.42f : 0.28f);
         public static Color Border => R ? ThemeHelper.Palette.Divider : Blend(Background, Dark ? Color.White : Color.Black, 0.16f);
 
         public static Color Blend(Color a, Color b, float t)
         {
-            return Color.FromArgb(
+            return ColorMath.Rgb(
                 (int)(a.R * t + b.R * (1 - t)),
                 (int)(a.G * t + b.G * (1 - t)),
                 (int)(a.B * t + b.B * (1 - t)));

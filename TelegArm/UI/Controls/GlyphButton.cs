@@ -21,7 +21,7 @@ namespace TelegArm.UI.Controls
         private Glyph _glyph;
         private bool _hover, _down;
 
-        public Color BarColor { get; set; } = Color.FromArgb(0, 120, 215);
+        public Color BarColor { get; set; } = ThemeHelper.Palette.GlyphButtonBar;
         public Color GlyphColor { get; set; } = Color.Empty;
         public bool DangerHover { get; set; }
 
@@ -131,7 +131,7 @@ namespace TelegArm.UI.Controls
                 }
             }
             if (Focused && ShowFocusCues)
-                using (var fp = new Pen(Color.FromArgb(160, fg), 1f) { DashStyle = DashStyle.Dot })
+                using (var fp = new Pen(ColorMath.WithAlpha(fg, 160), 1f) { DashStyle = DashStyle.Dot })
                     g.DrawRectangle(fp, 2, 2, Width - 5, Height - 5);
         }
     }

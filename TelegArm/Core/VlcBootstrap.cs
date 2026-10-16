@@ -261,11 +261,11 @@ namespace TelegArm.Core
 
                 bool dark = ThemeHelper.IsDark;
                 Color accent = ThemeHelper.GetWindowsAccentColor();
-                BackColor = dark ? Color.FromArgb(40, 40, 44) : Color.FromArgb(248, 248, 250);
+                BackColor = ThemeHelper.PaletteFor(dark).MediaPrepBg;
 
                 var bar = new Panel { Left = 0, Top = 0, Width = Dpi.Px(380, dpi), Height = Dpi.Px(6, dpi), BackColor = accent };
-                var title = new Label { Left = Dpi.Px(20, dpi), Top = Dpi.Px(28, dpi), Width = Dpi.Px(340, dpi), Height = Dpi.Px(32, dpi), Text = "Preparing media components…", TextAlign = ContentAlignment.MiddleCenter, ForeColor = dark ? Color.White : Color.FromArgb(20, 20, 20), Font = FontCache.Get("Segoe UI", 11.5f, FontStyle.Bold, dpi) };   // shared: never dispose
-                var sub = new Label { Left = Dpi.Px(20, dpi), Top = Dpi.Px(62, dpi), Width = Dpi.Px(340, dpi), Height = Dpi.Px(24, dpi), Text = "Setting up audio and video. This happens only once.", TextAlign = ContentAlignment.MiddleCenter, ForeColor = dark ? Color.FromArgb(160, 160, 160) : Color.FromArgb(110, 110, 110), Font = FontCache.Get("Segoe UI", 9f, FontStyle.Regular, dpi) };   // shared: never dispose
+                var title = new Label { Left = Dpi.Px(20, dpi), Top = Dpi.Px(28, dpi), Width = Dpi.Px(340, dpi), Height = Dpi.Px(32, dpi), Text = "Preparing media components…", TextAlign = ContentAlignment.MiddleCenter, ForeColor = ThemeHelper.PaletteFor(dark).MediaPrepTitle, Font = FontCache.Get("Segoe UI", 11.5f, FontStyle.Bold, dpi) };   // shared: never dispose
+                var sub = new Label { Left = Dpi.Px(20, dpi), Top = Dpi.Px(62, dpi), Width = Dpi.Px(340, dpi), Height = Dpi.Px(24, dpi), Text = "Setting up audio and video. This happens only once.", TextAlign = ContentAlignment.MiddleCenter, ForeColor = ThemeHelper.PaletteFor(dark).MediaPrepSub, Font = FontCache.Get("Segoe UI", 9f, FontStyle.Regular, dpi) };   // shared: never dispose
                 var pb = new ProgressBar { Left = Dpi.Px(30, dpi), Top = Dpi.Px(98, dpi), Width = Dpi.Px(320, dpi), Height = Dpi.Px(16, dpi), Style = ProgressBarStyle.Marquee, MarqueeAnimationSpeed = 30 };
                 Controls.AddRange(new Control[] { bar, title, sub, pb });
             }

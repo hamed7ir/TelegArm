@@ -137,10 +137,10 @@ namespace TelegArm.UI
             _accent = accent;
             // Same two-branch palette the dock uses (MainForm.BuildDock) rather than a third set of
             // greys — a notification that does not look like the app is a notification from some OTHER app.
-            _bg = dark ? Color.FromArgb(34, 34, 37) : Color.FromArgb(250, 250, 252);
-            _border = dark ? Color.FromArgb(64, 64, 70) : Color.FromArgb(214, 214, 222);
-            _fg = dark ? Color.FromArgb(234, 234, 238) : Color.FromArgb(28, 28, 32);
-            _sub = dark ? Color.FromArgb(158, 158, 166) : Color.FromArgb(112, 112, 120);
+            _bg = ThemeHelper.PaletteFor(dark).NotifyBg;
+            _border = ThemeHelper.PaletteFor(dark).NotifyBorder;
+            _fg = ThemeHelper.PaletteFor(dark).NotifyText;
+            _sub = ThemeHelper.PaletteFor(dark).NotifySub;
 
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.Manual;
@@ -374,7 +374,7 @@ namespace TelegArm.UI
         private void DrawClose(Graphics g, Rectangle box)
         {
             if (_closeHot)
-                using (var b = new SolidBrush(Color.FromArgb(40, _accent))) g.FillEllipse(b, box);
+                using (var b = new SolidBrush(ColorMath.WithAlpha(_accent, 40))) g.FillEllipse(b, box);
             int inset = Math.Max(S(4), box.Width / 3);
             using (var p = new Pen(_closeHot ? _accent : _sub, Math.Max(1.4f, Dpi.F(1.4f, _dpi))))
             {

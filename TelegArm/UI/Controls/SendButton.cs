@@ -14,7 +14,8 @@ namespace TelegArm.UI.Controls
     ///   Invalidate hook. It sits in the same composer row as the mic, the emoji and the attach buttons,
     ///   and two adjacent buttons that disagree by two pixels look like a bug. This is the same discipline
     ///   the header ⋮ used when it copied the magnifier.
-    /// ⚠ ACCENT COMES FROM ThemeHelper (GetWindowsAccentColor: the user's accent, else Windows') — never a hard-coded colour.
+    /// ⚠ ACCENT COMES FROM ThemeHelper.Palette.Accent (the user's accent, else Windows') — never a hard-coded colour, never a
+    ///   registry read in paint.
     /// ⚠ NO Region, DELIBERATELY — and that is the X1 rule APPLIED, not skipped. Region is for when the
     ///   parent's colour cannot be relied on; this control sits on the composer bar, whose flat background
     ///   we know, so painting its own rounded fill over that known colour is correct and avoids a Region's
@@ -102,22 +103,22 @@ namespace TelegArm.UI.Controls
             //   same as matching the WEIGHT.
             int d = Math.Min(P(30), Math.Min(Width, Height) - P(6));
             var disc = new Rectangle((Width - d) / 2, (Height - d) / 2, d, d);
-            Color accent = ThemeHelper.GetWindowsAccentColor();
+            Color accent = ThemeHelper.Palette.Accent;
 
             if (!Enabled)
             {
                 // Disabled reads as a flat grey disc rather than a hidden control: the composer still shows
                 // where send WILL be, which is what stops the row shifting when it becomes available.
-                using (var b = new SolidBrush(ThemeHelper.IsDark ? Color.FromArgb(58, 58, 63) : Color.FromArgb(214, 214, 220)))
+                using (var b = new SolidBrush(ThemeHelper.Palette.SendDisabledFill))
                     g.FillEllipse(b, disc);
-                DrawPlane(g, disc, ThemeHelper.IsDark ? Color.FromArgb(96, 96, 102) : Color.FromArgb(168, 168, 176), k);
+                DrawPlane(g, disc, ThemeHelper.Palette.SendDisabledGlyph, k);
                 return;
             }
 
             // Pressed darkens, hover lightens — the same two-state feedback the other composer buttons give.
             Color fill = _pressed ? Darken(accent, 0.82f) : _hover ? Lighten(accent, 0.12f) : accent;
             using (var b = new SolidBrush(fill)) g.FillEllipse(b, disc);
-            DrawPlane(g, disc, Color.White, k);
+            DrawPlane(g, disc, ThemeHelper.Palette.OnAccent, k);   // step 5.1: dark ink on a light accent (was white)
         }
 
         /// <summary>The paper plane, drawn as a filled path rather than a font glyph — the same reason the
@@ -145,21 +146,21 @@ namespace TelegArm.UI.Controls
 
                 // The centre crease: a hairline back to the notch, which is what makes it read as folded
                 // paper rather than as a plain arrow.
-                using (var p = new Pen(Color.FromArgb(70, ink.R, ink.G, ink.B), Math.Max(1f * k, s * 0.03f)))
+                using (var p = new Pen(ColorMath.WithAlpha(ink, 70), Math.Max(1f * k, s * 0.03f)))
                     g.DrawLine(p, notch, tip);
             }
         }
 
         private static Color Lighten(Color c, float f)
         {
-            return Color.FromArgb(c.A,
+            return ColorMath.Argb(c.A,
                 (int)Math.Min(255, c.R + (255 - c.R) * f),
                 (int)Math.Min(255, c.G + (255 - c.G) * f),
                 (int)Math.Min(255, c.B + (255 - c.B) * f));
         }
         private static Color Darken(Color c, float f)
         {
-            return Color.FromArgb(c.A, (int)(c.R * f), (int)(c.G * f), (int)(c.B * f));
+            return ColorMath.Argb(c.A, (int)(c.R * f), (int)(c.G * f), (int)(c.B * f));
         }
     }
 }

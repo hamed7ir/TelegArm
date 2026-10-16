@@ -42,10 +42,10 @@ namespace TelegArm.UI.Controls
             set { _isDark = value; BackColor = BarColor; Invalidate(); }
         }
 
-        private Color BarColor => _isDark ? Color.FromArgb(34, 34, 36) : Color.FromArgb(236, 236, 238);
-        private Color TextColor => _isDark ? Color.White : Color.FromArgb(30, 30, 30);
-        private Color SubTextColor => _isDark ? Color.FromArgb(200, 200, 200) : Color.FromArgb(95, 95, 95);
-        private Color TrackColor => _isDark ? Color.FromArgb(70, 70, 74) : Color.FromArgb(198, 198, 203);
+        private Color BarColor => ThemeHelper.PaletteFor(_isDark).PlayerBarBg;
+        private Color TextColor => ThemeHelper.PaletteFor(_isDark).PlayerBarText;
+        private Color SubTextColor => ThemeHelper.PaletteFor(_isDark).PlayerBarSub;
+        private Color TrackColor => ThemeHelper.PaletteFor(_isDark).PlayerBarTrack;
 
         public MiniPlayerBar()
         {

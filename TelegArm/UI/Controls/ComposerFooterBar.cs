@@ -77,8 +77,8 @@ namespace TelegArm.UI.Controls
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
-            g.Clear(IsDark ? Color.FromArgb(38, 38, 41) : Color.FromArgb(247, 247, 249));
-            using (var p = new Pen(IsDark ? Color.FromArgb(60, 60, 63) : Color.FromArgb(228, 228, 232)))
+            g.Clear(ThemeHelper.PaletteFor(IsDark).FooterBarBg);
+            using (var p = new Pen(ThemeHelper.PaletteFor(IsDark).FooterBarLine))
                 g.DrawLine(p, 0, 0, Width, 0);   // top separator, like the other bars (a 1 px hairline at every DPI)
 
             if (string.IsNullOrEmpty(_text)) { _btnRect = Rectangle.Empty; return; }
@@ -100,7 +100,7 @@ namespace TelegArm.UI.Controls
             else
             {
                 _btnRect = Rectangle.Empty;
-                Color c = IsDark ? Color.FromArgb(150, 150, 156) : Color.FromArgb(120, 120, 126);
+                Color c = ThemeHelper.PaletteFor(IsDark).FooterBarGlyph;
                 var r = new Rectangle(P(16), 0, Width - P(32), Height);
                 var flags = TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter
                           | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix

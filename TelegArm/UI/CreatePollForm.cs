@@ -46,10 +46,10 @@ namespace TelegArm.UI
         {
             _dark = dark; _accent = accent;
             _dpi = dpi > 0 ? dpi : Dpi.DefaultDpi;
-            _bg = dark ? Color.FromArgb(36, 36, 38) : Color.FromArgb(245, 245, 247);
-            _fg = dark ? Color.FromArgb(235, 235, 235) : Color.FromArgb(20, 20, 20);
-            _field = dark ? Color.FromArgb(54, 54, 58) : Color.White;
-            _sub = dark ? Color.FromArgb(150, 150, 150) : Color.FromArgb(120, 120, 120);
+            _bg = ThemeHelper.PaletteFor(dark).DialogBg;
+            _fg = ThemeHelper.PaletteFor(dark).DialogText;
+            _field = ThemeHelper.PaletteFor(dark).DialogField;
+            _sub = ThemeHelper.PaletteFor(dark).DialogSub;
 
             Text = "Create Poll";
             TelegArm.Helpers.AppIcon.Set(this);   // app icon in the taskbar / Alt-Tab

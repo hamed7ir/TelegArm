@@ -297,7 +297,7 @@ namespace TelegArm.UI.Controls
         }
 
         private static Color Lighten(Color c)
-            => Color.FromArgb(Math.Min(255, c.R + 40), Math.Min(255, c.G + 40), Math.Min(255, c.B + 40));
+            => ColorMath.Rgb(Math.Min(255, c.R + 40), Math.Min(255, c.G + 40), Math.Min(255, c.B + 40));
 
         // ── Restyled painting ────────────────────────────────────────────────────────────────────────────────
 

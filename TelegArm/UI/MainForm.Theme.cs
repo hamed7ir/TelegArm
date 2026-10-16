@@ -98,14 +98,14 @@ namespace TelegArm.UI
             {
                 // The hover tint is a one-shot property, so unlike the drawn glyph it does NOT follow a live
                 // accent change on its own — re-assert it here, where every other themed control is refreshed.
-                _chatMenuBtn.FlatAppearance.MouseOverBackColor = Color.FromArgb(40, _accent);
+                _chatMenuBtn.FlatAppearance.MouseOverBackColor = ColorMath.WithAlpha(_accent, 40);
                 _chatMenuBtn.Invalidate();
             }
             if (_dockBtn != null)
             {
                 // TA-23/D1c — same one-shot-property gap as _chatMenuBtn: re-assert the hover tint here,
                 // because unlike the drawn glyph it does not follow a live accent change by itself.
-                _dockBtn.FlatAppearance.MouseOverBackColor = Color.FromArgb(40, _accent);
+                _dockBtn.FlatAppearance.MouseOverBackColor = ColorMath.WithAlpha(_accent, 40);
                 _dockBtn.Invalidate();
             }
             if (_dockEmoji != null)
@@ -146,14 +146,14 @@ namespace TelegArm.UI
             if (_folderRail != null) RebuildFolderRail();   // FOLDER-SIDEBAR: rebuild IS the recolor (BackColor + item colors)
             if (_botMenuButton != null)
             {
-                _botMenuButton.BackColor = _dark ? Color.FromArgb(54, 54, 58) : Color.FromArgb(225, 225, 228);
-                _botMenuButton.ForeColor = _dark ? Color.FromArgb(225, 225, 228) : Color.FromArgb(40, 40, 44);
+                _botMenuButton.BackColor = ThemeHelper.PaletteFor(_dark).BotMenuBg;
+                _botMenuButton.ForeColor = ThemeHelper.PaletteFor(_dark).BotMenuFg;
                 _botMenuButton.Invalidate();
             }
             RecolorConnectingUi();
             if (_switchOverlay != null)
             {
-                _switchOverlay.BackColor = _dark ? Color.FromArgb(26, 26, 29) : Color.FromArgb(244, 244, 247);
+                _switchOverlay.BackColor = ThemeHelper.PaletteFor(_dark).OverlayBg;
                 if (_switchOverlay.Visible) _switchOverlay.Invalidate();   // title text derives at paint time
             }
             UpdateHeaderStatus();   // status colors derive at invocation — recolors NOW, not on the next presence update
@@ -162,7 +162,7 @@ namespace TelegArm.UI
             {
                 if (c is ChatListItemControl item) { item.AccentColor = _accent; item.IsDark = _dark; item.Invalidate(); }
                 else if (c is Label lbl)   // search section headers (AddSectionHeader) — ctor-only ForeColor
-                    lbl.ForeColor = _dark ? Color.FromArgb(150, 150, 155) : Color.FromArgb(120, 120, 125);
+                    lbl.ForeColor = ThemeHelper.PaletteFor(_dark).HintText;
             }
             foreach (Control c in _messagePanel.Controls)
             {

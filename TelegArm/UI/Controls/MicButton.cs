@@ -72,11 +72,11 @@ namespace TelegArm.UI.Controls
             g.SmoothingMode = SmoothingMode.AntiAlias;
 
             Color bg = Parent != null ? Parent.BackColor
-                       : (ThemeHelper.IsDark ? Color.FromArgb(50, 50, 50) : Color.FromArgb(250, 250, 250));
+                       : ThemeHelper.Palette.MicButtonBg;
             g.Clear(bg);
 
             float cx = Width / 2f, cy = Height / 2f;
-            var red = Color.FromArgb(229, 57, 53);
+            var red = ThemeHelper.Palette.RecordRed;
 
             if (Mode == MicMode.Stop)
             {
@@ -91,7 +91,7 @@ namespace TelegArm.UI.Controls
             {
                 // Red X — tap to discard the recorded clip.
                 if (_hover)
-                    using (var hb = new SolidBrush(Color.FromArgb(ThemeHelper.IsDark ? 45 : 30, red)))
+                    using (var hb = new SolidBrush(ColorMath.WithAlpha(red, ThemeHelper.Palette.Dark ? 45 : 30)))
                         g.FillEllipse(hb, P(2), P(2), Width - P(4), Height - P(4));
                 using (var pen = new Pen(red, 2.2f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round })
                 {
@@ -101,10 +101,10 @@ namespace TelegArm.UI.Controls
                 return;
             }
 
-            Color glyph = Enabled ? ThemeHelper.GetWindowsAccentColor()
-                                  : (ThemeHelper.IsDark ? Color.FromArgb(90, 90, 94) : Color.FromArgb(190, 190, 196));
+            Color glyph = Enabled ? ThemeHelper.Palette.Accent
+                                  : ThemeHelper.Palette.MicGlyphDisabled;
             if (Enabled && _hover)
-                using (var hb = new SolidBrush(Color.FromArgb(ThemeHelper.IsDark ? 45 : 30, glyph)))
+                using (var hb = new SolidBrush(ColorMath.WithAlpha(glyph, ThemeHelper.Palette.Dark ? 45 : 30)))
                     g.FillEllipse(hb, P(2), P(2), Width - P(4), Height - P(4));
 
             using (var b = new SolidBrush(glyph))

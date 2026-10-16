@@ -440,7 +440,7 @@ namespace TelegArm.UI
                 Padding = new Padding(Px(14), 0, 0, 0),
                 Margin = new Padding(0),
                 Font = FontHelper.UiAt(9f, WindowDpiValue),   // shared: never dispose
-                ForeColor = _dark ? Color.FromArgb(150, 150, 155) : Color.FromArgb(120, 120, 125)
+                ForeColor = ThemeHelper.PaletteFor(_dark).HintText
             };
             _chatListPanel.Controls.Add(lbl);
         }
@@ -458,7 +458,7 @@ namespace TelegArm.UI
                 Padding = new Padding(Px(10), 0, 0, 0),
                 Margin = new Padding(0),
                 Font = FontHelper.UiAt(8f, WindowDpiValue, FontStyle.Bold),   // shared: never dispose
-                ForeColor = _dark ? Color.FromArgb(150, 150, 155) : Color.FromArgb(120, 120, 125)
+                ForeColor = ThemeHelper.PaletteFor(_dark).HintText
             };
             _chatListPanel.Controls.Add(lbl);
         }

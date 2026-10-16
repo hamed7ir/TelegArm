@@ -97,7 +97,7 @@ namespace TelegArm.UI
             float F(float v) => Dpi.F(v, dpi);
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.Clear(Parent != null ? Parent.BackColor : (_dark ? Color.FromArgb(38, 38, 42) : Color.White));
+            g.Clear(Parent != null ? Parent.BackColor : (ThemeHelper.PaletteFor(_dark).DownloadBtnBg));
             var all = _service.SnapshotTransfers().Where(t => t.PanelVisible).ToArray();   // badge/ring = visible rows only
             long got = 0, total = 0; int activeOrPaused = 0;
             foreach (var t in all)
@@ -107,8 +107,8 @@ namespace TelegArm.UI
                 { got += t.Handle.Transmitted; total += t.Handle.Total; activeOrPaused++; }
             }
             float frac = total > 0 ? Math.Min(1f, (float)got / total) : (all.Length > 0 && activeOrPaused == 0 ? 1f : 0f);
-            var accent = ThemeHelper.GetWindowsAccentColor();
-            var track = _dark ? Color.FromArgb(80, 80, 86) : Color.FromArgb(205, 205, 210);
+            var accent = ThemeHelper.Palette.Accent;
+            var track = ThemeHelper.PaletteFor(_dark).DownloadRingTrack;
             int ring = P(26);   // centred in the control: docked, it is as tall as the header (see the class notes)
             var rect = new Rectangle((Width - ring) / 2, (Height - ring) / 2, ring, ring);
             using (var pen = new Pen(track, F(3f))) g.DrawEllipse(pen, rect);
@@ -116,7 +116,7 @@ namespace TelegArm.UI
                 using (var pen = new Pen(accent, F(3f)) { StartCap = LineCap.Round, EndCap = LineCap.Round })
                     g.DrawArc(pen, rect, -90, frac * 360f);
             // down-arrow glyph
-            var fg = _dark ? Color.FromArgb(225, 225, 230) : Color.FromArgb(60, 60, 66);
+            var fg = ThemeHelper.PaletteFor(_dark).DownloadBtnGlyph;
             using (var pen = new Pen(fg, F(2f)) { StartCap = LineCap.Round, EndCap = LineCap.Round })
             {
                 float cx = rect.X + rect.Width / 2f, cy = rect.Y + rect.Height / 2f;   // the ring's centre
@@ -172,13 +172,13 @@ namespace TelegArm.UI
             StartPosition = FormStartPosition.Manual;
             ShowInTaskbar = false;
             Size = new Size(Px(420), Px(380));   // sized at its DPI BEFORE Show: the caller positions it by this size
-            BackColor = dark ? Color.FromArgb(40, 40, 43) : Color.FromArgb(248, 248, 250);
+            BackColor = ThemeHelper.PaletteFor(dark).DownloadsBg;
             KeyPreview = true;
             KeyDown += (s, e) => { if (e.KeyCode == Keys.Escape) Close(); };
             Deactivate += (s, e) => { try { Close(); } catch { } };
             TelegArm.Helpers.AppIcon.Set(this);
 
-            var header = new Panel { Dock = DockStyle.Top, Height = Px(42), BackColor = dark ? Color.FromArgb(50, 50, 54) : Color.FromArgb(236, 236, 240) };
+            var header = new Panel { Dock = DockStyle.Top, Height = Px(42), BackColor = ThemeHelper.PaletteFor(dark).DownloadsHeaderBg };
             header.Controls.Add(MakeLabel("Downloads", 12, 10, 120, true));   // logical x, y, width (MakeLabel scales them)
             var btnCancelAll = HeaderButton("Cancel all", Pic.Cancel, false, 0);
             btnCancelAll.Click += (s, e) =>
@@ -235,7 +235,7 @@ namespace TelegArm.UI
             return new Label
             {
                 Text = text, Location = new Point(Px(x), Px(y)), AutoSize = false, Size = new Size(Px(w), Px(22)),
-                ForeColor = _dark ? Color.FromArgb(230, 230, 235) : Color.FromArgb(40, 40, 45),
+                ForeColor = ThemeHelper.PaletteFor(_dark).DownloadsHeaderText,
                 Font = FontHelper.UiAt(bold ? 10f : 8.5f, _dpi, bold ? FontStyle.Bold : FontStyle.Regular)   // shared: never dispose
             };
         }
@@ -266,10 +266,8 @@ namespace TelegArm.UI
         // ── Rounded, themed "pill" buttons with GDI+ glyphs (matches the accent Start button) ──
         private enum Pic { None, Play, Pause, Cancel, Clear }
 
-        private static readonly Color CancelTint = Color.FromArgb(228, 100, 100);   // destructive glyph tint
-
         private static Color Lighten(Color c, int by = 22)
-            => Color.FromArgb(Math.Min(255, c.R + by), Math.Min(255, c.G + by), Math.Min(255, c.B + by));
+            => ColorMath.Rgb(Math.Min(255, c.R + by), Math.Min(255, c.G + by), Math.Min(255, c.B + by));
 
         /// <summary>Draws a rounded pill (accent-filled if primary, else a themed pill) with a centered
         /// glyph+label group. Shared by the header/footer PillButtons and the per-row buttons.
@@ -283,11 +281,10 @@ namespace TelegArm.UI
             if (primary) { fill = hover ? Lighten(accent) : accent; fg = Color.White; }
             else
             {
-                fill = dark ? Color.FromArgb(hover ? 78 : 64, hover ? 78 : 64, hover ? 84 : 70)
-                            : Color.FromArgb(hover ? 214 : 228, hover ? 214 : 228, hover ? 220 : 234);
-                fg = dark ? Color.FromArgb(228, 228, 233) : Color.FromArgb(45, 45, 50);
+                fill = hover ? ThemeHelper.PaletteFor(dark).DownloadPillHover : ThemeHelper.PaletteFor(dark).DownloadPill;
+                fg = ThemeHelper.PaletteFor(dark).DownloadPillText;
             }
-            Color gc = primary ? Color.White : (glyph == Pic.Cancel ? CancelTint : accent);
+            Color gc = primary ? Color.White : (glyph == Pic.Cancel ? ThemeHelper.PaletteFor(dark).DownloadCancelTint : accent);
             using (var b = new SolidBrush(fill))
             using (var path = DrawHelper.RoundedRect(new Rectangle(r.X, r.Y, r.Width - 1, r.Height - 1), (r.Height - 1) / 2))
                 g.FillPath(b, path);
@@ -377,7 +374,7 @@ namespace TelegArm.UI
             protected override void OnPaint(PaintEventArgs e)
             {
                 var g = e.Graphics;
-                g.Clear(Parent != null ? Parent.BackColor : (_dark ? Color.FromArgb(50, 50, 54) : Color.FromArgb(236, 236, 240)));
+                g.Clear(Parent != null ? Parent.BackColor : (ThemeHelper.PaletteFor(_dark).DownloadsHeaderBg));
                 DrawPill(g, new Rectangle(0, 0, Width, Height), Text, _glyph, _primary, _hover, _dark, _accent, _dpi);
             }
         }
@@ -495,9 +492,9 @@ namespace TelegArm.UI
             protected override void OnPaint(PaintEventArgs e)
             {
                 var g = e.Graphics;
-                g.Clear(_dark ? Color.FromArgb(48, 48, 52) : Color.White);
-                var fg = _dark ? Color.FromArgb(228, 228, 233) : Color.FromArgb(40, 40, 45);
-                var sub = _dark ? Color.FromArgb(150, 150, 156) : Color.FromArgb(120, 120, 126);
+                g.Clear(ThemeHelper.PaletteFor(_dark).DownloadRowBg);
+                var fg = ThemeHelper.PaletteFor(_dark).DownloadRowText;
+                var sub = ThemeHelper.PaletteFor(_dark).DownloadRowSub;
                 var st = St;
                 var h = _ti.Handle;
 
@@ -520,7 +517,7 @@ namespace TelegArm.UI
                 float frac = h != null ? h.Fraction : 0f;
                 if (st == DownloadHandle.DState.Done) frac = 1f;
                 var bar = new Rectangle(P(10), P(44), Width - P(170), P(5));
-                using (var bb = new SolidBrush(_dark ? Color.FromArgb(70, 70, 76) : Color.FromArgb(215, 215, 220))) g.FillRectangle(bb, bar);
+                using (var bb = new SolidBrush(ThemeHelper.PaletteFor(_dark).DownloadBarTrack)) g.FillRectangle(bb, bar);
                 if (frac > 0)
                     using (var ab = new SolidBrush(st == DownloadHandle.DState.Paused ? sub : _accent))
                         g.FillRectangle(ab, new Rectangle(bar.X, bar.Y, (int)(bar.Width * frac), bar.Height));
@@ -534,7 +531,7 @@ namespace TelegArm.UI
                     if (st == DownloadHandle.DState.Downloading || st == DownloadHandle.DState.Paused)
                         DrawPill(g, Btn2, "Cancel", Pic.Cancel, false, _hoverBtn == 2, _dark, _accent, _dpi);
                 }
-                using (var pen = new Pen(_dark ? Color.FromArgb(60, 60, 66) : Color.FromArgb(228, 228, 233)))   // a 1 px hairline at every DPI, as PinnedRowControl's
+                using (var pen = new Pen(ThemeHelper.PaletteFor(_dark).DownloadRowDivider))   // a 1 px hairline at every DPI, as PinnedRowControl's
                     g.DrawLine(pen, 0, Height - 1, Width, Height - 1);
             }
         }

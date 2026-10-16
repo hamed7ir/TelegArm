@@ -34,7 +34,7 @@ namespace TelegArm.UI.Controls
 
         private InlineTextSelection _sel;
         private bool _suppressClick;
-        private Color SelColor => Color.FromArgb(110, _accent);
+        private Color SelColor => ColorMath.WithAlpha(_accent, 110);
 
         public event Action<string> LinkClicked;
         public event Action<string, long> MentionClicked;
@@ -44,7 +44,7 @@ namespace TelegArm.UI.Controls
         public RichInfoLabel(bool dark, Color accent, Font font)
         {
             _dark = dark; _accent = accent;
-            _fg = dark ? Color.FromArgb(225, 225, 228) : Color.FromArgb(30, 30, 32);
+            _fg = ThemeHelper.PaletteFor(dark).InfoLabelText;
             _link = accent;
             _ownFont = font == null;
             Font = font ?? FontCache.Get("Segoe UI", 9.75f, FontStyle.Regular, CurDpi);   // shared: never dispose

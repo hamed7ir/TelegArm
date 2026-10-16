@@ -474,7 +474,7 @@ namespace TelegArm.UI.Controls
             _albumTileRects.Clear();
             if (_albumAudio)   // vertical audio row list (Telegram-Desktop style)
             {
-                Color subColor = _outgoing ? Color.FromArgb(210, 255, 255, 255)
+                Color subColor = _outgoing ? ThemeHelper.PaletteFor(IsDark).BubbleOutSub
                                            : (ThemeHelper.PaletteFor(IsDark).BubbleInSub);
                 for (int i = 0; i < n; i++)
                 {
@@ -497,7 +497,7 @@ namespace TelegArm.UI.Controls
                         var prev = g.Clip;
                         g.SetClip(pth);
                         if (_album[i].Image != null) DrawFittedImage(g, _album[i].Image, tr, P(8), cover: true);
-                        else using (var fb = new SolidBrush(IsDark ? Color.FromArgb(70, 70, 74) : Color.FromArgb(208, 208, 212))) g.FillPath(fb, pth);
+                        else using (var fb = new SolidBrush(ThemeHelper.PaletteFor(IsDark).BubbleAlbumCoverPlaceholder)) g.FillPath(fb, pth);
                         g.Clip = prev; prev.Dispose();
                     }
                     if (_album[i].IsVideo && _album[i].Image != null) DrawVideoOverlay(g, tr);
@@ -518,7 +518,7 @@ namespace TelegArm.UI.Controls
                     g.DrawString(_text, TextFont, tb, new RectangleF(innerX, ty, contentW, captionH - P(6)), sf);
             }
 
-            Color timeColor = _outgoing ? Color.FromArgb(220, 255, 255, 255)
+            Color timeColor = _outgoing ? ThemeHelper.PaletteFor(IsDark).BubbleOutTime
                                         : (ThemeHelper.PaletteFor(IsDark).BubbleInTime);
             using (var timeSf = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Far })
             using (var tcb = new SolidBrush(timeColor))
@@ -536,16 +536,16 @@ namespace TelegArm.UI.Controls
             if (t.Image != null)
                 DrawHelper.DrawAudioCover(g, circle, t.Image);   // shared cover-in-circle (clip + dim overlay)
             else
-                using (var fb = new SolidBrush(_outgoing ? Color.FromArgb(70, 255, 255, 255) : AccentColor)) g.FillEllipse(fb, circle);
+                using (var fb = new SolidBrush(_outgoing ? ThemeHelper.PaletteFor(IsDark).BubbleOutIconDisc : AccentColor)) g.FillEllipse(fb, circle);
 
             bool downloading = t.Handle != null && t.Handle.State == DownloadHandle.DState.Downloading;
             bool paused = t.Handle != null && t.Handle.State == DownloadHandle.DState.Paused;
             if (downloading)
-                DrawHelper.DrawProgressRing(g, Rectangle.Inflate(circle, -P(3), -P(3)), t.Handle.Fraction, Color.White, Color.FromArgb(120, 255, 255, 255), cancel: true);
+                DrawHelper.DrawProgressRing(g, Rectangle.Inflate(circle, -P(3), -P(3)), t.Handle.Fraction, Color.White, ThemeHelper.PaletteFor(IsDark).MediaRingTrack, cancel: true);
             else if (paused)
             {
                 // Frozen ring + a play triangle = "tap to resume" (DOWNLOAD-UX 3.3; resume = fresh transfer).
-                DrawHelper.DrawProgressRing(g, Rectangle.Inflate(circle, -P(3), -P(3)), t.Handle.Fraction, Color.White, Color.FromArgb(120, 255, 255, 255), cancel: false);
+                DrawHelper.DrawProgressRing(g, Rectangle.Inflate(circle, -P(3), -P(3)), t.Handle.Fraction, Color.White, ThemeHelper.PaletteFor(IsDark).MediaRingTrack, cancel: false);
                 float k = circle.Width / 44f;   // drawn for the 44 px circle; scales with it
                 float cx = circle.X + circle.Width / 2f, cy = circle.Y + circle.Height / 2f;
                 using (var wb = new SolidBrush(Color.White))
@@ -723,7 +723,7 @@ namespace TelegArm.UI.Controls
         private bool _suppressClick;        // a drag-select just finished → swallow the click (don't open a link)
         // Drawn OVER the (opaque) text bitmap now, so it must contrast with the bubble: a translucent white on
         // the accent (outgoing) bubble, the translucent accent on the gray (incoming) bubble.
-        private Color SelectionColor => _outgoing ? Color.FromArgb(95, 255, 255, 255) : Color.FromArgb(110, AccentColor);
+        private Color SelectionColor => _outgoing ? ThemeHelper.PaletteFor(IsDark).SelectionOut : ColorMath.WithAlpha(AccentColor, 110);
         public event Action<string> LinkClicked;
         public event Action<string, long> MentionClicked;
         public event Action<string> HashtagClicked;
@@ -732,7 +732,7 @@ namespace TelegArm.UI.Controls
         /// <summary>Resolves a custom-emoji document id to its cached image (null until loaded).</summary>
         public Func<long, Image> CustomEmojiResolver;
 
-        private Color LinkColor => _outgoing ? Color.FromArgb(235, 255, 255, 255) : AccentColor;
+        private Color LinkColor => _outgoing ? ThemeHelper.PaletteFor(IsDark).LinkOut : AccentColor;
 
         // ── Link-preview card (MessageMediaWebPage) ──────────────────────────
         // A web-page preview stacked BELOW the message text (like a quote block): accent bar +
@@ -1312,7 +1312,7 @@ namespace TelegArm.UI.Controls
 
             Color bubbleColor = _outgoing ? AccentColor : (ThemeHelper.PaletteFor(IsDark).BubbleIn);
             Color fg = _outgoing ? Color.White : (ThemeHelper.PaletteFor(IsDark).BubbleInText);
-            Color sub = _outgoing ? Color.FromArgb(210, 255, 255, 255) : (ThemeHelper.PaletteFor(IsDark).BubbleInSub);
+            Color sub = _outgoing ? ThemeHelper.PaletteFor(IsDark).BubbleOutSub : (ThemeHelper.PaletteFor(IsDark).BubbleInSub);
             using (var b = new SolidBrush(bubbleColor))
             using (var path = DrawHelper.RoundedRect(rect, P(14)))
                 g.FillPath(b, path);
@@ -1368,7 +1368,7 @@ namespace TelegArm.UI.Controls
                 : (_pollTotal + (_pollMultiple ? (_pollTotal == 1 ? " answer" : " answers") : (_pollTotal == 1 ? " voter" : " voters")));
             TextRenderer.DrawText(g, footer, TimeFont, new Rectangle(innerX, ty, contentW, PollFooterH), sub, tf);
 
-            Color timeColor = _outgoing ? Color.FromArgb(220, 255, 255, 255) : (ThemeHelper.PaletteFor(IsDark).BubbleInTime);
+            Color timeColor = _outgoing ? ThemeHelper.PaletteFor(IsDark).BubbleOutTime : (ThemeHelper.PaletteFor(IsDark).BubbleInTime);
             using (var timeSf = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Far })
             using (var tcb = new SolidBrush(timeColor))
                 g.DrawString(StampText(), TimeFont, tcb, new RectangleF(bx + Pad, by + bodyH - TimeH, bubbleW - 2 * Pad, TimeH), timeSf);
@@ -1381,7 +1381,7 @@ namespace TelegArm.UI.Controls
         private void DrawPollOption(Graphics g, Rectangle rect, PollOptionVM opt, Color fg, Color sub)
         {
             int pct = (_pollResults && _pollTotal > 0) ? (int)Math.Round(opt.Voters * 100.0 / _pollTotal) : 0;
-            using (var bg = new SolidBrush(_outgoing ? Color.FromArgb(40, 255, 255, 255) : (IsDark ? Color.FromArgb(74, 74, 78) : Color.FromArgb(236, 236, 238))))
+            using (var bg = new SolidBrush(_outgoing ? ThemeHelper.PaletteFor(IsDark).PollOptionBgOut : ThemeHelper.PaletteFor(IsDark).PollOptionBgIn))
             using (var p = DrawHelper.RoundedRect(rect, P(9)))
                 g.FillPath(bg, p);
 
@@ -1390,7 +1390,7 @@ namespace TelegArm.UI.Controls
                 int barW = Math.Max(0, (int)(rect.Width * Math.Min(1f, pct / 100f)));
                 if (barW > P(4))
                 {
-                    Color barCol = opt.Correct ? Color.FromArgb(120, 76, 175, 80) : Color.FromArgb(110, AccentColor);
+                    Color barCol = opt.Correct ? ColorMath.WithAlpha(ThemeHelper.PaletteFor(IsDark).Success, 120) : ColorMath.WithAlpha(AccentColor, 110);
                     var br = new Rectangle(rect.X, rect.Y, barW, rect.Height);
                     using (var bb = new SolidBrush(barCol))
                     using (var bp = DrawHelper.RoundedRect(br, P(9)))
@@ -1419,8 +1419,8 @@ namespace TelegArm.UI.Controls
                 float k = Dpi.F(1f, CurDpi);
                 TextRenderer.DrawText(g, pct + "%", TimeFont, new Rectangle(rect.Right - P(44), rect.Y, P(38), rect.Height), fg,
                     TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
-                if (_pollQuiz && opt.Correct) DrawTick(g, rect.Right - P(60), rect.Y + rect.Height / 2, Color.FromArgb(76, 175, 80), true, k);
-                else if (_pollQuiz && opt.Chosen && !opt.Correct) DrawTick(g, rect.Right - P(60), rect.Y + rect.Height / 2, Color.FromArgb(229, 57, 53), false, k);
+                if (_pollQuiz && opt.Correct) DrawTick(g, rect.Right - P(60), rect.Y + rect.Height / 2, ThemeHelper.PaletteFor(IsDark).Success, true, k);
+                else if (_pollQuiz && opt.Chosen && !opt.Correct) DrawTick(g, rect.Right - P(60), rect.Y + rect.Height / 2, ThemeHelper.PaletteFor(IsDark).AlertRed, false, k);
                 else if (opt.Chosen) DrawTick(g, rect.Right - P(60), rect.Y + rect.Height / 2, _outgoing ? Color.White : AccentColor, true, k);
             }
         }
@@ -1437,7 +1437,7 @@ namespace TelegArm.UI.Controls
 
         private void DrawPillButton(Graphics g, Rectangle rect, string label, Color fill, Color text, bool dim)
         {
-            using (var b = new SolidBrush(dim ? Color.FromArgb(90, fill) : fill))
+            using (var b = new SolidBrush(dim ? ColorMath.WithAlpha(fill, 90) : fill))
             using (var p = DrawHelper.RoundedRect(rect, P(9)))
                 g.FillPath(b, p);
             TextRenderer.DrawText(g, label, SenderFont, rect, text,
@@ -1473,7 +1473,7 @@ namespace TelegArm.UI.Controls
             int bandW = Math.Max(bubbleW, Math.Min(ViewInChatWidth(g), Width - SideGap - bx));
             var band = new Rectangle(bx, y, bandW, ViewInChatH);
             _viewInChatRect = band;
-            Color sep = IsDark ? Color.FromArgb(46, 255, 255, 255) : Color.FromArgb(30, 0, 0, 0);
+            Color sep = ThemeHelper.PaletteFor(IsDark).BubbleBandSeparator;
             using (var sp = new Pen(sep)) g.DrawLine(sp, band.Left + P(2), band.Top, band.Right - P(2), band.Top);   // hairline: stays 1 px
             const string label = "View in chat";
             int chevW = P(12);
@@ -1539,7 +1539,7 @@ namespace TelegArm.UI.Controls
             int bandW = Math.Max(bubbleW, Math.Min(CommentsFooterWidth(g), Width - SideGap - bx));
             var band = new Rectangle(bx, y, bandW, CommentH);
             _commentsRect = band;
-            Color sep = IsDark ? Color.FromArgb(46, 255, 255, 255) : Color.FromArgb(30, 0, 0, 0);
+            Color sep = ThemeHelper.PaletteFor(IsDark).BubbleBandSeparator;
             using (var sp = new Pen(sep)) g.DrawLine(sp, band.Left + P(2), band.Top, band.Right - P(2), band.Top);   // hairline: stays 1 px
             string label = CommentLabel();
             int glyphH = P(13);
@@ -1583,8 +1583,8 @@ namespace TelegArm.UI.Controls
         {
             _kbRects.Clear();
             if (_kbRows == null || _kbRows.Count == 0) return;
-            Color cell = IsDark ? Color.FromArgb(58, 58, 62) : Color.FromArgb(210, 224, 240);
-            Color text = IsDark ? Color.FromArgb(225, 230, 235) : Color.FromArgb(20, 40, 70);
+            Color cell = ThemeHelper.PaletteFor(IsDark).BubbleKbCell;
+            Color text = ThemeHelper.PaletteFor(IsDark).BubbleKbText;
             int y = yTop;
             foreach (var row in _kbRows)
             {
@@ -1599,7 +1599,7 @@ namespace TelegArm.UI.Controls
                     using (var p = DrawHelper.RoundedRect(r, P(8)))
                         g.FillPath(b, p);
                     if (_kbLoading == row[i])
-                        DrawHelper.DrawProgressRing(g, new Rectangle(r.X + r.Width / 2 - P(9), r.Y + (KbRowH - P(18)) / 2, P(18), P(18)), 0f, text, Color.FromArgb(90, text), false);
+                        DrawHelper.DrawProgressRing(g, new Rectangle(r.X + r.Width / 2 - P(9), r.Y + (KbRowH - P(18)) / 2, P(18), P(18)), 0f, text, ColorMath.WithAlpha(text, 90), false);
                     else
                     {
                         // Per-button script-aware font (Vazirmatn for Persian) + inline Noto emoji, centered —
@@ -1784,7 +1784,7 @@ namespace TelegArm.UI.Controls
                 if (_hasCard) PaintCard(g, innerX, ty + textH + CardTopGap, contentW);
 
                 Color timeColor = _outgoing
-                    ? Color.FromArgb(220, 255, 255, 255)
+                    ? ThemeHelper.PaletteFor(IsDark).BubbleOutTime
                     : (ThemeHelper.PaletteFor(IsDark).BubbleInTime);
                 using (var timeSf = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Far })
                 using (var tcb = new SolidBrush(timeColor))
@@ -1828,7 +1828,7 @@ namespace TelegArm.UI.Controls
         private void DrawSelectionCheck(Graphics g)
         {
             if (_flashTicks > 0)
-                using (var fb = new SolidBrush(Color.FromArgb(70, AccentColor)))
+                using (var fb = new SolidBrush(ColorMath.WithAlpha(AccentColor, 70)))
                     g.FillRectangle(fb, ClientRectangle);   // brief "jump to pinned" pulse (all paint paths)
             if (!SelectionMode) return;
             int d = P(18);
@@ -1848,14 +1848,14 @@ namespace TelegArm.UI.Controls
             }
             else
             {
-                using (var pen = new Pen(IsDark ? Color.FromArgb(120, 120, 120) : Color.FromArgb(170, 170, 170), 1.6f * k))
+                using (var pen = new Pen(ThemeHelper.PaletteFor(IsDark).BubbleSelectRing, 1.6f * k))
                     g.DrawEllipse(pen, circle);
             }
         }
 
         private static Color Blend(Color a, Color b, float t)
         {
-            return Color.FromArgb(
+            return ColorMath.Rgb(
                 (int)(a.R * t + b.R * (1 - t)),
                 (int)(a.G * t + b.G * (1 - t)),
                 (int)(a.B * t + b.B * (1 - t)));
@@ -1873,7 +1873,7 @@ namespace TelegArm.UI.Controls
 
             Color bubbleColor = _outgoing ? AccentColor : (ThemeHelper.PaletteFor(IsDark).BubbleIn);
             Color textColor = _outgoing ? Color.White : (ThemeHelper.PaletteFor(IsDark).BubbleInText);
-            Color subColor = _outgoing ? Color.FromArgb(220, 255, 255, 255) : (ThemeHelper.PaletteFor(IsDark).BubbleInSub);
+            Color subColor = _outgoing ? ThemeHelper.PaletteFor(IsDark).BubbleOutSubStrong : (ThemeHelper.PaletteFor(IsDark).BubbleInSub);
 
             if (HasForward) DrawForwardHeader(g, bx, by, cardW);
             if (HasReply) DrawReplyHeader(g, bx, by + fwdOff, cardW);
@@ -1885,7 +1885,7 @@ namespace TelegArm.UI.Controls
             bool dlActive = _fileHandle != null && _fileHandle.State == DownloadHandle.DState.Downloading;
             var iconRect = new Rectangle(bx + P(12), rect.Y + P(12), P(48), P(48));
             if (dlActive)   // progress ring + ✕ replaces the file icon while downloading
-                DrawHelper.DrawProgressRing(g, iconRect, _fileHandle.Fraction, textColor, Color.FromArgb(90, subColor), cancel: true);
+                DrawHelper.DrawProgressRing(g, iconRect, _fileHandle.Fraction, textColor, ColorMath.WithAlpha(subColor, 90), cancel: true);
             else
                 DrawHelper.DrawFileIcon(g, iconRect, FileName);
 
@@ -1982,8 +1982,8 @@ namespace TelegArm.UI.Controls
                         int rd = P(46);
                         var ring = new Rectangle(_imageRect.X + (_imageRect.Width - rd) / 2,
                                                  _imageRect.Y + (_imageRect.Height - rd) / 2, rd, rd);
-                        using (var dim = new SolidBrush(Color.FromArgb(90, 0, 0, 0))) g.FillEllipse(dim, ring);
-                        DrawHelper.DrawProgressRing(g, ring, _fileHandle.Fraction, Color.White, Color.FromArgb(120, 255, 255, 255), cancel: vDl);
+                        using (var dim = new SolidBrush(ThemeHelper.PaletteFor(IsDark).MediaDim)) g.FillEllipse(dim, ring);
+                        DrawHelper.DrawProgressRing(g, ring, _fileHandle.Fraction, Color.White, ThemeHelper.PaletteFor(IsDark).MediaRingTrack, cancel: vDl);
                         if (vPz)
                         {
                             float k = rd / 46f;   // drawn for the 46 px ring; scales with it
@@ -2020,7 +2020,7 @@ namespace TelegArm.UI.Controls
             }
 
             Color timeColor = _outgoing
-                ? Color.FromArgb(220, 255, 255, 255)
+                ? ThemeHelper.PaletteFor(IsDark).BubbleOutTime
                 : (ThemeHelper.PaletteFor(IsDark).BubbleInTime);
             using (var timeSf = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Far })
             using (var tcb = new SolidBrush(timeColor))
@@ -2050,8 +2050,8 @@ namespace TelegArm.UI.Controls
             // CHANNEL-META-EXTRAS (3): group admin/owner/custom-rank label, right-aligned on the sender row.
             if (!string.IsNullOrEmpty(_adminRole))
             {
-                Color rc = _outgoing ? Color.FromArgb(200, 255, 255, 255)
-                                     : (IsDark ? Color.FromArgb(140, 140, 146) : Color.FromArgb(140, 140, 146));
+                Color rc = _outgoing ? ThemeHelper.PaletteFor(IsDark).BubbleOutRole
+                                     : ThemeHelper.PaletteFor(IsDark).BubbleInRole;
                 bool prole = FontHelper.IsPersian(_adminRole);
                 TextRenderer.DrawText(g, _adminRole, FontHelper.ForAt(_adminRole, prole ? 9f : 8f, CurDpi, FontStyle.Regular),
                     new Rectangle(x, y, w, SenderH), rc,
@@ -2118,8 +2118,8 @@ namespace TelegArm.UI.Controls
                 if (cx > x && cx + chipW > x + availW) break;   // single row: stop on overflow
 
                 var chip = new Rectangle(cx, y, chipW, chipH);
-                Color bg = r.Chosen ? AccentColor : (IsDark ? Color.FromArgb(55, 55, 58) : Color.FromArgb(224, 224, 230));
-                Color fg = r.Chosen ? Color.White : (IsDark ? Color.FromArgb(220, 220, 225) : Color.FromArgb(55, 55, 60));
+                Color bg = r.Chosen ? AccentColor : (ThemeHelper.PaletteFor(IsDark).BubbleChipBg);
+                Color fg = r.Chosen ? Color.White : (ThemeHelper.PaletteFor(IsDark).BubbleChipFg);
                 using (var b = new SolidBrush(bg))
                 using (var path = DrawHelper.RoundedRect(chip, chipH / 2))
                     g.FillPath(b, path);
@@ -2183,8 +2183,8 @@ namespace TelegArm.UI.Controls
             }
 
             Color rc = _outgoing
-                ? Color.FromArgb(235, 255, 255, 255)
-                : (IsDark ? Color.FromArgb(195, 195, 195) : Color.FromArgb(95, 95, 95));
+                ? ThemeHelper.PaletteFor(IsDark).BubbleOutSoftText
+                : ThemeHelper.PaletteFor(IsDark).BubbleInReplyText;
             // TextRenderer clips to bounds + does script fallback (Persian/mixed) — no GDI+ bleed.
             TextRenderer.DrawText(g, ReplyPreview, ReplyFont, new Rectangle(textX, textStripY, textW, textStripH), rc, flags);
         }
@@ -2193,7 +2193,7 @@ namespace TelegArm.UI.Controls
         private void DrawForwardHeader(Graphics g, int x, int y, int w)
         {
             string label = "Forwarded from " + ForwardedFrom;
-            Color c = _outgoing ? Color.FromArgb(235, 255, 255, 255) : SenderNameColor;
+            Color c = _outgoing ? ThemeHelper.PaletteFor(IsDark).BubbleOutSoftText : SenderNameColor;
             var flags = TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis | TextFormatFlags.VerticalCenter
                         | (_rtl ? TextFormatFlags.Right | TextFormatFlags.RightToLeft : TextFormatFlags.Left);
             TextRenderer.DrawText(g, label, FontHelper.ForAt(label, _rtl ? 9.5f : 8f, CurDpi, FontStyle.Bold),
@@ -2241,7 +2241,7 @@ namespace TelegArm.UI.Controls
         private static void DrawFailedMark(Graphics g, float cx, float cy, float k)
         {
             float r = 6f * k;
-            var red = Color.FromArgb(229, 57, 53);
+            var red = ThemeHelper.Palette.AlertRed;   // the same in both modes
             using (var b = new SolidBrush(red))
                 g.FillEllipse(b, cx - r, cy - r, 2 * r, 2 * r);
             using (var pen = new Pen(Color.White, 1.4f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round })
@@ -2253,7 +2253,7 @@ namespace TelegArm.UI.Controls
 
         private void FillImageArea(Graphics g, Rectangle area)
         {
-            using (var b = new SolidBrush(IsDark ? Color.FromArgb(45, 45, 48) : Color.FromArgb(200, 200, 200)))
+            using (var b = new SolidBrush(ThemeHelper.PaletteFor(IsDark).BubbleImagePlaceholder))
             using (var path = DrawHelper.RoundedRect(area, P(8)))
                 g.FillPath(b, path);
         }
@@ -2272,7 +2272,7 @@ namespace TelegArm.UI.Controls
             int d = P(48);       // play-button circle, radius 24
             float k = d / 48f;   // the triangle is drawn for the 48 px circle; scales with it
             int cx = area.X + area.Width / 2, cy = area.Y + area.Height / 2;
-            using (var cb = new SolidBrush(Color.FromArgb(140, 0, 0, 0)))
+            using (var cb = new SolidBrush(ThemeHelper.PaletteFor(IsDark).MediaPlayDisc))
                 g.FillEllipse(cb, cx - d / 2, cy - d / 2, d, d);
             using (var wb = new SolidBrush(Color.White))
                 g.FillPolygon(wb, new[]
@@ -2285,7 +2285,7 @@ namespace TelegArm.UI.Controls
                 var sz = TextRenderer.MeasureText(DurationText, TimeFont);
                 int bw = sz.Width + P(12), bh = sz.Height + P(6);
                 var rect = new Rectangle(area.Right - bw - P(6), area.Bottom - bh - P(6), bw, bh);
-                using (var bb = new SolidBrush(Color.FromArgb(150, 0, 0, 0)))
+                using (var bb = new SolidBrush(ThemeHelper.PaletteFor(IsDark).MediaBadgeBg))
                 using (var path = DrawHelper.RoundedRect(rect, P(4)))
                     g.FillPath(bb, path);
                 TextRenderer.DrawText(g, DurationText, TimeFont, rect, Color.White,
@@ -2301,9 +2301,9 @@ namespace TelegArm.UI.Controls
             int cx = area.X + area.Width / 2, cy = area.Y + area.Height / 2;
             var oldMode = g.SmoothingMode;
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            using (var cb = new SolidBrush(Color.FromArgb(115, 0, 0, 0)))   // soft translucent disc (subtle, theme-agnostic)
+            using (var cb = new SolidBrush(ThemeHelper.PaletteFor(IsDark).MediaPlayDiscSoft))   // soft translucent disc (subtle, theme-agnostic)
                 g.FillEllipse(cb, cx - d / 2, cy - d / 2, d, d);
-            using (var wb = new SolidBrush(Color.FromArgb(235, 255, 255, 255)))
+            using (var wb = new SolidBrush(ThemeHelper.PaletteFor(IsDark).MediaPlayGlyph))
                 g.FillPolygon(wb, new[]   // right-pointing triangle, proportioned like the video play glyph
                 {
                     new PointF(cx - 0.146f * d, cy - 0.229f * d),
@@ -2391,8 +2391,8 @@ namespace TelegArm.UI.Controls
         {
             _cardRect = new Rectangle(x, y, cardW, _cardHeight);
 
-            Color bg = _outgoing ? Color.FromArgb(36, 255, 255, 255)
-                                 : (IsDark ? Color.FromArgb(40, 255, 255, 255) : Color.FromArgb(20, 0, 0, 0));
+            Color bg = _outgoing ? ThemeHelper.PaletteFor(IsDark).BubbleCardBgOut
+                                 : ThemeHelper.PaletteFor(IsDark).BubbleCardBgIn;
             using (var b = new SolidBrush(bg))
             using (var p = DrawHelper.RoundedRect(_cardRect, P(8)))
                 g.FillPath(b, p);
@@ -2421,13 +2421,13 @@ namespace TelegArm.UI.Controls
                 }
                 else
                 {
-                    using (var ph = new SolidBrush(IsDark ? Color.FromArgb(64, 64, 68) : Color.FromArgb(208, 208, 212)))
+                    using (var ph = new SolidBrush(ThemeHelper.PaletteFor(IsDark).BubbleCardThumbPlaceholder))
                     using (var p = DrawHelper.RoundedRect(tr, P(6))) g.FillPath(ph, p);
                 }
             }
 
             Color titleC = _outgoing ? Color.White : (ThemeHelper.PaletteFor(IsDark).BubbleInText);
-            Color descC = _outgoing ? Color.FromArgb(220, 255, 255, 255) : (IsDark ? Color.FromArgb(180, 180, 185) : Color.FromArgb(90, 90, 95));
+            Color descC = _outgoing ? ThemeHelper.PaletteFor(IsDark).BubbleOutSubStrong : ThemeHelper.PaletteFor(IsDark).BubbleInCardDesc;
             int ty = y + CardPad;
             if (_cardSiteH > 0) { DrawCardLine(g, _cardSite, CardSiteFont, textLeft, ty, _cardTextColW, _cardSiteH, barC, false); ty += _cardSiteH + P(2); }
             if (_cardTitleH > 0) { DrawCardLine(g, _cardTitle, CardTitleFont, textLeft, ty, _cardTextColW, _cardTitleH, titleC, true); ty += _cardTitleH + P(2); }

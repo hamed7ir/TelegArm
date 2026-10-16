@@ -82,8 +82,8 @@ namespace TelegArm.UI.Controls
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
-            g.Clear(IsDark ? Color.FromArgb(38, 38, 41) : Color.FromArgb(247, 247, 249));
-            using (var p = new Pen(IsDark ? Color.FromArgb(60, 60, 63) : Color.FromArgb(228, 228, 232)))
+            g.Clear(ThemeHelper.PaletteFor(IsDark).FooterBarBg);
+            using (var p = new Pen(ThemeHelper.PaletteFor(IsDark).FooterBarLine))
                 g.DrawLine(p, 0, 0, Width, 0);   // top separator, like the other bars (a 1 px hairline at every DPI)
 
             bool rtl = IsRtl(_message);
@@ -121,7 +121,7 @@ namespace TelegArm.UI.Controls
 
             if (ShowDismiss)
             {
-                Color xc = IsDark ? Color.FromArgb(150, 150, 156) : Color.FromArgb(120, 120, 126);
+                Color xc = ThemeHelper.PaletteFor(IsDark).FooterBarGlyph;
                 TextRenderer.DrawText(g, "✕", FontHelper.UiAt(11f, dpi), _dismissRect, xc,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
             }
@@ -129,7 +129,7 @@ namespace TelegArm.UI.Controls
             int tw = Math.Max(0, textEnd - textStart);
             if (tw > 0)
             {
-                Color tc = IsDark ? Color.FromArgb(205, 205, 210) : Color.FromArgb(70, 70, 76);
+                Color tc = ThemeHelper.PaletteFor(IsDark).FooterBarText;
                 var tr = new Rectangle(textStart, 0, tw, Height);
                 var flags = TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix
                           | (rtl ? (TextFormatFlags.Right | TextFormatFlags.RightToLeft) : TextFormatFlags.Left);

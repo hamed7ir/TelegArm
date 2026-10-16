@@ -80,17 +80,24 @@ namespace TelegArm.UI.Controls
     public sealed class SwatchRow : SettingRow
     {
         /// <summary>The fixed accents after "Follow Windows" (Telegram's blue first).</summary>
-        public static readonly Color[] Accents =
+        public static Color[] Accents
         {
-            Color.FromArgb(0x40, 0xA7, 0xE3),   // Telegram blue
-            Color.FromArgb(0x8E, 0x59, 0xD9),   // violet
-            Color.FromArgb(0xC2, 0x39, 0xB3),   // magenta
-            Color.FromArgb(0xD0, 0x4F, 0x8A),   // pink
-            Color.FromArgb(0xE5, 0x53, 0x4B),   // red
-            Color.FromArgb(0xE8, 0x93, 0x2B),   // orange
-            Color.FromArgb(0x3F, 0xAE, 0x5A),   // green
-            Color.FromArgb(0x18, 0xA3, 0x9C),   // teal
-        };
+            get
+            {
+                var p = ThemeHelper.Palette;
+                return new[]
+                {
+                    p.AccentSwatchBlue,   // Telegram blue
+                    p.AccentSwatchViolet,   // violet
+                    p.AccentSwatchMagenta,   // magenta
+                    p.AccentSwatchPink,   // pink
+                    p.AccentSwatchRed,   // red
+                    p.AccentSwatchOrange,   // orange
+                    p.AccentSwatchGreen,   // green
+                    p.AccentSwatchTeal,   // teal
+                };
+            }
+        }
 
         private const int Diameter = 28, Gap = 12, Ring = 3, Height2 = 92;
         private int _index;               // 0 = follow Windows

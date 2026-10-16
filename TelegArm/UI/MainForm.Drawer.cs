@@ -178,7 +178,7 @@ namespace TelegArm.UI
             if (glyph != null) { g.DrawImage(glyph, Px(12), (h - gs) / 2, gs, gs); textX = Px(42); }
             int rightPad = (_replyCancelBtn != null ? _replyCancelBtn.Width : Px(44)) + Px(8);
             var rect = new Rectangle(textX, 0, Math.Max(0, _replyStrip.Width - textX - rightPad), h);
-            Color fg = _dark ? Color.FromArgb(220, 220, 220) : Color.FromArgb(40, 40, 40);
+            Color fg = ThemeHelper.PaletteFor(_dark).DrawerFg;
             string text = _replyPreview ?? "";
             EmojiRenderer.DrawLine(g, text, FontHelper.ForAt(text, 9.5f, WindowDpiValue), fg, rect);
         }
@@ -409,7 +409,7 @@ namespace TelegArm.UI
                 // dim — the opaque card fill below IS the whole control. (Old full-window snapshot/scrim removed.)
 
                 // Card.
-                using (var cb = new SolidBrush(_dark ? Color.FromArgb(36, 36, 39) : Color.FromArgb(250, 250, 252)))
+                using (var cb = new SolidBrush(ThemeHelper.PaletteFor(_dark).DrawerBg))
                     g.FillRectangle(cb, 0, 0, cardW, Height);
 
                 // Header: avatar + name + subtitle. (Fonts below are shared FontCache fonts: never dispose.)
@@ -425,11 +425,11 @@ namespace TelegArm.UI
                     DrawHelper.DrawInitial(g, _letter, FontCache.Get("Segoe UI", 18f, FontStyle.Bold, dpi), avr, Color.White);   // ink-centred (owner report 2026-10-14)
                 }
                 if (_hover == -1)
-                    using (var hb = new SolidBrush(Color.FromArgb(_dark ? 22 : 18, _accent))) g.FillRectangle(hb, _headerRect);
+                    using (var hb = new SolidBrush(ColorMath.WithAlpha(_accent, _dark ? 22 : 18))) g.FillRectangle(hb, _headerRect);
                 TextRenderer.DrawText(g, _name, FontHelper.UiAt(11.5f, dpi), new Rectangle(P(86), P(30), P(CardW - 96), P(24)),
-                    _dark ? Color.White : Color.FromArgb(25, 25, 28), TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                    ThemeHelper.PaletteFor(_dark).DrawerHeaderText, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
                 TextRenderer.DrawText(g, "View profile", FontHelper.UiAt(8.5f, dpi), new Rectangle(P(86), P(54), P(CardW - 96), P(18)),
-                    _dark ? Color.FromArgb(150, 150, 155) : Color.FromArgb(135, 135, 140), TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+                    ThemeHelper.PaletteFor(_dark).DrawerHeaderSub, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
 
                 // Rows (scroll under the fixed header).
                 var rowsClip = g.Clip;
@@ -441,12 +441,12 @@ namespace TelegArm.UI
                     if (r.Bottom < headerH || r.Y > Height) continue;   // scrolled offscreen
                     if (row.Separator)
                     {
-                        using (var p = new Pen(_dark ? Color.FromArgb(54, 54, 58) : Color.FromArgb(232, 232, 236)))   // 1 px hairline: not scaled
+                        using (var p = new Pen(ThemeHelper.PaletteFor(_dark).DrawerHairline))   // 1 px hairline: not scaled
                             g.DrawLine(p, P(16), r.Y + r.Height / 2, cardW - P(16), r.Y + r.Height / 2);
                         continue;
                     }
                     if (_hover == i)
-                        using (var hb = new SolidBrush(_dark ? Color.FromArgb(48, 48, 52) : Color.FromArgb(237, 240, 244)))
+                        using (var hb = new SolidBrush(ThemeHelper.PaletteFor(_dark).DrawerHeaderFill))
                             g.FillRectangle(hb, r);
 
                     if (row.IsAccount)
@@ -464,12 +464,12 @@ namespace TelegArm.UI
                             DrawHelper.DrawInitial(g, ltr, FontHelper.ForAt(ltr, 11f, dpi, FontStyle.Bold), accAvr, Color.White);   // ink-centred (owner report 2026-10-14)
                         }
                         TextRenderer.DrawText(g, row.Label, FontHelper.UiAt(10.5f, dpi), new Rectangle(P(56), r.Y, P(CardW - 60), r.Height),
-                            _dark ? Color.FromArgb(228, 228, 232) : Color.FromArgb(35, 35, 38),
+                            ThemeHelper.PaletteFor(_dark).DrawerRowText,
                             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
                         continue;
                     }
 
-                    Color danger = Color.FromArgb(222, 74, 74);
+                    Color danger = ThemeHelper.Palette.Danger;
                     Color glyphC = row.IsDanger ? danger : _accent;
                     var gr = new Rectangle(P(16), r.Y, P(30), r.Height);
                     // Render the glyph via the Noto emoji pack (consistent + crisp on RT). The old font-char
@@ -486,7 +486,7 @@ namespace TelegArm.UI
                     }
                     else
                         TextRenderer.DrawText(g, row.Glyph, FontHelper.UiAt(12f, dpi), gr, glyphC, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-                    Color lc = row.IsDanger ? danger : (_dark ? Color.FromArgb(228, 228, 232) : Color.FromArgb(35, 35, 38));
+                    Color lc = row.IsDanger ? danger : (ThemeHelper.PaletteFor(_dark).DrawerRowText);
                     TextRenderer.DrawText(g, row.Label, FontHelper.UiAt(10.5f, dpi), new Rectangle(P(56), r.Y, P(CardW - 110), r.Height), lc,
                         TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
 
@@ -504,14 +504,14 @@ namespace TelegArm.UI
                     int track = Math.Max(1, Height - headerH);
                     int thumbH = Math.Max(P(30), track * track / _contentH);
                     int thumbY = headerH + (int)((track - thumbH) * (_scrollY / (float)maxS));
-                    using (var tb = new SolidBrush(Color.FromArgb(110, _dark ? Color.White : Color.Black)))
+                    using (var tb = new SolidBrush(ColorMath.WithAlpha(_dark ? Color.White : Color.Black, 110)))
                         g.FillRectangle(tb, cardW - P(5), thumbY, P(3), thumbH);
                 }
             }
 
             private void DrawToggle(Graphics g, Rectangle r, bool on)
             {
-                using (var track = new SolidBrush(on ? _accent : (_dark ? Color.FromArgb(80, 80, 86) : Color.FromArgb(200, 200, 206))))
+                using (var track = new SolidBrush(on ? _accent : (ThemeHelper.PaletteFor(_dark).DrawerSwitchOff)))
                 using (var p = DrawHelper.RoundedRect(r, r.Height / 2))
                     g.FillPath(track, p);
                 int inset = P(3), d = r.Height - 2 * inset;   // knob inset (3 logical) on every side; d = 14 at 96, as before

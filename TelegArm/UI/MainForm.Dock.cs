@@ -31,14 +31,14 @@ namespace TelegArm.UI
         /// today, and this batch adds none).</summary>
         private void BuildDock()
         {
-            Color bg = _dark ? Color.FromArgb(34, 34, 37) : Color.FromArgb(246, 246, 248);
-            Color line = _dark ? Color.FromArgb(58, 58, 62) : Color.FromArgb(222, 222, 228);
+            Color bg = ThemeHelper.PaletteFor(_dark).DockBg;
+            Color line = ThemeHelper.PaletteFor(_dark).DockLine;
 
             // Step 3.4: every length here is LOGICAL px at the window's DPI (DockWidth stays a logical const).
             _dock = new Panel { Dock = DockStyle.Right, Width = Px(DockWidth), Visible = false, BackColor = bg };
             _dock.Paint += (s, e) =>
             {
-                using (var p = new Pen(_dark ? Color.FromArgb(58, 58, 62) : Color.FromArgb(222, 222, 228)))
+                using (var p = new Pen(ThemeHelper.PaletteFor(_dark).DockLine))
                     e.Graphics.DrawLine(p, 0, 0, 0, _dock.Height);   // 1px seam so it reads as its own column
             };
 
@@ -135,13 +135,13 @@ namespace TelegArm.UI
             if (_dockInfoTab != null)
             {
                 _dockInfoTab.ForeColor = pane == DockPane.Info ? _accent
-                    : (_dark ? Color.FromArgb(170, 170, 176) : Color.FromArgb(105, 105, 112));
+                    : (ThemeHelper.PaletteFor(_dark).DockTabFg);
                 _dockInfoTab.Invalidate();
             }
             if (_dockEmojiTab != null)
             {
                 _dockEmojiTab.ForeColor = pane == DockPane.Emoji ? _accent
-                    : (_dark ? Color.FromArgb(170, 170, 176) : Color.FromArgb(105, 105, 112));
+                    : (ThemeHelper.PaletteFor(_dark).DockTabFg);
                 _dockEmojiTab.Invalidate();
             }
         }

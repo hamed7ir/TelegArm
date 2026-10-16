@@ -376,7 +376,7 @@ namespace TelegArm.UI
                 var f = new Form
                 {
                     FormBorderStyle = FormBorderStyle.None, StartPosition = FormStartPosition.Manual,
-                    ShowInTaskbar = false, BackColor = _dark ? Color.FromArgb(52, 52, 56) : Color.FromArgb(55, 55, 58)
+                    ShowInTaskbar = false, BackColor = ThemeHelper.PaletteFor(_dark).ToastBg
                 };
                 // Step 3.4: sized and placed in LOGICAL px at this window's DPI; the font is shared (never dispose).
                 var lbl = new Label { Dock = DockStyle.Fill, ForeColor = Color.White, TextAlign = ContentAlignment.MiddleCenter, Text = text, Font = FontHelper.UiAt(9f, WindowDpiValue) };

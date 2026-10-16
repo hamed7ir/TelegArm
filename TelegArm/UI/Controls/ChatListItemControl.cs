@@ -31,7 +31,6 @@ namespace TelegArm.UI.Controls
 
         /// <summary>Telegram-green presence dot (theme-independent, like official clients); shared —
         /// the row painter allocates nothing for it (PRESENCE hot-path law).</summary>
-        private static readonly Brush OnlineDotBrush = new SolidBrush(Color.FromArgb(76, 204, 90));
         public Color AccentColor { get; set; } = Color.DodgerBlue;
         public bool IsDark { get; set; }
 
@@ -97,6 +96,16 @@ namespace TelegArm.UI.Controls
             Invalidate();
         }
 
+        private static SolidBrush _onlineDotBrush;
+        /// <summary>The online dot's brush, cached (a row painter must not allocate per paint — INVARIANTS 12); rebuilt only
+        /// if the token's colour changes, which a theme switch does not (OnlineDot is the same in both modes).</summary>
+        private static Brush OnlineDotBrush(Color c)
+        {
+            var b = _onlineDotBrush;
+            if (b == null || b.Color != c) _onlineDotBrush = b = new SolidBrush(c);
+            return b;
+        }
+
         protected override void OnPaint(PaintEventArgs e)
         {
             int dpi = CurDpi;
@@ -111,7 +120,7 @@ namespace TelegArm.UI.Controls
             Color nameColor = ThemeHelper.PaletteFor(IsDark).ListName;
             Color subColor = ThemeHelper.PaletteFor(IsDark).ListSub;
             if (_selected)
-                bg = ThemeHelper.PaletteFor(IsDark).ListSelected;
+                bg = ThemeHelper.PaletteFor(IsDark).AccentSoft;   // step 5.1: the selection follows the accent (was ListSelected)
             g.Clear(bg);
 
             int d = P(48), ax = P(8), ay = P(8);
@@ -131,7 +140,7 @@ namespace TelegArm.UI.Controls
             {
                 // REPLIES-INBOX: the special "Replies" identity — a drawn reply arrow (no glyph/emoji dependency,
                 // matching the app's owner-draw convention for the eye / hamburger icons).
-                using (var b = new SolidBrush(Color.FromArgb(80, 120, 190)))
+                using (var b = new SolidBrush(ThemeHelper.PaletteFor(IsDark).RepliesAvatar))
                     g.FillEllipse(b, avatarRect);
                 DrawRepliesGlyph(g, avatarRect);
             }
@@ -150,7 +159,7 @@ namespace TelegArm.UI.Controls
             {
                 using (var rim = new SolidBrush(bg))
                     g.FillEllipse(rim, ax + d - P(14), ay + d - P(14), P(14), P(14));
-                g.FillEllipse(OnlineDotBrush, ax + d - P(12), ay + d - P(12), P(10), P(10));
+                g.FillEllipse(OnlineDotBrush(ThemeHelper.PaletteFor(IsDark).OnlineDot), ax + d - P(12), ay + d - P(12), P(10), P(10));
             }
 
             int textLeft = ax + d + P(10);

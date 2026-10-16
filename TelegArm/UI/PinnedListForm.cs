@@ -52,14 +52,14 @@ namespace TelegArm.UI
             StartPosition = FormStartPosition.Manual;
             Size = new Size(Px(DesignW), Px(DesignH));   // sized at its DPI BEFORE Show: the caller positions it by this size
             TelegArm.Helpers.AppIcon.Set(this);   // app icon in Alt-Tab
-            BackColor = dark ? Color.FromArgb(30, 30, 33) : Color.FromArgb(248, 248, 250);
+            BackColor = ThemeHelper.PaletteFor(dark).PinnedBg;
 
-            _header = new Panel { Dock = DockStyle.Top, BackColor = dark ? Color.FromArgb(40, 40, 44) : Color.FromArgb(238, 238, 242) };
+            _header = new Panel { Dock = DockStyle.Top, BackColor = ThemeHelper.PaletteFor(dark).PinnedHeaderBg };
             _title = new Label
             {
                 Text = "Pinned messages",
                 Dock = DockStyle.Fill,
-                ForeColor = dark ? Color.FromArgb(225, 225, 230) : Color.FromArgb(35, 35, 40),
+                ForeColor = ThemeHelper.PaletteFor(dark).PinnedTitle,
                 TextAlign = ContentAlignment.MiddleLeft
             };
             _close = new Button
@@ -67,7 +67,7 @@ namespace TelegArm.UI
                 Text = "✕",
                 Dock = DockStyle.Right,
                 FlatStyle = FlatStyle.Flat,
-                ForeColor = dark ? Color.FromArgb(210, 210, 215) : Color.FromArgb(70, 70, 75)
+                ForeColor = ThemeHelper.PaletteFor(dark).PinnedSub
             };
             _close.FlatAppearance.BorderSize = 0;
             _close.Click += (s, e) => Close();
@@ -81,7 +81,7 @@ namespace TelegArm.UI
                 FlowDirection = FlowDirection.TopDown,
                 WrapContents = false,
                 AutoScroll = true,
-                BackColor = dark ? Color.FromArgb(30, 30, 33) : Color.FromArgb(248, 248, 250),
+                BackColor = ThemeHelper.PaletteFor(dark).PinnedBg,
                 Padding = new Padding(0)
             };
             _list.Resize += (s, e) => SizeRows();
@@ -187,7 +187,7 @@ namespace TelegArm.UI
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e);
-            using (var p = new Pen(_dark ? Color.FromArgb(70, 70, 74) : Color.FromArgb(210, 210, 214)))
+            using (var p = new Pen(ThemeHelper.PaletteFor(_dark).PinnedDivider))
                 e.Graphics.DrawRectangle(p, 0, 0, Width - 1, Height - 1);   // subtle border for the borderless popup
         }
     }

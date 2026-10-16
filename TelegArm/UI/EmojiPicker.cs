@@ -79,7 +79,7 @@ namespace TelegArm.UI
             ShowInTaskbar = false;
             TelegArm.Helpers.AppIcon.Set(this);   // app icon in Alt-Tab
             Size = new Size(Px(380), Px(380));   // a popup is sized at its DPI BEFORE it is shown (the caller positions by it)
-            BackColor = dark ? Color.FromArgb(40, 40, 43) : Color.FromArgb(245, 245, 247);
+            BackColor = ThemeHelper.PaletteFor(dark).EmojiBg;
             if (!embedded)
             {
                 // POPUP ONLY. Embedded, Esc belongs to the chat and there is nothing to dismiss; and
@@ -206,7 +206,7 @@ namespace TelegArm.UI
                 TextAlign = ContentAlignment.MiddleCenter,
                 Cursor = Cursors.Hand,
                 Font = FontHelper.UiAt(10.5f, _dpi, FontStyle.Bold),   // shared: never dispose
-                ForeColor = _dark ? Color.FromArgb(170, 170, 175) : Color.FromArgb(110, 110, 115)
+                ForeColor = ThemeHelper.PaletteFor(_dark).EmojiDim
             };
             lbl.Click += (s, e) => ShowTab(idx);
             return lbl;
@@ -232,7 +232,7 @@ namespace TelegArm.UI
             var catBar = new Controls.NoNativeScrollFlowPanel
             {
                 Dock = DockStyle.Fill, WrapContents = false, AutoScroll = true,
-                BackColor = _dark ? Color.FromArgb(34, 34, 37) : Color.FromArgb(236, 236, 240), Padding = new Padding(Px(4), Px(3), Px(4), 0)
+                BackColor = ThemeHelper.PaletteFor(_dark).EmojiTabBar, Padding = new Padding(Px(4), Px(3), Px(4), 0)
             };
             var catHost = new Panel
             {
@@ -268,7 +268,7 @@ namespace TelegArm.UI
                 {
                     b.Text = cat.Length > 0 ? cat.Substring(0, 1) : "?";
                     b.TextAlign = ContentAlignment.MiddleCenter;
-                    b.ForeColor = _dark ? Color.FromArgb(200, 200, 205) : Color.FromArgb(70, 70, 75);
+                    b.ForeColor = ThemeHelper.PaletteFor(_dark).EmojiTabText;
                 }
                 StyleCatButton(b, first);   // size, margin, and the icon image or the letter's font, at _dpi
                 _catButtons.Add(new KeyValuePair<Label, string>(b, first));
@@ -315,7 +315,7 @@ namespace TelegArm.UI
             _stickerPackBar = new Controls.NoNativeScrollFlowPanel
             {
                 Dock = DockStyle.Fill, WrapContents = false, AutoScroll = true,
-                BackColor = _dark ? Color.FromArgb(34, 34, 37) : Color.FromArgb(236, 236, 240), Padding = new Padding(Px(4), Px(4), Px(4), 0)
+                BackColor = ThemeHelper.PaletteFor(_dark).EmojiTabBar, Padding = new Padding(Px(4), Px(4), Px(4), 0)
             };
             // Host the pack strip with a themed horizontal scrollbar along the bottom.
             var packHost = new Panel
@@ -327,7 +327,7 @@ namespace TelegArm.UI
             _stickerSearch = new TextBox
             {
                 Dock = DockStyle.Top, BorderStyle = BorderStyle.FixedSingle,
-                BackColor = _dark ? Color.FromArgb(30, 30, 33) : Color.White,
+                BackColor = ThemeHelper.PaletteFor(_dark).EmojiGrid,
                 ForeColor = _dark ? Color.White : Color.Black,
                 Font = FontHelper.UiAt(9.5f, _dpi)   // shared: never dispose
             };
@@ -373,7 +373,7 @@ namespace TelegArm.UI
                 Tag = set == null ? 40 : 84,   // step 3.1: the LOGICAL width, re-applied by SizePackButton on a DPI change
                 TextAlign = ContentAlignment.MiddleCenter,
                 Cursor = Cursors.Hand,
-                ForeColor = _dark ? Color.FromArgb(210, 210, 215) : Color.FromArgb(60, 60, 65)
+                ForeColor = ThemeHelper.PaletteFor(_dark).EmojiSearchText
             };
             SizePackButton(b);
             b.Click += async (s, e) => { if (set == null) await ShowFavedRecent(); else await LoadSet(set); };
@@ -443,7 +443,7 @@ namespace TelegArm.UI
         }
 
         private Color TabColor(bool active)
-            => active ? _accent : (_dark ? Color.FromArgb(170, 170, 175) : Color.FromArgb(110, 110, 115));
+            => active ? _accent : (ThemeHelper.PaletteFor(_dark).EmojiDim);
 
         private async void LoadStickers()
         {
@@ -647,7 +647,7 @@ namespace TelegArm.UI
             protected override void OnPaint(PaintEventArgs e)
             {
                 var g = e.Graphics;
-                g.Clear(_hover ? (_dark ? Color.FromArgb(58, 58, 62) : Color.FromArgb(228, 228, 233))
+                g.Clear(_hover ? (ThemeHelper.PaletteFor(_dark).EmojiHover)
                                : (Parent != null ? Parent.BackColor : BackColor));
                 if (_img == null) return;
                 g.InterpolationMode = InterpolationMode.HighQualityBicubic;
@@ -745,7 +745,7 @@ namespace TelegArm.UI
                 g.SmoothingMode = SmoothingMode.AntiAlias;
                 g.Clear(BackColor);
                 var clip = e.ClipRectangle;
-                Color headerColor = _dark ? Color.FromArgb(170, 170, 175) : Color.FromArgb(120, 120, 125);
+                Color headerColor = ThemeHelper.PaletteFor(_dark).EmojiSectionHeader;
                 var headerFont = FontHelper.UiAt(8.5f, _dpi, FontStyle.Bold);   // shared: never dispose
                 int one = P(1), radius = P(6), side = P(Glyph);
 
@@ -761,7 +761,7 @@ namespace TelegArm.UI
                         continue;
                     }
                     if (i == _hover)
-                        using (var hb = new SolidBrush(_dark ? Color.FromArgb(60, 60, 64) : Color.FromArgb(225, 225, 230)))
+                        using (var hb = new SolidBrush(ThemeHelper.PaletteFor(_dark).EmojiSectionBar))
                         using (var path = DrawHelper.RoundedRect(new Rectangle(rect.X + one, rect.Y + one, rect.Width - 2 * one, rect.Height - 2 * one), radius))
                             g.FillPath(hb, path);
 

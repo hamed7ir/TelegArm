@@ -199,7 +199,7 @@ namespace TelegArm.UI.Controls
             g.Clear(ThemeHelper.PaletteFor(IsDark).ChatBg);
 
             _cardRect = new Rectangle(SideGap, VMargin, Width - 2 * SideGap, Height - 2 * VMargin);
-            Color cardBg = IsDark ? Color.FromArgb(48, 48, 52) : Color.FromArgb(255, 255, 255);
+            Color cardBg = ThemeHelper.PaletteFor(IsDark).SponsoredCardBg;
             using (var b = new SolidBrush(cardBg))
             using (var p = DrawHelper.RoundedRect(_cardRect, P(12))) g.FillPath(b, p);
             int barW = P(3);
@@ -240,7 +240,7 @@ namespace TelegArm.UI.Controls
             // TITLE
             if (!string.IsNullOrEmpty(_title))
             {
-                Color tc = IsDark ? Color.FromArgb(236, 236, 238) : Color.FromArgb(20, 20, 22);
+                Color tc = ThemeHelper.PaletteFor(IsDark).SponsoredTitle;
                 TextRenderer.DrawText(g, _title, FontHelper.ForAt(_title, rtl ? 11f : 10f, CurDpi, FontStyle.Bold),
                     new Rectangle(headLeft, y, headW, TitleH), tc, leftFlags);   // shared font: never dispose
                 y += TitleH;
@@ -253,7 +253,7 @@ namespace TelegArm.UI.Controls
             // BODY (inline text)
             if (_rich != null)
             {
-                Color body = IsDark ? Color.FromArgb(220, 220, 224) : Color.FromArgb(40, 40, 44);
+                Color body = ThemeHelper.PaletteFor(IsDark).SponsoredBody;
                 _rich.Position(innerW, rtl);
                 _bodyOrigin = new Point(left, y + P(4));
                 _rich.Paint(g, left, y + P(4), body, AccentColor, BodyFont(), IsDark, AccentColor, false);
@@ -277,10 +277,10 @@ namespace TelegArm.UI.Controls
                     }
                     else
                     {
-                        using (var mb = new SolidBrush(IsDark ? Color.FromArgb(60, 60, 64) : Color.FromArgb(225, 225, 230)))
+                        using (var mb = new SolidBrush(ThemeHelper.PaletteFor(IsDark).SponsoredMediaPlaceholder))
                             g.FillPath(mb, p);
                         TextRenderer.DrawText(g, "Media", FontHelper.UiAt(9f, CurDpi), _mediaRect,
-                            IsDark ? Color.FromArgb(170, 170, 175) : Color.FromArgb(120, 120, 125),
+                            ThemeHelper.PaletteFor(IsDark).SponsoredMediaLabel,
                             TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
                     }
                 }

@@ -127,12 +127,12 @@ namespace TelegArm.UI.Controls
             int d = Math.Min(Width, Height) - P(8);
             var circle = new Rectangle((Width - d) / 2, (Height - d) / 2, d, d);
 
-            Color fill = IsDark ? Color.FromArgb(54, 54, 58) : Color.White;
+            Color fill = ThemeHelper.PaletteFor(IsDark).JumpButtonFill;
             // Clear with the button's OWN fill (not the parent background): with the circular Region,
             // every surviving pixel belongs to the button — background color must never show anywhere.
             g.Clear(fill);
             using (var b = new SolidBrush(fill)) g.FillEllipse(b, circle);
-            using (var p = new Pen(IsDark ? Color.FromArgb(82, 82, 86) : Color.FromArgb(218, 218, 222)))
+            using (var p = new Pen(ThemeHelper.PaletteFor(IsDark).JumpButtonBorder))
                 g.DrawEllipse(p, circle);
 
             float cx = circle.X + d / 2f, cy = circle.Y + d / 2f;

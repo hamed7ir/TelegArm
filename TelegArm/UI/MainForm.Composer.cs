@@ -434,7 +434,7 @@ namespace TelegArm.UI
                 return;
             }
             _voiceState = VoiceState.Recording;
-            _recordingBar.DotColor = Color.FromArgb(229, 57, 53);
+            _recordingBar.DotColor = ThemeHelper.Palette.RecordingDot;
             _recordingBar.Caption = "Recording…   0:00";
             ApplyVoiceUi();
             _recordTimer.Start();
@@ -617,11 +617,11 @@ namespace TelegArm.UI
                     _replyPreview = preview;
                 }
 
-                _replyStrip.BackColor = _dark ? Color.FromArgb(45, 45, 48) : Color.FromArgb(232, 232, 235);
+                _replyStrip.BackColor = ThemeHelper.PaletteFor(_dark).ReplyStripBg;
                 _replyStrip.Invalidate();   // owner-drawn (DrawReplyStrip) — repaint with the new glyph/preview
                 _replyCancelBtn.BackColor = _replyStrip.BackColor;
-                _replyCancelBtn.ForeColor = _dark ? Color.FromArgb(210, 210, 210) : Color.FromArgb(90, 90, 90);
-                _replyCancelBtn.FlatAppearance.MouseOverBackColor = Color.FromArgb(40, _accent);
+                _replyCancelBtn.ForeColor = ThemeHelper.PaletteFor(_dark).ReplyCancelFg;
+                _replyCancelBtn.FlatAppearance.MouseOverBackColor = ColorMath.WithAlpha(_accent, 40);
             }
 
             _replyStrip.Visible = active;

@@ -28,7 +28,7 @@ namespace TelegArm.UI.Controls
         public ZoomableImagePanel()
         {
             DoubleBuffered = true;
-            BackColor = Color.FromArgb(18, 18, 18);
+            BackColor = ThemeHelper.Palette.MediaViewerBg;
             SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint
                      | ControlStyles.ResizeRedraw | ControlStyles.AllPaintingInWmPaint, true);
         }

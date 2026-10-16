@@ -104,14 +104,14 @@ namespace TelegArm.UI.Controls
                 }
                 else
                 {
-                    using (var b = new SolidBrush(_dark ? Color.FromArgb(58, 58, 62) : Color.FromArgb(220, 220, 224)))
+                    using (var b = new SolidBrush(ThemeHelper.PaletteFor(_dark).StoryThumbPlaceholder))
                         g.FillRectangle(b, 0, 0, Width, Height);
                 }
                 if (_isVideo)
                 {
                     int sh = P(30);
                     using (var scrim = new LinearGradientBrush(new Rectangle(0, Height - sh, Width, sh),
-                               Color.FromArgb(0, 0, 0, 0), Color.FromArgb(160, 0, 0, 0), LinearGradientMode.Vertical))
+                               ThemeHelper.Palette.MediaScrimClear, ThemeHelper.Palette.StoryThumbScrim, LinearGradientMode.Vertical))
                         g.FillRectangle(scrim, 0, Height - sh, Width, sh);
                     using (var tb = new SolidBrush(Color.White))
                         g.FillPolygon(tb, new[] { new PointF(P(9), Height - P(19)), new PointF(P(9), Height - P(7)), new PointF(P(19), Height - P(13)) });
@@ -122,7 +122,7 @@ namespace TelegArm.UI.Controls
                 g.Restore(save);
             }
             // the outline stays a 1 px hairline at every DPI (like the dividers of the exemplar row)
-            using (var pen = new Pen(_dark ? Color.FromArgb(70, 70, 74) : Color.FromArgb(206, 206, 210), 1f))
+            using (var pen = new Pen(ThemeHelper.PaletteFor(_dark).StoryThumbOutline, 1f))
             using (var path2 = DrawHelper.RoundedRect(outer, P(10)))
                 g.DrawPath(pen, path2);
         }

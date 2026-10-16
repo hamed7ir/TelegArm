@@ -67,7 +67,7 @@ namespace TelegArm.UI
             _forumTopicBar.SuspendLayout();
             foreach (var c in _forumTopicBar.Controls.Cast<Control>().ToArray()) c.Dispose();
             _forumTopicBar.Controls.Clear();
-            _forumTopicBar.BackColor = _dark ? Color.FromArgb(40, 40, 40) : Color.White;
+            _forumTopicBar.BackColor = ThemeHelper.PaletteFor(_dark).ListBg;
             if (_currentForumEntry != null)
             {
                 AddTopicChip("All", 0, _selectedTopicId == 0, () => SelectTopic(0));   // shown immediately; topics fill in when the fetch lands
@@ -133,7 +133,7 @@ namespace TelegArm.UI
             _storyTrayBar.SuspendLayout();
             foreach (var c in _storyTrayBar.Controls.Cast<Control>().ToArray()) c.Dispose();
             _storyTrayBar.Controls.Clear();
-            _storyTrayBar.BackColor = _dark ? Color.FromArgb(40, 40, 40) : Color.White;
+            _storyTrayBar.BackColor = ThemeHelper.PaletteFor(_dark).ListBg;
             if (_storyPeers != null)
                 foreach (var e in _storyPeers)
                 {
@@ -225,11 +225,11 @@ namespace TelegArm.UI
             {
                 var g = e.Graphics;
                 g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                g.Clear(Parent != null ? Parent.BackColor : (_dark ? Color.FromArgb(40, 40, 40) : Color.White));
+                g.Clear(Parent != null ? Parent.BackColor : (ThemeHelper.PaletteFor(_dark).ListBg));
                 int D = P(50); int cx = (Width - D) / 2, cy = P(6);
                 var avr = new Rectangle(cx, cy, D, D);
                 var ring = Rectangle.Inflate(avr, P(3), P(3));
-                using (var rp = new Pen(_unseen ? _accent : (_dark ? Color.FromArgb(95, 95, 100) : Color.FromArgb(200, 200, 205)), Dpi.F(_unseen ? 2.5f : 1.5f, _dpi)))
+                using (var rp = new Pen(_unseen ? _accent : (ThemeHelper.PaletteFor(_dark).StoryRingIdle), Dpi.F(_unseen ? 2.5f : 1.5f, _dpi)))
                     g.DrawEllipse(rp, ring);
                 var img = _avatar != null ? _avatar(_peerId) : null;
                 if (img != null)
@@ -240,7 +240,7 @@ namespace TelegArm.UI
                     string ltr = !string.IsNullOrEmpty(_name) ? DrawHelper.Initial(_name) : "?";
                     DrawHelper.DrawInitial(g, ltr, FontHelper.ForAt(ltr, 15f, _dpi, FontStyle.Bold), avr, Color.White);   // ink-centred (owner report 2026-10-14)
                 }
-                Color nc = _dark ? Color.FromArgb(210, 210, 215) : Color.FromArgb(50, 50, 55);
+                Color nc = ThemeHelper.PaletteFor(_dark).StoryName;
                 TextRenderer.DrawText(g, _name, FontHelper.ForAt(_name, 8f, _dpi), new Rectangle(0, cy + D + P(3), Width, P(15)), nc,   // shared: never dispose
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
             }
@@ -334,7 +334,7 @@ namespace TelegArm.UI
             foreach (var c in _folderRail.Controls.Cast<Control>().ToArray()) c.Dispose();
             _folderRail.Controls.Clear();
             _folderBadgeSources.Clear();
-            _folderRail.BackColor = _dark ? Color.FromArgb(34, 34, 36) : Color.FromArgb(244, 244, 246);
+            _folderRail.BackColor = ThemeHelper.PaletteFor(_dark).FolderRailBg;
 
             AddRailItem("\U0001F4AC", "All", AllUnread, !_showArchive && _activeFolder == null, () => SetActiveFolder(null));
             foreach (var f in _folders)
@@ -435,9 +435,9 @@ namespace TelegArm.UI
                 var g = e.Graphics;
                 g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
                 g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-                g.Clear(Parent != null ? Parent.BackColor : (_dark ? Color.FromArgb(40, 40, 40) : Color.White));
+                g.Clear(Parent != null ? Parent.BackColor : (ThemeHelper.PaletteFor(_dark).ListBg));
 
-                Color fg = _active ? _accent : (_dark ? Color.FromArgb(170, 170, 175) : Color.FromArgb(110, 110, 115));
+                Color fg = _active ? _accent : (ThemeHelper.PaletteFor(_dark).FolderTabFg);
                 var lf = LabelFont;
                 int tw = TextRenderer.MeasureText(_label, lf).Width;
                 TextRenderer.DrawText(g, _label, lf, new Rectangle(P(6), 0, tw + P(4), Height), fg,
@@ -489,14 +489,14 @@ namespace TelegArm.UI
             {
                 var g = e.Graphics;
                 g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                Color bg = _dark ? Color.FromArgb(34, 34, 36) : Color.FromArgb(244, 244, 246);
+                Color bg = ThemeHelper.PaletteFor(_dark).FolderRailBg;
                 g.Clear(bg);
                 if (_active)
                 {
-                    using (var tint = new SolidBrush(Color.FromArgb(30, _accent))) g.FillRectangle(tint, 0, 0, Width, Height);
+                    using (var tint = new SolidBrush(ColorMath.WithAlpha(_accent, 30))) g.FillRectangle(tint, 0, 0, Width, Height);
                     using (var bar = new SolidBrush(_accent)) g.FillRectangle(bar, 0, P(8), P(3), Height - P(16));
                 }
-                Color fg = _active ? _accent : (_dark ? Color.FromArgb(205, 205, 210) : Color.FromArgb(90, 90, 95));
+                Color fg = _active ? _accent : (ThemeHelper.PaletteFor(_dark).FolderRailFg);
                 // Shared per-DPI fonts (FontCache): never dispose.
                 TextRenderer.DrawText(g, _icon, FontCache.Get("Segoe UI Emoji", 16f, FontStyle.Regular, _dpi), new Rectangle(0, P(5), Width, P(26)), fg,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.NoPrefix);

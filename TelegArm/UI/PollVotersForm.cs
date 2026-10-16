@@ -38,9 +38,9 @@ namespace TelegArm.UI
         {
             _service = service; _peer = peer; _msgId = msgId; _option = option; _accent = accent;
             _dpi = dpi > 0 ? dpi : Dpi.DefaultDpi;
-            _bg = dark ? Color.FromArgb(36, 36, 38) : Color.FromArgb(245, 245, 247);
-            _fg = dark ? Color.FromArgb(235, 235, 235) : Color.FromArgb(20, 20, 20);
-            _sub = dark ? Color.FromArgb(150, 150, 150) : Color.FromArgb(120, 120, 120);
+            _bg = ThemeHelper.PaletteFor(dark).DialogBg;
+            _fg = ThemeHelper.PaletteFor(dark).DialogText;
+            _sub = ThemeHelper.PaletteFor(dark).DialogSub;
 
             Text = "Voted for: " + (optionText ?? "");
             TelegArm.Helpers.AppIcon.Set(this);   // app icon in the taskbar / Alt-Tab

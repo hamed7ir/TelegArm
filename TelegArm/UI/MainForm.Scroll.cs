@@ -115,7 +115,7 @@ namespace TelegArm.UI
         private sealed class DateFlyoutPill : Control
         {
             public bool IsDark { get; set; }
-            public Color Accent { get; set; } = Color.FromArgb(0x53, 0x4A, 0xB7);   // accent-driven fill (set live)
+            public Color Accent { get; set; } = ThemeHelper.Palette.PillDefaultAccent;   // accent-driven fill (set live)
             public int Alpha = 255;
             public DateFlyoutPill()
             {
@@ -128,11 +128,11 @@ namespace TelegArm.UI
                 g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
                 int a = Math.Max(0, Math.Min(255, Alpha));
                 var r = new Rectangle(0, 0, Width - 1, Height - 1);
-                Color fill = Color.FromArgb(a, Accent.R, Accent.G, Accent.B);   // accent-driven pill (Alpha = fade)
+                Color fill = ColorMath.WithAlpha(Accent, a);   // accent-driven pill (Alpha = fade)
                 using (var b = new SolidBrush(fill))
                 using (var p = DrawHelper.RoundedRect(r, Height / 2))
                     g.FillPath(b, p);
-                TextRenderer.DrawText(g, Text, Font, r, Color.FromArgb(a, 255, 255, 255),
+                TextRenderer.DrawText(g, Text, Font, r, ColorMath.WithAlpha(Color.White, a),
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
             }
             protected override void OnResize(EventArgs e)

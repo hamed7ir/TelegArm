@@ -48,7 +48,7 @@ namespace TelegArm.UI.Controls
 
         public VlcVideoControl()
         {
-            BackColor = Color.FromArgb(18, 18, 18);
+            BackColor = ThemeHelper.Palette.PlayerBg;
             BuildUi();
 
             try
@@ -87,13 +87,13 @@ namespace TelegArm.UI.Controls
             _statusLabel = new Label
             {
                 Dock = DockStyle.Fill,
-                BackColor = Color.FromArgb(18, 18, 18),
+                BackColor = ThemeHelper.Palette.PlayerBg,
                 ForeColor = Color.White,
                 TextAlign = ContentAlignment.MiddleCenter,
                 Visible = false
             };
 
-            _fallbackPanel = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(18, 18, 18), Visible = false };
+            _fallbackPanel = new Panel { Dock = DockStyle.Fill, BackColor = ThemeHelper.Palette.PlayerBg, Visible = false };
             _fallbackLabel = new Label { Dock = DockStyle.Fill, ForeColor = Color.White, TextAlign = ContentAlignment.MiddleCenter };
             _openBtn = new Button
             {

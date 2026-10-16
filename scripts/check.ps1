@@ -7,7 +7,7 @@
 # Raise -Step's default as the plan advances. Exit code 0 = every enforced gate passed and SelfTest passed.
 #
 # ASCII only: Windows PowerShell 5.1 reads a BOM-less script as ANSI.
-param([string]$Step = '3.7', [switch]$NoSelfTest)
+param([string]$Step = '5.1', [switch]$NoSelfTest)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $app = Join-Path $root 'TelegArm'
@@ -126,8 +126,8 @@ $gates = @(
         @(Hits $done '\bMaterial[A-Z]\w*|\bMaterialSkin\b' $null | Where-Object { ($_ -replace '^.+?:\d+: ', '' -replace '"[^"]*"', '""') -match '\bMaterial[A-Z]\w*|\bMaterialSkin\b' }) } }
     @{ From = '2.2'; Name = 'no MessageBox in the files Phase 2 has converted (plan 5 (b): ThemedDialog)'; Test = {
         $done = @($all | Where-Object { $converted -contains $_.FullName.Substring($app.Length + 1) })
-        Hits $done 'MessageBox\.Show' $null } }
-    @{ From = '2.6'; Name = 'no ThemedChrome (the 1.x shim is deleted once 2.6b has no callers)'; Test = { Hits $all 'ThemedChrome' $null } }
+        Hits $done '\bMessageBox\.Show\b' $null } }
+    @{ From = '2.6'; Name = 'no ThemedChrome (the 1.x shim is deleted once 2.6b has no callers)'; Test = { Hits $all '\bThemedChrome\b' $null } }
     @{ From = '2.8'; Name = 'no MaterialSkin anywhere'; Test = { Hits $all '\bMaterial[A-Z]\w*|\bMaterialSkin\b' $null } }
     @{ From = '3.1'; Name = 'no CreateGraphics().Dpi / .DpiX / .DpiY (a window''s DPI comes from Dpi.Of / ForPopup)'; Test = {
         Hits $all 'CreateGraphics\(\)\s*\.\s*Dpi|\.Dpi[XY]\b' '^(EmojiComposer|DrawHelper)\.cs$' } }
@@ -142,9 +142,12 @@ $gates = @(
     # (/ * %) counts. 0 and 1 (origins, hairlines) and LogicalMinimumSize (logical by design) do not.
     @{ From = '3.3'; Name = 'no 96-DPI int literals in new Size/Point/Padding/Rectangle under UI\ (use Px)'; Test = {
         @(LiteralHits $ui '^(RoundProbeForm|DesignGalleryForm|TextBoxProbe|DialogProbe|SettingsProbe|InputLabForm)\.cs$') } }
-    @{ From = '5.1'; Name = 'no Color.FromArgb( outside Palette.cs / ColorMath.cs / DrawHelper.cs'; Test = { Hits $all 'Color\.FromArgb\s*\(' '^(Palette|ColorMath|DrawHelper)\.cs$' } }
+    @{ From = '5.1'; Name = 'no Color.FromArgb( outside Palette.cs / ColorMath.cs / DrawHelper.cs (+ the probe and diagnostic tools)'; Test = {
+        Hits $all 'Color\.FromArgb\s*\(' '^(Palette|ColorMath|DrawHelper|DpiOverlay|RoundProbeForm|DesignGalleryForm|TextBoxProbe)\.cs$' } }
+    @{ From = '5.1'; Name = 'no literal channels in ColorMath.Rgb/Argb (a fixed colour is a Palette token)'; Test = {
+        Hits $all 'ColorMath\.Rgb\s*\(\s*\d|ColorMath\.Argb\s*\(\s*\d+\s*,\s*\d' '^(Palette|ColorMath)\.cs$' } }
     @{ From = '5.1'; Name = 'no registry read inside a paint method (read ThemeHelper.Palette)'; Test = {
-        @(PaintBodies $all | Where-Object { $_ -match 'Registry\.|GetWindowsAccentColor\s*\(|IsDarkMode\s*\(' }) } }
+        @(PaintBodies $all | Where-Object { $_ -match 'Registry\.|GetWindowsAccentColor\s*\(|IsDarkMode\s*\(|ThemeHelper\.IsDark\b' }) } }
 )
 
 $cur = [version]($Step + '.0')

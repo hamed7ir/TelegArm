@@ -216,10 +216,10 @@ namespace TelegArm.UI.Controls
         {
             switch (_state)
             {
-                case ProxyConnectState.Connecting: return Color.FromArgb(230, 170, 60);   // amber
+                case ProxyConnectState.Connecting: return ThemeHelper.PaletteFor(IsDark).ProxyDotConnecting;   // amber
                 case ProxyConnectState.Connected: return AccentColor;
-                case ProxyConnectState.Failed: return Color.FromArgb(214, 78, 78);        // red
-                default: return IsDark ? Color.FromArgb(130, 130, 136) : Color.FromArgb(150, 150, 156);
+                case ProxyConnectState.Failed: return ThemeHelper.PaletteFor(IsDark).ProxyDotFailed;        // red
+                default: return ThemeHelper.PaletteFor(IsDark).ProxyDotIdle;
             }
         }
 
@@ -240,9 +240,9 @@ namespace TelegArm.UI.Controls
             // arbitrary content can't rely on its fill differing from whatever is behind it, but a border
             // dark enough to read on both white and near-white always separates it. Dark theme lifts the
             // fill instead (58 vs the list's 40) because a light border there would glare.
-            Color fill = IsDark ? Color.FromArgb(58, 58, 63) : Color.White;
-            if (_pressed) fill = IsDark ? Color.FromArgb(46, 46, 50) : Color.FromArgb(236, 236, 240);
-            else if (_hover) fill = IsDark ? Color.FromArgb(66, 66, 71) : Color.FromArgb(247, 247, 250);
+            Color fill = ThemeHelper.PaletteFor(IsDark).ProxyPillFill;
+            if (_pressed) fill = ThemeHelper.PaletteFor(IsDark).ProxyPillFillPressed;
+            else if (_hover) fill = ThemeHelper.PaletteFor(IsDark).ProxyPillFillHover;
 
             // Clear with the pill's OWN fill — with a Region, every surviving pixel belongs to this
             // control, so the parent background must never be painted anywhere (the X1 rule).
@@ -255,7 +255,7 @@ namespace TelegArm.UI.Controls
                 g.FillPath(b, path);
                 // Border does the separating (see the D5 note above): dark enough to read against a WHITE
                 // chat list as well as LoginForm's near-white panel.
-                using (var p = new Pen(IsDark ? Color.FromArgb(92, 92, 98) : Color.FromArgb(186, 186, 194), Dpi.F(1.2f, dpi)))
+                using (var p = new Pen(ThemeHelper.PaletteFor(IsDark).ProxyPillBorder, Dpi.F(1.2f, dpi)))
                     g.DrawPath(p, path);
             }
 
@@ -284,7 +284,7 @@ namespace TelegArm.UI.Controls
 
                 var textRect = new Rectangle(dotRect.Right + P(8), body.Y, body.Right - dotRect.Right - P(14), body.Height);
                 TextRenderer.DrawText(g, Caption(), FontHelper.UiAt(9f, dpi, FontStyle.Bold), textRect,   // shared font: never dispose
-                    IsDark ? Color.FromArgb(232, 232, 236) : Color.FromArgb(38, 38, 42),
+                    ThemeHelper.PaletteFor(IsDark).ProxyPillText,
                     TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis
                     | TextFormatFlags.NoPrefix);
             }

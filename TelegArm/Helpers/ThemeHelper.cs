@@ -20,7 +20,6 @@ namespace TelegArm.Helpers
         private const string ExplorerAccentKey = @"Software\Microsoft\Windows\CurrentVersion\Explorer\Accent";
         private const string PersonalizeKey = @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
 
-        private static readonly Color DefaultAccent = Color.FromArgb(0, 120, 215); // Windows default blue
 
         private static ThemeMode _mode = ThemeMode.System;
 
@@ -66,7 +65,7 @@ namespace TelegArm.Helpers
             s = (s ?? "").Trim().TrimStart('#');
             int v;
             if (s.Length != 6 || !int.TryParse(s, System.Globalization.NumberStyles.HexNumber, null, out v)) return null;
-            return Color.FromArgb((v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF);
+            return ColorMath.Rgb((v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF);
         }
 
         public static string FormatAccent(Color? c) => c.HasValue ? "#" + (c.Value.ToArgb() & 0xFFFFFF).ToString("X6") : "";
@@ -143,7 +142,7 @@ namespace TelegArm.Helpers
                 Color? c81 = ReadAbgrDword(ExplorerAccentKey, "AccentColor");
                 if (c81.HasValue) return c81.Value;
             }
-            return ReadAbgrDword(DwmKey, "AccentColor") ?? DefaultAccent;
+            return ReadAbgrDword(DwmKey, "AccentColor") ?? Helpers.Palette.WindowsDefaultAccent;
         }
 
         /// <summary>Reads an HKCU DWORD accent value stored as AABBGGRR (ABGR, low byte = red) → opaque Color,
@@ -159,7 +158,7 @@ namespace TelegArm.Helpers
                         int r = dword & 0xFF;
                         int g = (dword >> 8) & 0xFF;
                         int b = (dword >> 16) & 0xFF;
-                        return Color.FromArgb(r, g, b);
+                        return ColorMath.Rgb(r, g, b);
                     }
                 }
             }
