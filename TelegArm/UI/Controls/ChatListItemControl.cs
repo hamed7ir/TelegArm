@@ -121,7 +121,13 @@ namespace TelegArm.UI.Controls
             Color subColor = ThemeHelper.PaletteFor(IsDark).ListSub;
             if (_selected)
                 bg = ThemeHelper.PaletteFor(IsDark).AccentSoft;   // step 5.1: the selection follows the accent (was ListSelected)
-            g.Clear(bg);
+            if (WindowBackdrop.Enabled)
+            {
+                // step 5.9 (owner: the main window too): the list over the window backdrop; the selection is an accent tint
+                WindowBackdrop.Paint(g, this, ClientRectangle, ThemeHelper.PaletteFor(IsDark).ListBg);
+                if (_selected) using (var sb = new SolidBrush(ColorMath.WithAlpha(ThemeHelper.PaletteFor(IsDark).Accent, 46))) g.FillRectangle(sb, ClientRectangle);
+            }
+            else g.Clear(bg);
 
             int d = P(48), ax = P(8), ay = P(8);
             var avatarRect = new Rectangle(ax, ay, d, d);
@@ -224,7 +230,7 @@ namespace TelegArm.UI.Controls
                     using (var b = new SolidBrush(Entry.Muted ? mutedGrey : AccentColor))
                     using (var path = DrawHelper.RoundedRect(badge, bh / 2))
                         g.FillPath(b, path);
-                    TextRenderer.DrawText(g, cnt, badgeFont, badge, Color.White,
+                    TextRenderer.DrawText(g, cnt, badgeFont, badge, Entry.Muted ? Color.White : ColorMath.OnColor(AccentColor),
                         TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
                     rx -= unreadW + gap;
                 }
@@ -234,7 +240,7 @@ namespace TelegArm.UI.Controls
                     using (var b = new SolidBrush(AccentColor))
                     using (var path = DrawHelper.RoundedRect(badge, bh / 2))
                         g.FillPath(b, path);
-                    TextRenderer.DrawText(g, "@", badgeFont, badge, Color.White,
+                    TextRenderer.DrawText(g, "@", badgeFont, badge, ColorMath.OnColor(AccentColor),
                         TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
                     rx -= glyphW + gap;
                 }
@@ -244,7 +250,7 @@ namespace TelegArm.UI.Controls
                     using (var b = new SolidBrush(AccentColor))
                     using (var path = DrawHelper.RoundedRect(badge, bh / 2))
                         g.FillPath(b, path);
-                    DrawHeart(g, new Rectangle(badge.X + P(5), badge.Y + P(5), P(12), P(11)), Color.White);
+                    DrawHeart(g, new Rectangle(badge.X + P(5), badge.Y + P(5), P(12), P(11)), ColorMath.OnColor(AccentColor));
                     rx -= glyphW + gap;
                 }
             }

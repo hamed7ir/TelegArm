@@ -86,6 +86,12 @@ namespace TelegArm.UI.Controls
         protected override void OnMouseUp(MouseEventArgs e) { _pressed = false; Invalidate(); base.OnMouseUp(e); }
         protected override void OnEnabledChanged(EventArgs e) { Invalidate(); base.OnEnabledChanged(e); }
 
+        /// <summary>Step 5.9: the composer bar's colour as before — or the window backdrop when it is on.</summary>
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            WindowBackdrop.ClearBehind(e.Graphics, this, Parent, ClientRectangle, BackColor);
+        }
+
         protected override void OnPaint(PaintEventArgs e)
         {
             int dpi = CurDpi;

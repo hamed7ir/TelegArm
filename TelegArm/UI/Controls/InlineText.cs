@@ -627,7 +627,7 @@ namespace TelegArm.UI.Controls
 
             Color codeBg = outgoing ? ThemeHelper.PaletteFor(dark).InlineCodeBgOut : ThemeHelper.PaletteFor(dark).InlineCodeBgIn;
             Color preBg = outgoing ? ThemeHelper.PaletteFor(dark).InlinePreBgOut : ThemeHelper.PaletteFor(dark).InlinePreBgIn;
-            Color barColor = outgoing ? Color.White : accent;
+            Color barColor = outgoing ? ThemeHelper.PaletteFor(dark).BubbleOutText : ColorMath.Ink(accent, ThemeHelper.PaletteFor(dark).BubbleIn, 3.0);
             Color quoteBg = ColorMath.WithAlpha(barColor, outgoing ? 28 : (dark ? 34 : 20));
             Color spoilerBg = ThemeHelper.PaletteFor(dark).InlineSpoilerBg;
 

@@ -389,7 +389,7 @@ namespace TelegArm.UI
         public override Color ImageMarginGradientMiddle => ThemedMenuColors.Background;
         public override Color ImageMarginGradientEnd => ThemedMenuColors.Background;
         public override Color MenuBorder => ThemedMenuColors.Border;
-        public override Color MenuItemBorder => ThemedMenuColors.Accent;
+        public override Color MenuItemBorder => ColorMath.Ink(ThemedMenuColors.Accent, ThemedMenuColors.Background, 3.0);
         public override Color MenuItemSelected => ThemedMenuColors.Highlight;
         public override Color MenuItemSelectedGradientBegin => ThemedMenuColors.Highlight;
         public override Color MenuItemSelectedGradientEnd => ThemedMenuColors.Highlight;

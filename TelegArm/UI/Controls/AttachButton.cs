@@ -69,9 +69,9 @@ namespace TelegArm.UI.Controls
             // Match the surrounding input row (inherits the themed form background).
             Color bg = Parent != null ? Parent.BackColor
                        : ThemeHelper.Palette.GlyphButtonBg;
-            g.Clear(bg);
+            WindowBackdrop.ClearBehind(g, this, Parent, ClientRectangle, bg);   // step 5.9: the window backdrop when it is on
 
-            Color glyph = ThemeHelper.Palette.Accent;
+            Color glyph = ThemeHelper.Palette.AccentGlyph;
             if (!Enabled)
                 glyph = ThemeHelper.Palette.GlyphButtonDisabled;
             else if (_hover)

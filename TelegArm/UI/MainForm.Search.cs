@@ -286,7 +286,7 @@ namespace TelegArm.UI
                 Margin = new Padding(0),
                 Cursor = Cursors.Hand,
                 Font = FontHelper.UiAt(9f, WindowDpiValue, FontStyle.Bold),
-                ForeColor = _accent
+                ForeColor = ThemeHelper.PaletteFor(_dark).AccentFg
             };
             lbl.Click += (s, e) =>
             {

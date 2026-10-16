@@ -390,6 +390,44 @@ namespace TelegArm
             Logger.Diag("[ACCENT] " + (accent.HasValue
                 ? "fixed " + ThemeHelper.FormatAccent(accent) + (ThemeHelper.ParseAccent(env).HasValue ? " (TELEGARM_ACCENT)" : " (setting)")
                 : "follows Windows"));
+
+            // Step 5.2: the base colours, the same way (TELEGARM_LIGHTBASE / TELEGARM_DARKBASE = #RRGGBB for the rig).
+            string envLight = null, envDark = null;
+            try { envLight = Environment.GetEnvironmentVariable("TELEGARM_LIGHTBASE"); envDark = Environment.GetEnvironmentVariable("TELEGARM_DARKBASE"); } catch { }
+            var light = ThemeHelper.ParseAccent(envLight) ?? ThemeHelper.ParseAccent(settings.LightBase);
+            var dark = ThemeHelper.ParseAccent(envDark) ?? ThemeHelper.ParseAccent(settings.DarkBase);
+            ThemeHelper.InitBases(light, dark);
+            ThemeHelper.InitOutBubble(ThemeHelper.ParseAccent(settings.Theme != null ? settings.Theme.OutBubble : null));   // step 5.7
+            WindowBackdrop.Init(settings.WindowBackground);   // step 5.9 (TELEGARM_WALLPAPER forces it on for the rig)
+
+            // Steps 5.4/5.5, for the rig: TELEGARM_CHATBG = preset:N | solid:#RRGGBB | gradient:#A,#B,angle | pattern:dots|grid|lines
+            // | photo:<path> sets BOTH modes' chat background in memory (photo runs the real import). Not saved by itself.
+            string bg = null;
+            try { bg = Environment.GetEnvironmentVariable("TELEGARM_CHATBG"); } catch { }
+            if (!string.IsNullOrEmpty(bg) && settings.Theme != null)
+            {
+                try
+                {
+                    int colon = bg.IndexOf(':');
+                    string kind = colon > 0 ? bg.Substring(0, colon).Trim().ToLowerInvariant() : bg.Trim().ToLowerInvariant(), arg = colon > 0 ? bg.Substring(colon + 1).Trim() : "";
+                    foreach (bool d in new[] { false, true })
+                    {
+                        var cs = settings.Theme.For(d);
+                        var parts = arg.Split(',');
+                        if (kind == "preset") { cs.Mode = "preset"; cs.Preset = int.Parse(arg); }
+                        else if (kind == "solid") { cs.Mode = "solid"; cs.Color1 = arg; }
+                        else if (kind == "gradient") { cs.Mode = "gradient"; cs.Color1 = parts[0]; cs.Color2 = parts.Length > 1 ? parts[1] : parts[0]; cs.Angle = parts.Length > 2 ? int.Parse(parts[2]) : 0; }
+                        else if (kind == "pattern") { cs.Mode = "pattern"; cs.Pattern = arg; }
+                        else if (kind == "photo") { cs.Mode = "photo"; cs.ImageFile = ChatBackdrop.ImportPhoto(arg, d); cs.ImageRev++; }
+                        cs.Repair();
+                    }
+                    Logger.Diag("[CHATBG] TELEGARM_CHATBG=" + bg);
+                }
+                catch (Exception ex) { Logger.Diag("[CHATBG] TELEGARM_CHATBG not understood: " + ex.Message); }
+            }
+            if (light.HasValue || dark.HasValue)
+                Logger.Diag("[ACCENT] base light=" + (light.HasValue ? ThemeHelper.FormatAccent(light) : "default")
+                            + " dark=" + (dark.HasValue ? ThemeHelper.FormatAccent(dark) : "default"));
         }
 
         /// <summary>The one DPI declaration, shared by Run() and the --shoot rig so both declare exactly the same thing

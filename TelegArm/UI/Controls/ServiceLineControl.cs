@@ -62,8 +62,10 @@ namespace TelegArm.UI.Controls
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
-            g.Clear(ThemeHelper.PaletteFor(IsDark).ChatBg);
+            var pal = ThemeHelper.PaletteFor(IsDark);
+            ChatBackdrop.PaintRow(g, this, e.ClipRectangle, IsDark, pal.ChatBg, null);   // step 5.4
             if (string.IsNullOrEmpty(_text) || Width < P(40)) return;
+            bool scrim = ChatBackdrop.PillsNeedScrim(IsDark);   // over a background: a dark scrim with white text
 
             var f = FontHelper.ForAt(_text, 7.5f, dpi);   // shared: never dispose
             int maxTextW = Width - P(48);
@@ -73,11 +75,11 @@ namespace TelegArm.UI.Controls
             int pillH = Math.Min(Height - P(4), sz.Height + P(8));
             var pill = new Rectangle((Width - pillW) / 2, (Height - pillH) / 2, pillW, pillH);
 
-            using (var b = new SolidBrush(ThemeHelper.PaletteFor(IsDark).ServicePillBg))
+            using (var b = new SolidBrush(scrim ? pal.ChatPillScrim : pal.ServicePillBg))
             using (var p = DrawHelper.RoundedRect(pill, pillH / 2))
                 g.FillPath(b, p);
 
-            Color tc = ThemeHelper.PaletteFor(IsDark).ServicePillText;
+            Color tc = scrim ? pal.ChatPillText : pal.ServicePillText;
             TextRenderer.DrawText(g, _text, f, pill, tc,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter
                 | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);

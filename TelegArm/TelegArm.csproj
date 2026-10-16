@@ -63,6 +63,7 @@
     <Compile Include="Core\AccountContext.cs" />
     <Compile Include="Core\AccountStore.cs" />
     <Compile Include="Core\AppSettings.cs" />
+    <Compile Include="Core\ThemeSettings.cs" />
     <Compile Include="Core\AudioPlayer.cs" />
     <Compile Include="Core\AuthManager.cs" />
     <Compile Include="Core\AvatarStore.cs" />
@@ -208,6 +209,8 @@
     <Compile Include="Helpers\FontCache.cs" />
     <Compile Include="Helpers\Palette.cs" />
     <Compile Include="Helpers\ColorMath.cs" />
+    <Compile Include="Helpers\ChatBackdrop.cs" />
+    <Compile Include="Helpers\WindowBackdrop.cs" />
     <Compile Include="Helpers\WindowDpi.cs" />
     <Compile Include="Helpers\WindowHit.cs" />
     <Compile Include="UI\Controls\GlyphButton.cs" />
@@ -229,6 +232,7 @@
     <Compile Include="UI\Controls\SettingRows.cs" />
     <Compile Include="UI\Controls\SliderRow.cs" />
     <Compile Include="UI\Controls\ScalePreviewRow.cs" />
+    <Compile Include="UI\Controls\ChatBackgroundRows.cs" />
     <Compile Include="UI\Controls\SettingRowsExtra.cs" />
     <Compile Include="UI\Controls\EmojiComposer.cs" />
     <Compile Include="UI\DialogProbe.cs" />
@@ -240,6 +244,7 @@
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="UI\KeepScaleDialog.cs" />
+    <Compile Include="UI\ColorPickerDialog.cs" />
     <Compile Include="UI\DpiOverlay.cs" />
     <Compile Include="UI\ConfirmDialog.cs">
       <SubType>Form</SubType>

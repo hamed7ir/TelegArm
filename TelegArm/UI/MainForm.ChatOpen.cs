@@ -69,7 +69,7 @@ namespace TelegArm.UI
                 Text = "×   Searching in: " + name,
                 AutoSize = false, Height = Px(40), Width = ContentWidth(_chatListPanel),   // step 3.4: logical px
                 TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(Px(12), 0, 0, 0), Margin = new Padding(0),
-                Font = FontHelper.UiAt(9.5f, WindowDpiValue, FontStyle.Bold), Cursor = Cursors.Hand, ForeColor = _accent,   // shared: never dispose
+                Font = FontHelper.UiAt(9.5f, WindowDpiValue, FontStyle.Bold), Cursor = Cursors.Hand, ForeColor = ColorMath.Ink(_accent, ThemeHelper.PaletteFor(_dark).PanelPlaceholderBg, 4.5),   // shared: never dispose
                 BackColor = ThemeHelper.PaletteFor(_dark).PanelPlaceholderBg
             };
             chip.Click += (s, e) => ExitInChatSearch();

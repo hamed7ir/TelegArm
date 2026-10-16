@@ -132,7 +132,7 @@ namespace TelegArm.UI
                 using (var b = new SolidBrush(fill))
                 using (var p = DrawHelper.RoundedRect(r, Height / 2))
                     g.FillPath(b, p);
-                TextRenderer.DrawText(g, Text, Font, r, ColorMath.WithAlpha(Color.White, a),
+                TextRenderer.DrawText(g, Text, Font, r, ColorMath.WithAlpha(ColorMath.OnColor(Accent), a),
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
             }
             protected override void OnResize(EventArgs e)

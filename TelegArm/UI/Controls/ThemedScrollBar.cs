@@ -311,7 +311,9 @@ namespace TelegArm.UI.Controls
         private void PaintRestyled(Graphics g)
         {
             var p = ThemeHelper.Palette;
-            g.Clear(LaneColor(p));
+            if (WindowBackdrop.Enabled && (WindowBackdrop.IsSurface(_target) || WindowBackdrop.IsSurface(Parent)))
+                WindowBackdrop.Paint(g, this, ClientRectangle, LaneColor(p));   // step 5.9: the lane over the backdrop
+            else g.Clear(LaneColor(p));
             if (!Active) return;
 
             var t = ThumbRect();

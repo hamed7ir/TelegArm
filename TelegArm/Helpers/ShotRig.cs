@@ -63,6 +63,9 @@ namespace TelegArm.Helpers
             _log.Append(DiagReport.Build());
             _log.AppendLine("Isolated data root: " + isolatedRoot);
             _log.AppendLine();
+            string live = null;
+            try { live = Environment.GetEnvironmentVariable("TELEGARM_LIVE"); } catch { }
+            if (live == "1") return RunLive(dir);
 
             foreach (var mode in new[] { ThemeMode.Light, ThemeMode.Dark })
             {
@@ -158,6 +161,8 @@ namespace TelegArm.Helpers
                          f => Capture(f, "confirm-" + t));   // step 1.4+
                 WithForm("input-" + t, () => InputDialog.Create("Rename", "New name", "Family group"), f => Capture(f, "input-" + t));
                 WithForm("closechoice-" + t, () => new CloseChoiceDialog(), f => Capture(f, "closechoice-" + t));
+                WithForm("colorpicker-" + t, () => new ColorPickerDialog("Accent colour", ThemeHelper.Palette.AccentSwatchBlue, null),
+                         f => Capture(f, "colorpicker-" + t));   // step 5.2
                 // ── Phase 2: the converted forms (one line each; constructible offline — no service call in the ctor) ──
                 WithForm("p2-editcontact-" + t, () => new EditContactForm("Ada", "Lovelace", ThemeHelper.IsDark, ThemeHelper.Palette.Accent), f => Capture(f, "p2-editcontact-" + t));
                 // Steps 2.2 / 2.6b (the parity reviewers named these constructors as offline-safe: nothing in a constructor
@@ -236,6 +241,110 @@ namespace TelegArm.Helpers
         }
 
         // ── form lifecycle ───────────────────────────────────────────────────────────────────────────────────
+
+        /// <summary>The LIVE rig (owner 2026-10-15: "your testing has a problem" — WM_PRINT shots never show the real window).
+        /// TELEGARM_LIVE=1 with --shoot: the demo MainForm is SHOWN on the primary screen (same isolation: no account, an
+        /// empty throwaway profile), topmost, and the real screen is captured in each state — normal, maximised, restored,
+        /// then the same at a 125% interface scale, then back at 100% — with the window's geometry in shots.txt.</summary>
+        private static int RunLive(string dir)
+        {
+            string theme = null;
+            try { theme = Environment.GetEnvironmentVariable("TELEGARM_LIVE_THEME"); } catch { }
+            ThemeHelper.InitMode(theme == "light" ? ThemeMode.Light : ThemeMode.Dark);
+            var trace = new System.Diagnostics.TextWriterTraceListener(Path.Combine(dir, "trace.txt"));
+            System.Diagnostics.Trace.Listeners.Add(trace);
+            System.Diagnostics.Trace.AutoFlush = true;
+            Logger.Enabled = true;   // the live rig only: [DPI] / [CHROME] lines go to trace.txt
+            MainForm f = null;
+            MainForm.DemoNoSession = true;   // shown, but never resumes a session (no account, no login window)
+            try
+            {
+                f = new MainForm(new TelegramService());
+                var wa = Screen.PrimaryScreen.WorkingArea;
+                f.StartPosition = FormStartPosition.Manual;
+                f.Bounds = new Rectangle(wa.Left + wa.Width / 10, wa.Top + wa.Height / 12, wa.Width * 7 / 10, wa.Height * 3 / 4);
+                f.TopMost = true;
+                f.Show();
+                LivePump(1200);
+                SeedChatList(f);
+                OpenDemoChat(f);
+                LivePump(800);
+                LiveShot(f, "live-1-normal");
+                f.WindowState = FormWindowState.Maximized; LivePump(1200);
+                LiveShot(f, "live-2-maximised");
+                f.WindowState = FormWindowState.Normal; LivePump(1200); LiveShot(f, "live-3-restored");
+                AppForm.ApplyInterfaceScale(125); LivePump(1500); LiveShot(f, "live-4-scale125");
+                f.WindowState = FormWindowState.Maximized; LivePump(1200); LiveShot(f, "live-5-maximised125");
+                f.WindowState = FormWindowState.Normal; LivePump(1200); LiveShot(f, "live-6-restored125");
+                AppForm.ApplyInterfaceScale(100); LivePump(1500); LiveShot(f, "live-7-back100");
+                f.WindowState = FormWindowState.Maximized; LivePump(1200);
+                AppForm.ApplyInterfaceScale(125); LivePump(1500); LiveShot(f, "live-8-scale125-while-maximised");
+                AppForm.ApplyInterfaceScale(100); LivePump(1500); LiveShot(f, "live-9-back100-while-maximised");
+            }
+            catch (Exception ex) { Fail("live", ex); }
+            finally
+            {
+                if (f != null) { try { f.Close(); } catch { } try { f.Dispose(); } catch { } }
+            }
+            File.WriteAllText(Path.Combine(_dir, "shots.txt"), _log.ToString());
+            return _failures == 0 ? 0 : 1;
+        }
+
+        private static object Member(object o, string name)
+        {
+            for (var t = o.GetType(); t != null; t = t.BaseType)
+            {
+                var pi = t.GetProperty(name, Inst | BindingFlags.DeclaredOnly);
+                if (pi != null) return pi.GetValue(o, null);
+                var fi = t.GetField(name, Inst | BindingFlags.DeclaredOnly);
+                if (fi != null) return fi.GetValue(o);
+            }
+            return null;
+        }
+
+        private static void LivePump(int ms)
+        {
+            int end = Environment.TickCount + ms;
+            while (Environment.TickCount - end < 0) { Application.DoEvents(); System.Threading.Thread.Sleep(15); }
+        }
+
+        /// <summary>The real screen around the window (the whole work area when maximised), and its geometry.</summary>
+        private static void LiveShot(AppForm f, string name)
+        {
+            try { f.Activate(); } catch { }
+            LivePump(300);
+            var scr = Screen.FromHandle(f.Handle);
+            var area = f.WindowState == FormWindowState.Maximized ? scr.Bounds : Rectangle.Inflate(f.Bounds, 24, 24);
+            area.Intersect(scr.Bounds);
+            using (var bmp = new Bitmap(area.Width, area.Height))
+            {
+                using (var g = Graphics.FromImage(bmp)) g.CopyFromScreen(area.Location, Point.Empty, area.Size);
+                bmp.Save(Path.Combine(_dir, name + ".png"), ImageFormat.Png);
+            }
+            var content = Member(f, "Content") as Control;
+            var bar = Member(f, "Bar") as Control;
+            _log.AppendLine("  " + name + ": state " + f.WindowState + " bounds " + f.Bounds + " client " + f.ClientSize
+                            + " dpi " + f.WindowDpiValue + " padding " + f.Padding + " bar " + (bar != null ? bar.Bounds.ToString() : "-")
+                            + " content " + (content != null ? content.Bounds.ToString() : "-") + " work " + scr.WorkingArea);
+            var split = Field(f, "_split") as Control;
+            if (split != null) _log.AppendLine("      split " + split.Bounds + " in " + (split.Parent != null ? split.Parent.ClientSize.ToString() : "-"));
+            foreach (var n in new[] { "_rightLayout", "_headerBar", "_messagePanel", "_chatListPanel", "_replyKbHost" })
+            {
+                var c = Member(f, n) as Control;
+                if (c != null) _log.AppendLine("      " + n + " " + c.Bounds + " in parent " + (c.Parent != null ? c.Parent.GetType().Name + " " + c.Parent.ClientSize : "-"));
+            }
+            var mp = Member(f, "_messagePanel") as Control;
+            if (mp != null && mp.Controls.Count > 0) { var b = mp.Controls[mp.Controls.Count - 1]; _log.AppendLine("      last row " + b.GetType().Name + " " + b.Bounds); }
+            if (bar != null)
+            {
+                // Win32's view: where the bar's HWND really is, and where the form's client origin is, on screen
+                var origin = f.PointToScreen(Point.Empty);
+                var barScreen = bar.RectangleToScreen(bar.ClientRectangle);
+                _log.AppendLine("      win32: client origin " + origin + " bar on screen " + barScreen + " displayRect " + f.DisplayRectangle);
+                f.PerformLayout();
+                _log.AppendLine("      after PerformLayout: bar " + bar.Bounds + " content " + (content != null ? content.Bounds.ToString() : "-"));
+            }
+        }
 
         private static void WithForm(string name, Func<Form> make, Action<Form> shoot)
         {
@@ -340,7 +449,18 @@ namespace TelegArm.Helpers
             using (var bmp = new Bitmap(w, h, PixelFormat.Format24bppRgb))   // 24 bpp: WM_PRINT leaves alpha undefined
             {
                 c.DrawToBitmap(bmp, new Rectangle(0, 0, w, h));
-                bmp.Save(Path.Combine(_dir, name + ".png"), ImageFormat.Png);
+                // A form with native resize edges (Windows 10/11) has Windows' frame OUTSIDE its client; on screen that frame
+                // is invisible, but WM_PRINT paints it. Keep only what the user sees: the client area.
+                var form = c as Form;
+                if (form != null && form.IsHandleCreated && form.ClientSize.Width > 0 && form.ClientSize.Height > 0 && form.ClientSize != form.Size)
+                {
+                    var client = form.RectangleToScreen(form.ClientRectangle);
+                    var crop = new Rectangle(client.X - form.Bounds.X, client.Y - form.Bounds.Y, client.Width, client.Height);
+                    crop.Intersect(new Rectangle(0, 0, w, h));
+                    using (var cut = bmp.Clone(crop, bmp.PixelFormat)) cut.Save(Path.Combine(_dir, name + ".png"), ImageFormat.Png);
+                    w = crop.Width; h = crop.Height;
+                }
+                else bmp.Save(Path.Combine(_dir, name + ".png"), ImageFormat.Png);
             }
             _log.AppendLine("  " + name + ".png  " + w + "x" + h);
         }

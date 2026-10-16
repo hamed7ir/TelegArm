@@ -78,7 +78,7 @@ namespace TelegArm.UI
             {
                 if (_dockPane != pane) return;
                 int inset = Px(6), y = l.Height - Px(2);
-                using (var p = new Pen(_accent, Dpi.F(2f, WindowDpiValue)))
+                using (var p = new Pen(ThemeHelper.PaletteFor(_dark).AccentGlyph, Dpi.F(2f, WindowDpiValue)))
                     e.Graphics.DrawLine(p, inset, y, l.Width - inset, y);   // accent underline
             };
             return l;
@@ -134,13 +134,13 @@ namespace TelegArm.UI
             if (_dockProfile != null) _dockProfile.Visible = pane == DockPane.Info;
             if (_dockInfoTab != null)
             {
-                _dockInfoTab.ForeColor = pane == DockPane.Info ? _accent
+                _dockInfoTab.ForeColor = pane == DockPane.Info ? ThemeHelper.PaletteFor(_dark).AccentFg
                     : (ThemeHelper.PaletteFor(_dark).DockTabFg);
                 _dockInfoTab.Invalidate();
             }
             if (_dockEmojiTab != null)
             {
-                _dockEmojiTab.ForeColor = pane == DockPane.Emoji ? _accent
+                _dockEmojiTab.ForeColor = pane == DockPane.Emoji ? ThemeHelper.PaletteFor(_dark).AccentFg
                     : (ThemeHelper.PaletteFor(_dark).DockTabFg);
                 _dockEmojiTab.Invalidate();
             }

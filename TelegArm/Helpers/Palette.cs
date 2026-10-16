@@ -29,6 +29,25 @@ namespace TelegArm.Helpers
         public Color AccentFg { get; private set; }
         /// <summary>An opaque accent wash on <see cref="Surface"/> (selected rows, chips).</summary>
         public Color AccentSoft { get; private set; }
+        /// <summary>Step 5.3 — the accent as a GLYPH or outline on the main surface (header and composer icons, focus rings):
+        /// nudged to 3:1, the non-text contrast (WCAG 1.4.11). Text uses <see cref="AccentFg"/> (4.5:1).</summary>
+        public Color AccentGlyph { get; private set; }
+        /// <summary>Step 5.7 — ink drawn ON the outgoing bubble (its own OnColor: the bubble may be a custom colour).</summary>
+        public Color OnBubbleOut { get; private set; }
+        /// <summary>Step 5.7 — the outgoing-bubble presets after "From accent" (fixed colours, so they live here).</summary>
+        public static readonly Color[] OutBubblePresets =
+        {
+            Color.FromArgb(220, 248, 198),   // mint
+            Color.FromArgb(217, 236, 255),   // sky
+            Color.FromArgb(233, 223, 255),   // lilac
+            Color.FromArgb(255, 228, 209),   // peach
+            Color.FromArgb(74, 79, 87),      // graphite
+        };
+        public static readonly string[] OutBubbleNames = { "Mint", "Sky", "Lilac", "Peach", "Graphite" };
+        /// <summary>Step 5.4 — service lines and the date pill over a chat background that is not plain: a ~55% black scrim
+        /// with white text (the same in both modes), so they read on any picture or colour.</summary>
+        public Color ChatPillScrim { get; private set; }
+        public Color ChatPillText { get; private set; }
         public Color TitleBar { get; private set; }
 
         // ── surfaces (chrome) ────────────────────────────────────────────────────────────────────────────────
@@ -298,7 +317,79 @@ namespace TelegArm.Helpers
         private static Color Argb(int a, int r, int g, int b) { return Color.FromArgb(a, r, g, b); }
         private static Color Pick(bool dark, Color d, Color l) { return dark ? d : l; }
 
-        public static Palette Build(bool dark, Color accent)
+        public static Palette Build(bool dark, Color accent) { return Build(dark, accent, null); }
+
+        /// <summary>Step 5.7 — as <see cref="Build(bool, Color, Color?)"/>, with the user's outgoing-bubble colour (null = the
+        /// accent, as before).</summary>
+        public static Palette Build(bool dark, Color accent, Color? baseColor, Color? outBubble) { return BuildCore(dark, accent, baseColor, outBubble); }
+
+        private Color? _outBubble;
+
+        /// <summary>Step 5.2 (owner's idea, 2026-10-15) — the BASE colour of a mode: the paper of the light theme (default
+        /// white; warm white, sepia, cool grey...) or the ground of the dark theme (default graphite (30,30,30); true black,
+        /// blue-grey...). Null or the default = today's palette, pixel for pixel.</summary>
+        public static readonly Color DefaultLightBase = Color.FromArgb(255, 255, 255);
+        public static readonly Color DefaultDarkBase = Color.FromArgb(30, 30, 30);
+
+        /// <summary>The base presets Settings offers after "Default" (fixed colours, so they live here).</summary>
+        public static readonly Color[] LightBasePresets =
+        {
+            Color.FromArgb(255, 247, 232),   // warm white
+            Color.FromArgb(244, 236, 216),   // sepia
+            Color.FromArgb(237, 241, 246),   // cool grey
+            Color.FromArgb(238, 246, 240),   // mint
+        };
+        public static readonly string[] LightBaseNames = { "Warm white", "Sepia", "Cool grey", "Mint" };
+        public static readonly Color[] DarkBasePresets =
+        {
+            Color.FromArgb(0, 0, 0),         // true black (OLED)
+            Color.FromArgb(22, 27, 34),      // blue-grey
+            Color.FromArgb(16, 20, 32),      // midnight
+            Color.FromArgb(32, 28, 25),      // warm dark
+        };
+        public static readonly string[] DarkBaseNames = { "True black", "Blue-grey", "Midnight", "Warm dark" };
+
+        /// <summary>Step 5.4 — a built-in chat background (own art, never Telegram's): a solid, a soft left→right gradient (so it
+        /// is scroll-invariant: cheap on the Surface) or a pattern over a colour, with a light and a dark version.</summary>
+        public sealed class ChatPreset
+        {
+            public string Name, Kind, Pattern;   // Kind: "solid" | "gradient" | "pattern"
+            public Color Light1, Light2, Dark1, Dark2;
+        }
+
+        public static readonly ChatPreset[] ChatPresets =
+        {
+            new ChatPreset { Name = "Mist", Kind = "solid", Light1 = Color.FromArgb(232, 237, 242), Dark1 = Color.FromArgb(27, 32, 38) },
+            new ChatPreset { Name = "Sand", Kind = "solid", Light1 = Color.FromArgb(239, 232, 220), Dark1 = Color.FromArgb(34, 31, 26) },
+            new ChatPreset { Name = "Sky", Kind = "gradient", Light1 = Color.FromArgb(220, 235, 250), Light2 = Color.FromArgb(240, 246, 253),
+                             Dark1 = Color.FromArgb(20, 32, 46), Dark2 = Color.FromArgb(28, 39, 51) },
+            new ChatPreset { Name = "Mint", Kind = "gradient", Light1 = Color.FromArgb(223, 243, 234), Light2 = Color.FromArgb(242, 250, 246),
+                             Dark1 = Color.FromArgb(19, 36, 29), Dark2 = Color.FromArgb(26, 43, 36) },
+            new ChatPreset { Name = "Peach", Kind = "gradient", Light1 = Color.FromArgb(251, 227, 214), Light2 = Color.FromArgb(253, 243, 236),
+                             Dark1 = Color.FromArgb(42, 30, 25), Dark2 = Color.FromArgb(31, 26, 23) },
+            new ChatPreset { Name = "Lavender", Kind = "gradient", Light1 = Color.FromArgb(230, 225, 247), Light2 = Color.FromArgb(244, 241, 252),
+                             Dark1 = Color.FromArgb(31, 27, 46), Dark2 = Color.FromArgb(38, 34, 54) },
+            new ChatPreset { Name = "Dots", Kind = "pattern", Pattern = "dots", Light1 = Color.FromArgb(236, 239, 243), Dark1 = Color.FromArgb(28, 31, 36) },
+            new ChatPreset { Name = "Grid", Kind = "pattern", Pattern = "grid", Light1 = Color.FromArgb(238, 240, 234), Dark1 = Color.FromArgb(30, 31, 27) },
+        };
+
+        /// <summary>The range a base may take, so a light theme stays light and a dark one dark (text keeps its contrast):
+        /// every channel of a light base is at least 200, of a dark base at most 64.</summary>
+        public const int LightBaseMin = 200, DarkBaseMax = 64;
+
+        /// <summary>A base clamped into its mode's range (see <see cref="LightBaseMin"/>).</summary>
+        public static Color ClampBase(Color c, bool dark)
+        {
+            return dark ? Color.FromArgb(Math.Min((int)c.R, DarkBaseMax), Math.Min((int)c.G, DarkBaseMax), Math.Min((int)c.B, DarkBaseMax))
+                        : Color.FromArgb(Math.Max((int)c.R, LightBaseMin), Math.Max((int)c.G, LightBaseMin), Math.Max((int)c.B, LightBaseMin));
+        }
+
+        /// <summary>The palette of a mode for an accent and a base (null = the default base).</summary>
+        public static Palette Build(bool dark, Color accent, Color? baseColor) { return BuildCore(dark, accent, baseColor, null); }
+
+        // The one build: the out-bubble colour must be known BEFORE DeriveAccentInk, which re-inks the white out-bubble
+        // tokens exactly once (a second pass would find them no longer white).
+        private static Palette BuildCore(bool dark, Color accent, Color? baseColor, Color? outBubble)
         {
             accent = Color.FromArgb(accent.R, accent.G, accent.B);   // opaque, whatever arrived
             var p = new Palette { Dark = dark, Accent = accent };
@@ -560,7 +651,95 @@ namespace TelegArm.Helpers
             p.StoryName = Pick(dark, Rgb(210, 210, 215), Rgb(50, 50, 55));
             p.StoryRingIdle = Pick(dark, Rgb(95, 95, 100), Rgb(200, 200, 205));
             p.ToastBg = Pick(dark, Rgb(52, 52, 56), Rgb(55, 55, 58));
+            if (baseColor.HasValue)
+            {
+                var b = ClampBase(baseColor.Value, dark);
+                if (b.ToArgb() != (dark ? DefaultDarkBase : DefaultLightBase).ToArgb()) p.ApplyBase(b, dark);
+            }
+            p.Base = baseColor.HasValue ? ClampBase(baseColor.Value, dark) : dark ? DefaultDarkBase : DefaultLightBase;
+            p._outBubble = outBubble;
+            p.ChatPillScrim = Color.FromArgb(140, 0, 0, 0);
+            p.ChatPillText = Color.White;
+            p.DeriveAccentInk();
             return p;
+        }
+
+        // Step 5.3: the out-bubble inks drawn ON the accent. Their colour is white today; with a light accent (yellow, white,
+        // light green) OnAccent is near-black, and they follow it with the same alpha.
+        private static readonly string[] OnAccentInks =
+        {
+            "BubbleOutText", "BubbleOutSub", "BubbleOutTime", "SelectionOut", "LinkOut", "BubbleOutSoftText", "BubbleOutRole",
+            "BubbleOutSubStrong", "BubbleOutIconDisc", "InlineCodeBgOut", "PollOptionBgOut", "BubbleCardBgOut",
+        };
+
+        /// <summary>Step 5.3 — after the base: ink ON the accent follows OnAccent; ink OF the accent reaches its contrast on
+        /// the surface it is drawn on (links in incoming bubbles: 4.5:1 on BubbleIn; glyphs: 3:1 on Surface).</summary>
+        private void DeriveAccentInk()
+        {
+            var accent = Accent;
+            LinkIn = ColorMath.Ink(accent, BubbleIn);
+            AccentGlyph = ColorMath.Ink(accent, Surface, 3.0);
+            // Step 5.7: the outgoing bubble — the user's colour (softened 25% toward the chat in dark mode) or the accent; either
+            // way kept apart from the chat background (>= 1.2:1, so a white accent's bubbles do not vanish on a light chat).
+            var bubble = _outBubble.HasValue ? (Dark ? ColorMath.Mix(_outBubble.Value, ChatBg, 0.25f) : _outBubble.Value) : accent;
+            var away = ColorMath.Luminance(ChatBg) > 0.5 ? Color.Black : Color.White;
+            for (int i = 1; i <= 10 && ColorMath.Contrast(bubble, ChatBg) < 1.2; i++) bubble = ColorMath.Mix(bubble, away, 0.04f);
+            BubbleOut = bubble;
+            OnBubbleOut = ColorMath.OnColor(bubble);
+            var on = OnBubbleOut;
+            if (on.R == 255 && on.G == 255 && on.B == 255) return;   // white ink: the tokens already are
+            foreach (var name in OnAccentInks)
+            {
+                var prop = typeof(Palette).GetProperty(name);
+                if (prop == null) continue;
+                var c = (Color)prop.GetValue(this, null);
+                if (c.R == 255 && c.G == 255 && c.B == 255) prop.SetValue(this, Color.FromArgb(c.A, on.R, on.G, on.B), null);
+            }
+        }
+
+        /// <summary>The base this palette was built on (the default base when none was given).</summary>
+        public Color Base { get; private set; }
+
+        // Tokens that sit ON the accent or on media, or are made from the accent: the base never moves them.
+        private static readonly System.Collections.Generic.HashSet<string> NotOnBase = new System.Collections.Generic.HashSet<string>
+        {
+            "Accent", "AccentHover", "AccentPressed", "OnAccent", "AccentFg", "AccentSoft", "TitleBar", "LinkIn", "SelectionIn",
+            "Hover", "ScrollThumbActive", "ChatSelectTint", "Base",
+        };
+
+        /// <summary>Re-grounds every NEUTRAL opaque token (a grey or white: channels within 12 of each other) on the base.
+        /// Light: a multiply — black stays, white becomes the base, every grey in between follows. Dark: per channel, an
+        /// affine map that keeps white and moves the default ground (30) to the base — true black takes the darkest surfaces
+        /// to 0 and keeps their steps; text barely moves. Translucent overlays, saturated colours (status, swatches, avatar
+        /// hues), anything on the accent (BubbleOut*) or on media (Media*, Story*) are left alone; the accent-made tokens are
+        /// re-derived from the new surfaces at the end.</summary>
+        private void ApplyBase(Color b, bool dark)
+        {
+            foreach (var prop in typeof(Palette).GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+            {
+                if (prop.PropertyType != typeof(Color) || NotOnBase.Contains(prop.Name)) continue;
+                string n = prop.Name;
+                if (n.StartsWith("BubbleOut") || n.StartsWith("Media") || n.StartsWith("Story") || n.StartsWith("AccentSwatch")) continue;
+                var c = (Color)prop.GetValue(this, null);
+                if (c.A != 255) continue;
+                int hi = Math.Max(c.R, Math.Max(c.G, c.B)), lo = Math.Min(c.R, Math.Min(c.G, c.B));
+                if (hi - lo > 12) continue;
+                prop.SetValue(this, dark ? Color.FromArgb(Ground(c.R, b.R), Ground(c.G, b.G), Ground(c.B, b.B))
+                                         : Color.FromArgb(Paper(c.R, b.R), Paper(c.G, b.G), Paper(c.B, b.B)), null);
+            }
+            var accent = Accent;
+            ChatSelectTint = ColorMath.Mix(ChatBg, accent, 0.18f);
+            AccentFg = ColorMath.Ink(accent, Surface);
+            AccentSoft = ColorMath.Mix(Surface, accent, 0.18f);
+        }
+
+        private static int Paper(int c, int b) { return (int)Math.Round(c * b / 255.0); }
+
+        private static int Ground(int c, int b)
+        {
+            int d = DefaultDarkBase.R;
+            int v = (int)Math.Round(255 - (255 - c) * (255.0 - b) / (255 - d));
+            return v < 0 ? 0 : v > 255 ? 255 : v;
         }
     }
 }

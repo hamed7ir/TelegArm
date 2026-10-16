@@ -661,10 +661,10 @@ namespace TelegArm.UI
                 // selection dot
                 int dd = Dpi.Px(16, dpi);
                 var dot = new Rectangle(Dpi.Px(14, dpi), Height / 2 - dd / 2, dd, dd);
-                using (var p = new Pen(Selected ? pal.Accent : pal.TextFaint, Dpi.F(1.6f, dpi)))
+                using (var p = new Pen(Selected ? pal.AccentGlyph : pal.TextFaint, Dpi.F(1.6f, dpi)))
                     g.DrawEllipse(p, dot);
                 if (Selected)
-                    using (var b = new SolidBrush(pal.Accent))
+                    using (var b = new SolidBrush(pal.AccentGlyph))
                         g.FillEllipse(b, Rectangle.Inflate(dot, -Dpi.Px(4, dpi), -Dpi.Px(4, dpi)));
 
                 // the ✕ is two drawn lines (no font glyph: tofu on RT 8.1)

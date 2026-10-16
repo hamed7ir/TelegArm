@@ -443,7 +443,7 @@ namespace TelegArm.UI
         }
 
         private Color TabColor(bool active)
-            => active ? _accent : (ThemeHelper.PaletteFor(_dark).EmojiDim);
+            => active ? ColorMath.Ink(_accent, BackColor, 4.5) : (ThemeHelper.PaletteFor(_dark).EmojiDim);   // accent as text: keep it readable on any accent
 
         private async void LoadStickers()
         {

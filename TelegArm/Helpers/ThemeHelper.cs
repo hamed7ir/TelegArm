@@ -70,6 +70,35 @@ namespace TelegArm.Helpers
 
         public static string FormatAccent(Color? c) => c.HasValue ? "#" + (c.Value.ToArgb() & 0xFFFFFF).ToString("X6") : "";
 
+        // ── Step 5.2: the base colour of each mode (owner, 2026-10-15) — null = the default (white / graphite) ──────────
+        private static Color? _lightBase, _darkBase;
+
+        // ── Step 5.7: the outgoing-bubble colour — null = the accent ──────────────────────────────────────────────────
+        private static Color? _outBubble;
+        public static Color? OutBubble => _outBubble;
+        public static void InitOutBubble(Color? c) { _outBubble = c; _palette = null; _otherMode = null; }
+        public static void SetOutBubble(Color? c)
+        {
+            if (_outBubble.HasValue == c.HasValue && (!c.HasValue || _outBubble.Value.ToArgb() == c.Value.ToArgb())) return;
+            _outBubble = c;
+            Raise();
+        }
+
+        /// <summary>The user's base for a mode, or null for the default.</summary>
+        public static Color? BaseFor(bool dark) => dark ? _darkBase : _lightBase;
+
+        /// <summary>Sets both bases WITHOUT notifying (startup, before any form reads the theme).</summary>
+        public static void InitBases(Color? light, Color? dark) { _lightBase = light; _darkBase = dark; _palette = null; _otherMode = null; }
+
+        /// <summary>Sets (or clears, with null) one mode's base and raises <see cref="ThemeChanged"/> when it changed.</summary>
+        public static void SetBase(bool dark, Color? c)
+        {
+            var cur = BaseFor(dark);
+            if (cur.HasValue == c.HasValue && (!c.HasValue || cur.Value.ToArgb() == c.Value.ToArgb())) return;
+            if (dark) _darkBase = c; else _lightBase = c;
+            Raise();
+        }
+
         // ── Redesign step 1.2: the cached palette ─────────────────────────────────────────────────────────────
         private static Palette _palette;
 
@@ -82,7 +111,7 @@ namespace TelegArm.Helpers
             get
             {
                 var p = _palette;
-                if (p == null) _palette = p = Helpers.Palette.Build(IsDark, GetWindowsAccentColor());
+                if (p == null) { bool d = IsDark; _palette = p = Helpers.Palette.Build(d, GetWindowsAccentColor(), BaseFor(d), _outBubble); }
                 return p;
             }
         }
@@ -98,14 +127,15 @@ namespace TelegArm.Helpers
             var p = Palette;
             if (p.Dark == dark) return p;
             var o = _otherMode;
-            if (o == null || o.Dark != dark || o.Accent != p.Accent) _otherMode = o = Helpers.Palette.Build(dark, p.Accent);
+            if (o == null || o.Dark != dark || o.Accent != p.Accent) _otherMode = o = Helpers.Palette.Build(dark, p.Accent, BaseFor(dark), _outBubble);
             return o;
         }
 
         /// <summary>The one way ThemeChanged is raised: palette first, then the event.</summary>
         private static void Raise()
         {
-            try { _palette = Helpers.Palette.Build(IsDark, GetWindowsAccentColor()); } catch { _palette = null; }
+            _otherMode = null;   // step 5.2: a base change must rebuild the other mode too
+            try { bool d = IsDark; _palette = Helpers.Palette.Build(d, GetWindowsAccentColor(), BaseFor(d), _outBubble); } catch { _palette = null; }
             ThemeChanged?.Invoke();
         }
 

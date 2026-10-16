@@ -178,6 +178,17 @@ namespace TelegArm.Core
         /// Appearance page exists (step 5.2).</summary>
         public string AccentColor { get; set; } = "";
 
+        /// <summary>Step 5.2 — the base colour of the light and of the dark theme: "" = the default (white / graphite), or
+        /// "#RRGGBB". Global, like AccentColor.</summary>
+        public string LightBase { get; set; } = "";
+        public string DarkBase { get; set; } = "";
+
+        /// <summary>Steps 5.4-5.7 — the chat background of each mode and the outgoing-bubble colour (see ThemeSettings).</summary>
+        public ThemeSettings Theme { get; set; } = new ThemeSettings();
+
+        /// <summary>Step 5.9 — the window backdrop: "" = Solid (the default), "wallpaper" = the blurred desktop picture.</summary>
+        public string WindowBackground { get; set; } = "";
+
         /// <summary>Redesign step 1.3 — window chrome: "" = build default (TelegArm's own title bar), "Custom", or
         /// "Native" = the ordinary Windows frame (the escape hatch if the custom chrome misbehaves on a device).
         /// --native-caption and TELEGARM_CHROME=native|custom override it. Restart to apply.</summary>
@@ -261,6 +272,11 @@ namespace TelegArm.Core
                 DefaultSaveFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "TelegArm");
             if (DpiMode == null) DpiMode = "";
             if (AccentColor == null) AccentColor = "";
+            if (LightBase == null) LightBase = "";
+            if (DarkBase == null) DarkBase = "";
+            if (Theme == null) Theme = new ThemeSettings();
+            if (WindowBackground == null) WindowBackground = "";
+            Theme.Repair();
             if (ChromeMode == null) ChromeMode = "";
             if (ComposerEngine == null) ComposerEngine = "";
             if (CloseBehavior == null) CloseBehavior = "";

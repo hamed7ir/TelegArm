@@ -33,5 +33,35 @@ namespace TelegArm.Helpers
                 return _arm32 == 1;
             }
         }
+
+        private static int _major = -1;
+
+        /// <summary>The real Windows major version (RtlGetVersion: GetVersionEx says 6.2 to an unmanifested exe on 8.1+).
+        /// 6 = Windows 7 / 8 / 8.1 (the Surface RT), 10 = Windows 10 and 11.</summary>
+        public static int WindowsMajor
+        {
+            get
+            {
+                if (_major < 0)
+                {
+                    try
+                    {
+                        var v = new OSVERSIONINFOW { dwOSVersionInfoSize = System.Runtime.InteropServices.Marshal.SizeOf(typeof(OSVERSIONINFOW)) };
+                        _major = RtlGetVersion(ref v) == 0 ? v.dwMajorVersion : Environment.OSVersion.Version.Major;
+                    }
+                    catch { _major = Environment.OSVersion.Version.Major; }
+                }
+                return _major;
+            }
+        }
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        private struct OSVERSIONINFOW
+        {
+            public int dwOSVersionInfoSize, dwMajorVersion, dwMinorVersion, dwBuildNumber, dwPlatformId;
+            [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 128)] public string szCSDVersion;
+        }
+
+        [System.Runtime.InteropServices.DllImport("ntdll.dll")] private static extern int RtlGetVersion(ref OSVERSIONINFOW v);
     }
 }

@@ -91,6 +91,7 @@ namespace TelegArm.UI
             var body = new Panel();
             var host = new Panel { Dock = DockStyle.Fill };
             _rail = new SettingsRail(PageNames) { Dock = DockStyle.Left, Width = Px(196) };
+            WindowBackdrop.Mark_(_rail);   // step 5.9: the rail paints the backdrop itself
             _rail.PageSelected += ShowPage;
             body.Controls.Add(host);    // Fill first: docking takes the last-added (the rail) first
             body.Controls.Add(_rail);
@@ -102,6 +103,8 @@ namespace TelegArm.UI
             {
                 var pageHost = new Panel { Dock = DockStyle.Fill, Visible = i == 0 };
                 var scroll = ScrollHost.Wrap(pageHost, ThemeHelper.Palette.Dark, ThemeHelper.Palette.Accent);   // + TouchScroller momentum
+                WindowBackdrop.Attach(pageHost);   // step 5.9
+                WindowBackdrop.Attach(scroll);
                 host.Controls.Add(pageHost);
                 _pages[i] = scroll;
                 _stacks[i] = new PageStack(scroll, this);
@@ -243,9 +246,9 @@ namespace TelegArm.UI
                 ApplyThemeMode(idx == 0 ? ThemeMode.System : idx == 1 ? ThemeMode.Light : ThemeMode.Dark);
             };
 
-            // Step 2.6 (plan 5): the accent — Follow Windows, or a fixed colour (the custom picker is step 5.2). Live, like
-            // the theme; persisted as AppSettings.AccentColor ("" = follow Windows). TELEGARM_ACCENT still wins at startup.
-            var accent = new SwatchRow("Accent colour", ThemeHelper.AccentOverride);
+            // Step 2.6 (plan 5): the accent — Follow Windows, a fixed colour, or Custom… (step 5.2: the in-app picker). Live,
+            // like the theme; persisted as AppSettings.AccentColor ("" = follow Windows). TELEGARM_ACCENT still wins at startup.
+            var accent = _accentRow = new SwatchRow("Accent colour", ThemeHelper.AccentOverride);
             accent.Changed += (snd, ev) =>
             {
                 var c = accent.SelectedAccent;
@@ -253,7 +256,42 @@ namespace TelegArm.UI
                 AppSettings.Instance.AccentColor = ThemeHelper.FormatAccent(c);
                 AppSettings.Instance.Save();
             };
-            page.Section("Look", theme, accent);
+            accent.CustomRequested += (snd, ev) =>
+            {
+                var c = ColorPickerDialog.Pick(this, "Accent colour", accent.CustomColor ?? ThemeHelper.Palette.Accent);
+                if (c.HasValue) accent.SetCustom(c.Value);
+            };
+            // Step 5.9: the window backdrop — a blurred, tinted copy of the desktop wallpaper behind the window's chrome.
+            var winBg = new SegmentedRow("Window background", new[] { "Solid", "Wallpaper" }, s.WindowBackground == "wallpaper" ? 1 : 0)
+            { Subtitle = "Wallpaper shows the desktop picture, blurred, behind the window" };
+            winBg.SelectedIndexChanged += (snd, ev) =>
+            {
+                s.WindowBackground = winBg.SelectedIndex == 1 ? "wallpaper" : "";
+                s.Save();
+                WindowBackdrop.SetWanted(winBg.SelectedIndex == 1);
+            };
+            page.Section("Look", theme, accent, winBg);
+
+            // Step 5.2 (owner, 2026-10-15): the base colour of each theme — the light theme's paper (white, warm white,
+            // sepia…) and the dark theme's ground (graphite, true black…). Live; "" = the default.
+            page.Section("Theme colours", _lightBaseRow = BaseRow("Light theme", false, s), _darkBaseRow = BaseRow("Dark theme", true, s));
+
+            // Steps 5.4/5.5: the chat background of each theme; 5.7: the outgoing bubble.
+            BuildChatBackgroundSection(page, s);
+            _bubbleRow = SwatchRow.ForBubble("Outgoing bubbles", ThemeHelper.OutBubble);
+            _bubbleRow.Changed += (snd, ev) =>
+            {
+                var c = _bubbleRow.SelectedAccent;
+                ThemeHelper.SetOutBubble(c);
+                s.Theme.OutBubble = ThemeHelper.FormatAccent(c);
+                s.Save();
+            };
+            _bubbleRow.CustomRequested += (snd, ev) =>
+            {
+                var c = ColorPickerDialog.Pick(this, "Outgoing bubble colour", _bubbleRow.CustomColor ?? ThemeHelper.Palette.BubbleOut);
+                if (c.HasValue) _bubbleRow.SetCustom(c.Value);
+            };
+            page.Section("Bubbles", _bubbleRow);
 
             // Step 3.8b: the interface scale — applied LIVE to every window when the thumb is released, then a 10 s
             // "keep this size?" that reverts; capped per screen so the main window always fits (the setting keeps its value).
@@ -264,6 +302,281 @@ namespace TelegArm.UI
             _scaleRow.Previewing += (snd, ev) => _scalePreview.PreviewPercent = _scaleRow.ShownValue;
             UpdateScaleLimit();
             page.Section("Size", _scaleRow, _scalePreview);
+
+            // Step 5.7: start over, or carry a look to another PC.
+            var reset = new ActionRow("Reset appearance", "Reset") { Subtitle = "Accent, theme colours, chat backgrounds and bubbles" };
+            reset.Click += (snd, ev) => ResetAppearance(s);
+            var export = new ActionRow("Export theme…", "Export") { Subtitle = "Saves these colours to a file (photos stay on this PC)" };
+            export.Click += (snd, ev) => ExportTheme(s);
+            var import = new ActionRow("Import theme…", "Import");
+            import.Click += (snd, ev) => ImportTheme(s);
+            page.Section("Manage", reset, export, import);
+        }
+
+        // ── Steps 5.4/5.5/5.7: the chat background, the bubbles, reset / export / import ─────────────────────────────
+
+        private SwatchRow _accentRow, _lightBaseRow, _darkBaseRow, _bubbleRow;
+        private bool _bgDark, _bgSync;
+        private SegmentedRow _bgFor, _bgDirection, _bgPattern, _bgFit;
+        private ChatPresetRow _bgPresets;
+        private ThemePreviewRow _bgPreview;
+        private SliderRow _bgDim;
+        private ToggleRow _bgBlur;
+        private static readonly string[] PatternNames = { "", "dots", "grid", "lines" };
+
+        private ChatBackgroundSettings Bg() { return AppSettings.Instance.Theme.For(_bgDark); }
+
+        private static int PresetIndex(ChatBackgroundSettings cs) { return cs.Mode == "" ? 0 : cs.Mode == "preset" ? cs.Preset + 1 : -1; }
+
+        /// <summary>One section edits ONE theme's background at a time ("For the: Light theme / Dark theme", starting on the
+        /// current one). Every change applies live (ChatBackdrop.NotifyChanged repaints the chat) and saves.</summary>
+        private void BuildChatBackgroundSection(PageStack page, AppSettings s)
+        {
+            _bgDark = ThemeHelper.Palette.Dark;
+            _bgFor = new SegmentedRow("For the", new[] { "Light theme", "Dark theme" }, _bgDark ? 1 : 0);
+            _bgFor.SelectedIndexChanged += (a, b) =>
+            {
+                if (_bgSync) return;
+                _bgDark = _bgFor.SelectedIndex == 1;
+                _bgPresets.Dark = _bgDark;
+                _bgPreview.Dark = _bgDark;
+                SyncBackgroundRows();
+            };
+            _bgPreview = new ThemePreviewRow(_bgDark);
+            _bgPresets = new ChatPresetRow("Background", _bgDark, PresetIndex(Bg()));
+            _bgPresets.Changed += (a, b) =>
+            {
+                if (_bgSync) return;
+                var cs = Bg(); int i = _bgPresets.Selected;
+                cs.Mode = i <= 0 ? "" : "preset"; cs.Preset = Math.Max(0, i - 1);
+                ApplyBackground(s);
+            };
+            var solid = new ActionRow("Solid colour…");
+            solid.Click += (a, b) =>
+            {
+                var cs = Bg();
+                var c = ColorPickerDialog.Pick(this, "Chat background colour", ThemeHelper.ParseAccent(cs.Color1) ?? ThemeHelper.PaletteFor(_bgDark).ChatBg);
+                if (!c.HasValue) return;
+                cs.Mode = "solid"; cs.Color1 = ThemeHelper.FormatAccent(c);
+                ApplyBackground(s);
+            };
+            var gradient = new ActionRow("Gradient…") { Subtitle = "Two colours" };
+            gradient.Click += (a, b) =>
+            {
+                var cs = Bg(); var pal = ThemeHelper.PaletteFor(_bgDark);
+                var c1 = ColorPickerDialog.Pick(this, "Gradient: first colour", ThemeHelper.ParseAccent(cs.Color1) ?? pal.ChatBg);
+                if (!c1.HasValue) return;
+                var c2 = ColorPickerDialog.Pick(this, "Gradient: second colour", ThemeHelper.ParseAccent(cs.Color2) ?? ColorMath.Mix(c1.Value, pal.Accent, 0.25f));
+                if (!c2.HasValue) return;
+                cs.Mode = "gradient"; cs.Color1 = ThemeHelper.FormatAccent(c1); cs.Color2 = ThemeHelper.FormatAccent(c2);
+                ApplyBackground(s);
+            };
+            _bgDirection = new SegmentedRow("Direction", new[] { "Across", "Down", "Diagonal" }, 0);
+            _bgDirection.SelectedIndexChanged += (a, b) =>
+            {
+                if (_bgSync) return;
+                int i = _bgDirection.SelectedIndex;
+                Bg().Angle = i == 1 ? 90 : i == 2 ? 45 : 0;
+                ApplyBackground(s);
+            };
+            _bgPattern = new SegmentedRow("Pattern", new[] { "None", "Dots", "Grid", "Lines" }, 0);
+            _bgPattern.SelectedIndexChanged += (a, b) =>
+            {
+                if (_bgSync) return;
+                var cs = Bg(); int i = _bgPattern.SelectedIndex;
+                if (i <= 0) { if (cs.Mode == "pattern") cs.Mode = string.IsNullOrEmpty(cs.Color1) ? "" : "solid"; }
+                else
+                {
+                    // the pattern goes over the colour in use: the solid's, a solid preset's, else the theme's chat colour
+                    string under = cs.Mode == "solid" || cs.Mode == "pattern" ? cs.Color1
+                                 : cs.Mode == "preset" && cs.Preset < Palette.ChatPresets.Length
+                                     ? ThemeHelper.FormatAccent(_bgDark ? Palette.ChatPresets[cs.Preset].Dark1 : Palette.ChatPresets[cs.Preset].Light1) : "";
+                    cs.Mode = "pattern"; cs.Pattern = PatternNames[i]; cs.Color1 = under;
+                }
+                ApplyBackground(s);
+            };
+            var photo = new ActionRow("Photo…") { Subtitle = "A picture from this PC" };
+            photo.Click += (a, b) => ImportBackgroundPhoto(s);
+            _bgFit = new SegmentedRow("Photo fit", new[] { "Fill", "Fit", "Centre" }, 0);
+            _bgFit.SelectedIndexChanged += (a, b) =>
+            {
+                if (_bgSync) return;
+                int i = _bgFit.SelectedIndex;
+                Bg().Fit = i == 1 ? "fit" : i == 2 ? "center" : "fill";
+                ApplyBackground(s);
+            };
+            _bgDim = new SliderRow("Dim the photo", 0, 80, 10, 0);
+            _bgDim.Previewing += (a, b) =>
+            {
+                var clone = Bg().Clone(); clone.Dim = _bgDim.ShownValue;
+                _bgPreview.Preview = clone;   // dragging re-bakes only the preview tile
+            };
+            _bgDim.ValueChanged += (a, b) =>
+            {
+                if (_bgSync) return;
+                Bg().Dim = _bgDim.Value;
+                ApplyBackground(s);
+            };
+            _bgBlur = new ToggleRow("Soft blur");
+            _bgBlur.Changed += (a, b) =>
+            {
+                if (_bgSync) return;
+                Bg().Blur = _bgBlur.On;
+                ApplyBackground(s);
+            };
+            page.Section("Chat background", _bgFor, _bgPreview, _bgPresets, solid, gradient, _bgDirection, _bgPattern, photo, _bgFit, _bgDim, _bgBlur);
+            page.Note("Down and diagonal gradients and photos repaint the chat while it scrolls: smooth on a PC, slower on a Surface.");
+            SyncBackgroundRows();
+        }
+
+        private void ApplyBackground(AppSettings s)
+        {
+            s.Save();
+            ChatBackdrop.NotifyChanged();
+            SyncBackgroundRows();
+        }
+
+        /// <summary>Shows the edited theme's background in the rows (no events), and the options its kind has.</summary>
+        private void SyncBackgroundRows()
+        {
+            if (_bgPresets == null) return;
+            var cs = Bg();
+            _bgSync = true;
+            try
+            {
+                _bgFor.SelectedIndex = _bgDark ? 1 : 0;
+                _bgPresets.Selected = PresetIndex(cs);
+                _bgDirection.RowVisible = cs.Mode == "gradient";
+                _bgDirection.SelectedIndex = cs.Angle == 90 ? 1 : cs.Angle == 45 ? 2 : 0;
+                _bgPattern.SelectedIndex = cs.Mode == "pattern" ? Math.Max(1, Array.IndexOf(PatternNames, cs.Pattern)) : 0;
+                bool photo = cs.Mode == "photo";
+                _bgFit.RowVisible = photo; _bgDim.RowVisible = photo; _bgBlur.RowVisible = photo;
+                _bgFit.SelectedIndex = cs.Fit == "fit" ? 1 : cs.Fit == "center" ? 2 : 0;
+                _bgDim.SetValue(cs.Dim, false);
+                _bgBlur.On = cs.Blur;
+                _bgPreview.Preview = null;
+                _bgPreview.Refresh2();
+            }
+            finally { _bgSync = false; }
+        }
+
+        private async void ImportBackgroundPhoto(AppSettings s)
+        {
+            string path;
+            using (var dlg = new OpenFileDialog { Title = "Chat background photo", Filter = "Pictures|*.jpg;*.jpeg;*.png;*.bmp;*.gif|All files|*.*" })
+            {
+                if (dlg.ShowDialog(this) != DialogResult.OK) return;
+                path = dlg.FileName;
+            }
+            bool dark = _bgDark;
+            try
+            {
+                UseWaitCursor = true;
+                string name = await Task.Run(() => ChatBackdrop.ImportPhoto(path, dark));   // decode + downscale off the UI thread
+                if (IsDisposed) return;
+                var cs = AppSettings.Instance.Theme.For(dark);
+                cs.Mode = "photo"; cs.ImageFile = name; cs.ImageRev++;
+                ApplyBackground(s);
+            }
+            catch (Exception ex)
+            {
+                if (!IsDisposed) ThemedDialog.Show(this, "Chat background", ex is InvalidOperationException ? ex.Message : "That picture could not be opened: " + ex.Message, "OK");
+            }
+            finally { if (!IsDisposed) UseWaitCursor = false; }
+        }
+
+        private void ResetAppearance(AppSettings s)
+        {
+            if (ThemedDialog.Show(this, "Reset appearance", "Go back to the default accent, theme colours, chat backgrounds and bubbles? "
+                                  + "The theme (light / dark) and the interface scale stay as they are.", "Cancel", "Reset") != 1) return;
+            s.AccentColor = ""; s.LightBase = ""; s.DarkBase = ""; s.Theme = new TelegArm.Core.ThemeSettings();
+            s.Save();
+            ThemeHelper.SetAccent(null); ThemeHelper.SetBase(false, null); ThemeHelper.SetBase(true, null); ThemeHelper.SetOutBubble(null);
+            ChatBackdrop.NotifyChanged();
+            RefreshAppearanceRows();
+        }
+
+        private void RefreshAppearanceRows()
+        {
+            if (_accentRow != null) _accentRow.Select(ThemeHelper.AccentOverride);
+            if (_lightBaseRow != null) _lightBaseRow.Select(ThemeHelper.BaseFor(false));
+            if (_darkBaseRow != null) _darkBaseRow.Select(ThemeHelper.BaseFor(true));
+            if (_bubbleRow != null) _bubbleRow.Select(ThemeHelper.OutBubble);
+            SyncBackgroundRows();
+        }
+
+        private static string NormColour(string v) { var c = ThemeHelper.ParseAccent(v); return c.HasValue ? ThemeHelper.FormatAccent(c) : ""; }
+
+        private void ExportTheme(AppSettings s)
+        {
+            using (var dlg = new SaveFileDialog { Title = "Export theme", Filter = "TelegArm theme|*.json", FileName = "TelegArm theme.json" })
+            {
+                if (dlg.ShowDialog(this) != DialogResult.OK) return;
+                var theme = Newtonsoft.Json.JsonConvert.DeserializeObject<TelegArm.Core.ThemeSettings>(Newtonsoft.Json.JsonConvert.SerializeObject(s.Theme));   // a copy
+                foreach (var cs in new[] { theme.Light, theme.Dark })
+                    if (cs.Mode == "photo") { cs.Mode = ""; cs.ImageFile = ""; }   // photos stay on this PC
+                var doc = new { TelegArmTheme = 1, AccentColor = s.AccentColor, LightBase = s.LightBase, DarkBase = s.DarkBase, Theme = theme };
+                try { File.WriteAllText(dlg.FileName, Newtonsoft.Json.JsonConvert.SerializeObject(doc, Newtonsoft.Json.Formatting.Indented)); }
+                catch (Exception ex) { ThemedDialog.Show(this, "Export theme", "The theme could not be saved: " + ex.Message, "OK"); }
+            }
+        }
+
+        private void ImportTheme(AppSettings s)
+        {
+            string json;
+            using (var dlg = new OpenFileDialog { Title = "Import theme", Filter = "TelegArm theme|*.json|All files|*.*" })
+            {
+                if (dlg.ShowDialog(this) != DialogResult.OK) return;
+                try { json = File.ReadAllText(dlg.FileName); }
+                catch (Exception ex) { ThemedDialog.Show(this, "Import theme", "The file could not be read: " + ex.Message, "OK"); return; }
+            }
+            try
+            {
+                var o = Newtonsoft.Json.Linq.JObject.Parse(json);
+                if ((int?)o["TelegArmTheme"] != 1) throw new InvalidOperationException("This is not a TelegArm theme file.");
+                var theme = o["Theme"] != null ? o["Theme"].ToObject<TelegArm.Core.ThemeSettings>() : new TelegArm.Core.ThemeSettings();
+                theme.Repair();
+                foreach (var cs in new[] { theme.Light, theme.Dark })
+                {
+                    if (cs.Mode == "photo") { cs.Mode = ""; cs.ImageFile = ""; }
+                    cs.Color1 = NormColour(cs.Color1); cs.Color2 = NormColour(cs.Color2);
+                }
+                theme.OutBubble = NormColour(theme.OutBubble);
+                s.AccentColor = NormColour((string)o["AccentColor"]);
+                s.LightBase = NormColour((string)o["LightBase"]);
+                s.DarkBase = NormColour((string)o["DarkBase"]);
+                s.Theme = theme;
+                s.Save();
+                ThemeHelper.SetAccent(ThemeHelper.ParseAccent(s.AccentColor));
+                ThemeHelper.SetBase(false, ThemeHelper.ParseAccent(s.LightBase));
+                ThemeHelper.SetBase(true, ThemeHelper.ParseAccent(s.DarkBase));
+                ThemeHelper.SetOutBubble(ThemeHelper.ParseAccent(theme.OutBubble));
+                ChatBackdrop.NotifyChanged();
+                RefreshAppearanceRows();
+            }
+            catch (Exception ex)
+            {
+                ThemedDialog.Show(this, "Import theme", ex is InvalidOperationException ? ex.Message : "That file is not a theme TelegArm can read: " + ex.Message, "OK");
+            }
+        }
+
+        /// <summary>Step 5.2 — one theme's base: Default, the presets, Custom… (clamped so the theme stays light / dark).</summary>
+        private SwatchRow BaseRow(string caption, bool dark, AppSettings s)
+        {
+            var row = SwatchRow.ForBase(caption, dark, ThemeHelper.BaseFor(dark));
+            row.Changed += (snd, ev) =>
+            {
+                var c = row.SelectedAccent;
+                ThemeHelper.SetBase(dark, c);
+                if (dark) s.DarkBase = ThemeHelper.FormatAccent(c); else s.LightBase = ThemeHelper.FormatAccent(c);
+                s.Save();
+            };
+            row.CustomRequested += (snd, ev) =>
+            {
+                var c = ColorPickerDialog.Pick(this, caption + " colour", row.CustomColor ?? ThemeHelper.PaletteFor(dark).Base, x => Palette.ClampBase(x, dark));
+                if (c.HasValue) row.SetCustom(Palette.ClampBase(c.Value, dark));
+            };
+            return row;
         }
 
         private SliderRow _scaleRow;
@@ -1192,7 +1505,8 @@ namespace TelegArm.UI
                 var p = ThemeHelper.Palette;
                 var g = e.Graphics;
                 int dpi = Dpi.Of(this), rowH = Dpi.Px(RowH, dpi), padX = Dpi.Px(PadX, dpi), top = Dpi.Px(TopPad, dpi);
-                g.Clear(p.Footer);
+                if (WindowBackdrop.Enabled) WindowBackdrop.Paint(g, this, e.ClipRectangle, p.Footer);   // step 5.9
+                else g.Clear(p.Footer);
                 using (var pen = new Pen(p.Divider)) g.DrawLine(pen, Width - 1, 0, Width - 1, Height);
                 for (int i = 0; i < _names.Length; i++)
                 {

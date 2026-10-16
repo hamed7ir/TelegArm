@@ -130,7 +130,7 @@ namespace TelegArm.UI
                 var badge = new Rectangle(rect.Right - P(9), rect.Top - P(7), P(15), P(15));   // top-right of the ring, as before
                 using (var bb = new SolidBrush(accent))
                     g.FillEllipse(bb, badge);
-                TextRenderer.DrawText(g, n, FontHelper.UiAt(7f, dpi, FontStyle.Bold), badge, Color.White,   // shared font: never dispose
+                TextRenderer.DrawText(g, n, FontHelper.UiAt(7f, dpi, FontStyle.Bold), badge, ColorMath.OnColor(accent),   // ink on the accent badge; shared font: never dispose
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
             }
         }
@@ -278,13 +278,13 @@ namespace TelegArm.UI
             int P(int v) => Dpi.Px(v, dpi);
             g.SmoothingMode = SmoothingMode.AntiAlias;
             Color fill, fg;
-            if (primary) { fill = hover ? Lighten(accent) : accent; fg = Color.White; }
+            if (primary) { fill = hover ? Lighten(accent) : accent; fg = ColorMath.OnColor(fill); }
             else
             {
                 fill = hover ? ThemeHelper.PaletteFor(dark).DownloadPillHover : ThemeHelper.PaletteFor(dark).DownloadPill;
                 fg = ThemeHelper.PaletteFor(dark).DownloadPillText;
             }
-            Color gc = primary ? Color.White : (glyph == Pic.Cancel ? ThemeHelper.PaletteFor(dark).DownloadCancelTint : accent);
+            Color gc = primary ? fg : (glyph == Pic.Cancel ? ThemeHelper.PaletteFor(dark).DownloadCancelTint : ColorMath.Ink(accent, fill, 3.0));
             using (var b = new SolidBrush(fill))
             using (var path = DrawHelper.RoundedRect(new Rectangle(r.X, r.Y, r.Width - 1, r.Height - 1), (r.Height - 1) / 2))
                 g.FillPath(b, path);

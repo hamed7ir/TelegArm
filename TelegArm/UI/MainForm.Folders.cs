@@ -225,11 +225,11 @@ namespace TelegArm.UI
             {
                 var g = e.Graphics;
                 g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                g.Clear(Parent != null ? Parent.BackColor : (ThemeHelper.PaletteFor(_dark).ListBg));
+                WindowBackdrop.ClearBehind(g, this, Parent, ClientRectangle, ThemeHelper.PaletteFor(_dark).ListBg);   // step 5.9
                 int D = P(50); int cx = (Width - D) / 2, cy = P(6);
                 var avr = new Rectangle(cx, cy, D, D);
                 var ring = Rectangle.Inflate(avr, P(3), P(3));
-                using (var rp = new Pen(_unseen ? _accent : (ThemeHelper.PaletteFor(_dark).StoryRingIdle), Dpi.F(_unseen ? 2.5f : 1.5f, _dpi)))
+                using (var rp = new Pen(_unseen ? ColorMath.Ink(_accent, ThemeHelper.PaletteFor(_dark).ListBg, 3.0) : (ThemeHelper.PaletteFor(_dark).StoryRingIdle), Dpi.F(_unseen ? 2.5f : 1.5f, _dpi)))
                     g.DrawEllipse(rp, ring);
                 var img = _avatar != null ? _avatar(_peerId) : null;
                 if (img != null)
@@ -435,9 +435,9 @@ namespace TelegArm.UI
                 var g = e.Graphics;
                 g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
                 g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-                g.Clear(Parent != null ? Parent.BackColor : (ThemeHelper.PaletteFor(_dark).ListBg));
+                WindowBackdrop.ClearBehind(g, this, Parent, ClientRectangle, ThemeHelper.PaletteFor(_dark).ListBg);   // step 5.9
 
-                Color fg = _active ? _accent : (ThemeHelper.PaletteFor(_dark).FolderTabFg);
+                Color fg = _active ? ColorMath.Ink(_accent, ThemeHelper.PaletteFor(_dark).ListBg) : (ThemeHelper.PaletteFor(_dark).FolderTabFg);
                 var lf = LabelFont;
                 int tw = TextRenderer.MeasureText(_label, lf).Width;
                 TextRenderer.DrawText(g, _label, lf, new Rectangle(P(6), 0, tw + P(4), Height), fg,
@@ -450,7 +450,7 @@ namespace TelegArm.UI
                     var badge = new Rectangle(P(6) + tw + P(5), (Height - P(15)) / 2, bw, P(15));
                     using (var bb = new SolidBrush(_accent))
                     using (var pth = DrawHelper.RoundedRect(badge, P(7))) g.FillPath(bb, pth);
-                    TextRenderer.DrawText(g, t, bf, badge, Color.White,
+                    TextRenderer.DrawText(g, t, bf, badge, ColorMath.OnColor(_accent),
                         TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
                 }
             }
@@ -494,9 +494,9 @@ namespace TelegArm.UI
                 if (_active)
                 {
                     using (var tint = new SolidBrush(ColorMath.WithAlpha(_accent, 30))) g.FillRectangle(tint, 0, 0, Width, Height);
-                    using (var bar = new SolidBrush(_accent)) g.FillRectangle(bar, 0, P(8), P(3), Height - P(16));
+                    using (var bar = new SolidBrush(ColorMath.Ink(_accent, ThemeHelper.PaletteFor(_dark).FolderRailBg, 3.0))) g.FillRectangle(bar, 0, P(8), P(3), Height - P(16));
                 }
-                Color fg = _active ? _accent : (ThemeHelper.PaletteFor(_dark).FolderRailFg);
+                Color fg = _active ? ColorMath.Ink(_accent, ThemeHelper.PaletteFor(_dark).FolderRailBg) : (ThemeHelper.PaletteFor(_dark).FolderRailFg);
                 // Shared per-DPI fonts (FontCache): never dispose.
                 TextRenderer.DrawText(g, _icon, FontCache.Get("Segoe UI Emoji", 16f, FontStyle.Regular, _dpi), new Rectangle(0, P(5), Width, P(26)), fg,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.Top | TextFormatFlags.NoPrefix);
@@ -510,7 +510,7 @@ namespace TelegArm.UI
                     var badge = new Rectangle(Width / 2 + P(5), P(3), bw, P(15));
                     using (var bb = new SolidBrush(_accent))
                     using (var pth = DrawHelper.RoundedRect(badge, P(7))) g.FillPath(bb, pth);
-                    TextRenderer.DrawText(g, t, bf, badge, Color.White,
+                    TextRenderer.DrawText(g, t, bf, badge, ColorMath.OnColor(_accent),
                         TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
                 }
             }

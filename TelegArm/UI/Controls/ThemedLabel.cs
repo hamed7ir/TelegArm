@@ -428,7 +428,7 @@ namespace TelegArm.UI.Controls
         {
             var p = ThemeHelper.Palette;
             var g = e.Graphics;
-            g.Clear(Backdrop(p));
+            WindowBackdrop.ClearBehind(g, this, Parent, ClientRectangle, p.Window);   // step 5.9: the parent's colour, or the backdrop
             string text = Text;
             if (text.Length == 0) return;
             Rectangle rc = ContentRect();

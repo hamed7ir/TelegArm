@@ -47,7 +47,7 @@ namespace TelegArm.UI
             {
                 using (var b = new SolidBrush(_accent)) g.FillEllipse(b, rect);
                 string ini = !string.IsNullOrEmpty(_switchOverlayName) ? DrawHelper.Initial(_switchOverlayName) : "?";
-                DrawHelper.DrawInitial(g, ini, FontCache.Get("Segoe UI", 36f, FontStyle.Bold, dpi), rect, Color.White);   // ink-centred (owner report 2026-10-14)
+                DrawHelper.DrawInitial(g, ini, FontCache.Get("Segoe UI", 36f, FontStyle.Bold, dpi), rect, ColorMath.OnColor(_accent));   // ink-centred (owner report 2026-10-14)
             }
             string title = "Switching to " + (_switchOverlayName ?? "account") + new string('.', _switchDotCount);
             TextRenderer.DrawText(g, title, FontCache.Get("Segoe UI", 13.5f, FontStyle.Bold, dpi), new Rectangle(0, cy + Px(30), _switchOverlay.Width, Px(34)),

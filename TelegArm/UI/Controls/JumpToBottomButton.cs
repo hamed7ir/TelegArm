@@ -136,7 +136,7 @@ namespace TelegArm.UI.Controls
                 g.DrawEllipse(p, circle);
 
             float cx = circle.X + d / 2f, cy = circle.Y + d / 2f;
-            using (var pen = new Pen(AccentColor, 2.2f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            using (var pen = new Pen(ColorMath.Ink(AccentColor, fill, 3.0), 2.2f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round })
                 g.DrawLines(pen, new[] { new PointF(cx - 6 * k, cy - 3 * k), new PointF(cx, cy + 4 * k), new PointF(cx + 6 * k, cy - 3 * k) });
 
             if (_count > 0)
@@ -146,7 +146,7 @@ namespace TelegArm.UI.Controls
                 var badge = BadgeRect(t, bf, dpi);
                 using (var bb = new SolidBrush(AccentColor))
                 using (var pth = DrawHelper.RoundedRect(badge, P(8))) g.FillPath(bb, pth);
-                TextRenderer.DrawText(g, t, bf, badge, Color.White,
+                TextRenderer.DrawText(g, t, bf, badge, ColorMath.OnColor(AccentColor),
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             }
         }

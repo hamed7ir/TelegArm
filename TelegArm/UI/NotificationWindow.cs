@@ -344,7 +344,7 @@ namespace TelegArm.UI
 
             if (more != null)
                 TextRenderer.DrawText(g, more, mf,
-                    new Rectangle(r.Width - pad - moreW, bodyTop + S(LineH), moreW, S(LineH)), _accent,
+                    new Rectangle(r.Width - pad - moreW, bodyTop + S(LineH), moreW, S(LineH)), ColorMath.Ink(_accent, _bg),
                     TextFormatFlags.Right | TextFormatFlags.Bottom | TextFormatFlags.NoPrefix);
         }
 
@@ -376,7 +376,7 @@ namespace TelegArm.UI
             if (_closeHot)
                 using (var b = new SolidBrush(ColorMath.WithAlpha(_accent, 40))) g.FillEllipse(b, box);
             int inset = Math.Max(S(4), box.Width / 3);
-            using (var p = new Pen(_closeHot ? _accent : _sub, Math.Max(1.4f, Dpi.F(1.4f, _dpi))))
+            using (var p = new Pen(_closeHot ? ColorMath.Ink(_accent, _bg, 3.0) : _sub, Math.Max(1.4f, Dpi.F(1.4f, _dpi))))
             {
                 p.StartCap = System.Drawing.Drawing2D.LineCap.Round;
                 p.EndCap = System.Drawing.Drawing2D.LineCap.Round;

@@ -97,10 +97,10 @@ namespace TelegArm.UI.Controls
             _seekR = new Rectangle(seekX, cy - P(6), Math.Max(P(40), (totR.X - P(6)) - seekX), P(12));
 
             // transport circles (dimmed when navigation isn't available)
-            DrawCircle(g, _prevR, CanPrev); DrawPrev(g, _prevR);
+            DrawCircle(g, _prevR, CanPrev); DrawPrev(g, _prevR, CanPrev);
             DrawCircle(g, _playR, true);
             if (_video != null && _video.IsPlaying) DrawPause(g, _playR); else DrawPlay(g, _playR);
-            DrawCircle(g, _nextR, CanNext); DrawNext(g, _nextR);
+            DrawCircle(g, _nextR, CanNext); DrawNext(g, _nextR, CanNext);
 
             long timeMs = _video != null ? _video.Time : 0;
             long lenMs = _video != null ? _video.Length : 0;
@@ -136,34 +136,34 @@ namespace TelegArm.UI.Controls
         }
 
         // The transport glyphs are drawn for the 30 px circle; they scale with it (k == 1 at 96).
-        private static void DrawPlay(Graphics g, Rectangle r)
+        private void DrawPlay(Graphics g, Rectangle r)
         {
             float k = r.Width / 30f, cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
-            using (var w = new SolidBrush(Color.White))
+            using (var w = new SolidBrush(ColorMath.OnColor(AccentColor)))
                 g.FillPolygon(w, new[] { new PointF(cx - 5 * k, cy - 7 * k), new PointF(cx + 7 * k, cy), new PointF(cx - 5 * k, cy + 7 * k) });
         }
 
-        private static void DrawPause(Graphics g, Rectangle r)
+        private void DrawPause(Graphics g, Rectangle r)
         {
             float k = r.Width / 30f, cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
-            using (var w = new SolidBrush(Color.White))
+            using (var w = new SolidBrush(ColorMath.OnColor(AccentColor)))
             { g.FillRectangle(w, cx - 5 * k, cy - 7 * k, 3.5f * k, 14 * k); g.FillRectangle(w, cx + 1.5f * k, cy - 7 * k, 3.5f * k, 14 * k); }
         }
 
-        private static void DrawPrev(Graphics g, Rectangle r)
+        private void DrawPrev(Graphics g, Rectangle r, bool enabled)
         {
             float k = r.Width / 30f, cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
-            using (var w = new SolidBrush(Color.White))
+            using (var w = new SolidBrush(ColorMath.OnColor(enabled ? AccentColor : DisabledColor)))
             {
                 g.FillRectangle(w, cx - 8 * k, cy - 6 * k, 2.5f * k, 12 * k);
                 g.FillPolygon(w, new[] { new PointF(cx + 6 * k, cy - 6 * k), new PointF(cx - 3 * k, cy), new PointF(cx + 6 * k, cy + 6 * k) });
             }
         }
 
-        private static void DrawNext(Graphics g, Rectangle r)
+        private void DrawNext(Graphics g, Rectangle r, bool enabled)
         {
             float k = r.Width / 30f, cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
-            using (var w = new SolidBrush(Color.White))
+            using (var w = new SolidBrush(ColorMath.OnColor(enabled ? AccentColor : DisabledColor)))
             {
                 g.FillPolygon(w, new[] { new PointF(cx - 6 * k, cy - 6 * k), new PointF(cx + 3 * k, cy), new PointF(cx - 6 * k, cy + 6 * k) });
                 g.FillRectangle(w, cx + 5.5f * k, cy - 6 * k, 2.5f * k, 12 * k);

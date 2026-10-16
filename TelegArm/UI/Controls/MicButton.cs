@@ -73,7 +73,7 @@ namespace TelegArm.UI.Controls
 
             Color bg = Parent != null ? Parent.BackColor
                        : ThemeHelper.Palette.MicButtonBg;
-            g.Clear(bg);
+            WindowBackdrop.ClearBehind(g, this, Parent, ClientRectangle, bg);   // step 5.9: the window backdrop when it is on
 
             float cx = Width / 2f, cy = Height / 2f;
             var red = ThemeHelper.Palette.RecordRed;
@@ -101,7 +101,7 @@ namespace TelegArm.UI.Controls
                 return;
             }
 
-            Color glyph = Enabled ? ThemeHelper.Palette.Accent
+            Color glyph = Enabled ? ThemeHelper.Palette.AccentGlyph
                                   : ThemeHelper.Palette.MicGlyphDisabled;
             if (Enabled && _hover)
                 using (var hb = new SolidBrush(ColorMath.WithAlpha(glyph, ThemeHelper.Palette.Dark ? 45 : 30)))

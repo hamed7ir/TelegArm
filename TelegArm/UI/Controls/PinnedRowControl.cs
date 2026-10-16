@@ -96,7 +96,7 @@ namespace TelegArm.UI.Controls
             Color hoverBg = ThemeHelper.PaletteFor(IsDark).PinnedRowHover;
             g.Clear(_hover ? hoverBg : baseBg);
 
-            using (var b = new SolidBrush(AccentColor))
+            using (var b = new SolidBrush(ColorMath.Ink(AccentColor, baseBg, 3.0)))
                 g.FillRectangle(b, P(12), P(9), P(3), Math.Max(P(4), Height - P(18)));
 
             int x = P(24), rightPad = P(12);
@@ -108,7 +108,7 @@ namespace TelegArm.UI.Controls
                                             | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
 
             // shared fonts: never dispose
-            TextRenderer.DrawText(g, _label, FontHelper.UiAt(8.25f, dpi, FontStyle.Bold), new Rectangle(x, P(6), cw, P(15)), AccentColor, baseFlags | TextFormatFlags.Left);
+            TextRenderer.DrawText(g, _label, FontHelper.UiAt(8.25f, dpi, FontStyle.Bold), new Rectangle(x, P(6), cw, P(15)), ColorMath.Ink(AccentColor, baseBg, 4.5), baseFlags | TextFormatFlags.Left);
 
             Color prevColor = ThemeHelper.PaletteFor(IsDark).PinnedRowPreview;
             bool rtl = IsRtl(_preview);

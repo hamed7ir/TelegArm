@@ -472,19 +472,27 @@ namespace TelegArm.UI
                     check(f.CustomChrome, "custom chrome active", AppForm.ChromeReason);
                     RECT wr; GetWindowRect(f.Handle, out wr);
                     var cl = f.RectangleToScreen(f.ClientRectangle);
-                    check(wr.Left == cl.Left && wr.Top == cl.Top && wr.Right == cl.Right && wr.Bottom == cl.Bottom, "window rect == client rect (WM_NCCALCSIZE)",
-                          Rectangle.FromLTRB(wr.Left, wr.Top, wr.Right, wr.Bottom) + " vs " + cl);
+                    if (f.UsesNativeEdges)
+                        check(wr.Top == cl.Top && cl.Left > wr.Left && cl.Right < wr.Right && cl.Bottom < wr.Bottom,
+                              "native edges: the client is the window minus Windows' side/bottom frame, flush at the top (WM_NCCALCSIZE)",
+                              Rectangle.FromLTRB(wr.Left, wr.Top, wr.Right, wr.Bottom) + " vs " + cl);
+                    else
+                        check(wr.Left == cl.Left && wr.Top == cl.Top && wr.Right == cl.Right && wr.Bottom == cl.Bottom, "window rect == client rect (WM_NCCALCSIZE)",
+                              Rectangle.FromLTRB(wr.Left, wr.Top, wr.Right, wr.Bottom) + " vs " + cl);
 
                     int W = f.ClientSize.Width, H = f.ClientSize.Height, g = f.Px(Gutter) / 2;
+                    // native edges: the side / bottom edges are points IN Windows' frame, just outside the client
+                    int fl = cl.Left - wr.Left, fr = wr.Right - cl.Right, fb = wr.Bottom - cl.Bottom;
+                    bool ne = f.UsesNativeEdges;
                     var cases = new[]
                     {
                         Tuple.Create("caption (title area)", new Point(W / 3, f.Bar.Height / 2), HTCAPTION),
                         Tuple.Create("top edge", new Point(W / 3, g), HTTOP),
                         Tuple.Create("top-left corner", new Point(1, 1), HTTOPLEFT),
-                        Tuple.Create("left edge", new Point(g, H / 2), HTLEFT),
-                        Tuple.Create("right edge", new Point(W - 1 - g, H / 2), HTRIGHT),
-                        Tuple.Create("bottom edge", new Point(W / 2, H - 1 - g), HTBOTTOM),
-                        Tuple.Create("bottom-right corner", new Point(W - 2, H - 2), HTBOTTOMRIGHT),
+                        Tuple.Create("left edge", ne ? new Point(-fl / 2 - 1, H / 2) : new Point(g, H / 2), HTLEFT),
+                        Tuple.Create("right edge", ne ? new Point(W + fr / 2, H / 2) : new Point(W - 1 - g, H / 2), HTRIGHT),
+                        Tuple.Create("bottom edge", ne ? new Point(W / 2, H + fb / 2) : new Point(W / 2, H - 1 - g), HTBOTTOM),
+                        Tuple.Create("bottom-right corner", ne ? new Point(W + fr / 2, H + fb / 2) : new Point(W - 2, H - 2), HTBOTTOMRIGHT),
                         Tuple.Create("content", new Point(W / 2, H / 2), HTCLIENT),
                     };
                     foreach (var c in cases)
@@ -493,6 +501,18 @@ namespace TelegArm.UI
                         int hit = (int)SendMessage(f.Handle, 0x0084, IntPtr.Zero, (IntPtr)((s.Y << 16) | (s.X & 0xFFFF)));
                         check(hit == c.Item3, "hit-test " + c.Item1, "got " + hit + ", want " + c.Item3);
                     }
+                    // What DWM really shows (corners, border, no side bars): the screen around the window, for the eye.
+                    try
+                    {
+                        f.Activate(); Pump(300);
+                        var area = Rectangle.Inflate(Rectangle.FromLTRB(wr.Left, wr.Top, wr.Right, wr.Bottom), f.Px(12), f.Px(12));
+                        using (var shot = new Bitmap(area.Width, area.Height))
+                        {
+                            using (var sg = Graphics.FromImage(shot)) sg.CopyFromScreen(area.Location, Point.Empty, area.Size);
+                            shot.Save(Path.ChangeExtension(file, ".window.png"));
+                        }
+                    }
+                    catch (Exception ex) { log.AppendLine("INFO  screen capture failed: " + ex.Message); }
                     int barHit = (int)SendMessage(f.Bar.Handle, 0x0084, IntPtr.Zero, IntPtr.Zero);
                     check(barHit == -1, "title bar answers HTTRANSPARENT", "got " + barHit);
 
@@ -518,6 +538,7 @@ namespace TelegArm.UI
                     ProbeLiveScale(f, check, s => log.AppendLine("INFO  " + s + ": " + where()), s => log.AppendLine("INFO  " + s));   // step 3.8b: the interface scale, live and back
                     ProbeCreateOnOtherDpi(check, s => log.AppendLine("INFO  " + s));
                     ProbeKeyboards(check);   // step 4.1: WTC 4.4.9's button types
+                    ProbeColours(f, check);  // step 5.2: the colour picker and the swatch rows
                     check(TelegramService.CanRaiseOwnUpdates, "WTC: Client.RaiseOwnUpdates(UpdatesBase) exists (a join's own updates reach the UpdateManager)", null);   // step 4.1
                     DpiOverlay.RunProbe(f, check, s => log.AppendLine("INFO  " + s), Path.ChangeExtension(file, ".overlay.png"));   // step 3.9
                     DialogProbe.Run(f, check, s => log.AppendLine("INFO  " + s));   // step 1.4: the dialogs' keyboard tests
@@ -577,6 +598,49 @@ namespace TelegArm.UI
             for (int i = 0; i < kitHome.Length && i < f._chatKit.Count; i++)
                 check(f._chatKit[i].Ctl.Bounds == kitHome[i], "chat rows back home: " + f._chatKit[i].Name + " on the same pixels",
                       f._chatKit[i].Ctl.Bounds + " vs " + kitHome[i]);
+        }
+
+        /// <summary>Step 5.2: the colour picker (hex in, HSV round trip, the clamp) and the swatch rows (Custom, base presets).</summary>
+        private static void ProbeColours(DesignGalleryForm f, Action<bool, string, string> check)
+        {
+            var blue = ThemeHelper.Palette.AccentSwatchBlue;
+            using (var panel = ColorPickerDialog.ProbePanel(blue, null))
+            {
+                f.Controls.Add(panel); panel.Size = new Size(f.Px(400), f.Px(290)); Pump(100);
+                check(panel.Chosen.ToArgb() == blue.ToArgb(), "picker: opens on the initial colour", ColorMath.Hex(panel.Chosen));
+                check(panel.HexBox.Text == ColorMath.Hex(blue), "picker: the hex box shows it", panel.HexBox.Text);
+                panel.HexBox.Text = "#16A34A"; Pump(50);
+                check(ColorMath.Hex(panel.Chosen) == "#16A34A", "picker: typing a hex colour selects it", ColorMath.Hex(panel.Chosen));
+                panel.HexBox.Text = "#16A3"; Pump(50);
+                check(ColorMath.Hex(panel.Chosen) == "#16A34A", "picker: half-typed hex changes nothing", ColorMath.Hex(panel.Chosen));
+                f.Controls.Remove(panel);
+            }
+            bool trip = true; string bad = null;
+            foreach (var c in new[] { blue, ThemeHelper.Palette.AccentSwatchOrange, Palette.DarkBasePresets[1], Palette.LightBasePresets[0], Color.Black, Color.White })
+            {
+                float h, s, v; ColorPickerPanel.ToHsv(c, out h, out s, out v);
+                var back = ColorPickerPanel.FromHsv(h, s, v);
+                if (back.ToArgb() != c.ToArgb()) { trip = false; bad = ColorMath.Hex(c) + " -> " + ColorMath.Hex(back); }
+            }
+            check(trip, "picker: RGB -> HSV -> RGB returns every test colour exactly", bad);
+            using (var dark = ColorPickerDialog.ProbePanel(Color.White, x => Palette.ClampBase(x, true)))
+                check(dark.Applied.ToArgb() == Palette.ClampBase(Color.White, true).ToArgb(), "picker: a dark-base pick applies clamped", ColorMath.Hex(dark.Applied));
+
+            var row = new SwatchRow("Accent colour", null);
+            check(!row.SelectedAccent.HasValue, "accent row: nothing set = Follow Windows", null);
+            bool raised = false; row.Changed += (s, e) => raised = true;
+            var pick = ThemeHelper.Palette.AccentSwatchTeal;
+            row.SetCustom(Color.FromArgb(pick.R / 2, pick.G, pick.B / 2));
+            check(raised && row.SelectedAccent.HasValue && row.SelectedAccent.Value.ToArgb() == Color.FromArgb(pick.R / 2, pick.G, pick.B / 2).ToArgb(),
+                  "accent row: SetCustom selects the custom colour and raises Changed", row.SelectedAccent.HasValue ? ColorMath.Hex(row.SelectedAccent.Value) : "null");
+            row.Dispose();
+            var black = SwatchRow.ForBase("Dark theme", true, Color.Black);
+            check(black.SelectedAccent.HasValue && black.SelectedAccent.Value.ToArgb() == Color.Black.ToArgb() && black.CustomColor == null,
+                  "base row: true black is a preset, not a custom colour", null);
+            black.Dispose();
+            var dflt = SwatchRow.ForBase("Light theme", false, Palette.DefaultLightBase);
+            check(!dflt.SelectedAccent.HasValue, "base row: the default base reads as Default (null)", null);
+            dflt.Dispose();
         }
 
         /// <summary>Step 4.1: WTelegramClient 4.4.9 rewrote the keyboard classes (one button class, the kind in its type). Every
@@ -701,10 +765,21 @@ namespace TelegArm.UI
             // The gutter: WM_NCHITTEST goes to the deepest window under the point, so ask THAT one (a hit test sent
             // straight to the form, as above, cannot see a child stealing the edge).
             int e = f.Padding.Left, H = f.ClientSize.Height;
-            check(e == f.Px(EdgeWidth), "the gutter is " + EdgeWidth + " logical px (" + (TouchCapable ? "touch-capable" : "no touch") + ")", "padding " + e + " px");
-            int inEdge = DeepHit(f, new Point(e - 1, H / 2)), pastEdge = DeepHit(f, new Point(e + 1, H / 2));
-            check(inEdge == HTLEFT, "the gutter's inner pixel is a resize edge for the window that is really there", "got " + inEdge);
-            check(pastEdge == HTCLIENT, "one pixel past the gutter is content", "got " + pastEdge);
+            if (f.UsesNativeEdges)
+            {
+                // owner 2026-10-15: no gutter — the content reaches the window's edge; Windows' invisible frame resizes
+                check(e == 0, "native edges: no gutter, the content reaches the window's edge", "padding " + e + " px");
+                int inFrame = DeepHit(f, new Point(-2, H / 2)), inside = DeepHit(f, new Point(1, H / 2));
+                check(inFrame == HTLEFT, "native edges: just outside the content is Windows' resize frame", "got " + inFrame);
+                check(inside == HTCLIENT, "native edges: the content's first pixel is content", "got " + inside);
+            }
+            else
+            {
+                check(e == f.Px(EdgeWidth), "the gutter is " + EdgeWidth + " logical px (" + (TouchCapable ? "touch-capable" : "no touch") + ")", "padding " + e + " px");
+                int inEdge = DeepHit(f, new Point(e - 1, H / 2)), pastEdge = DeepHit(f, new Point(e + 1, H / 2));
+                check(inEdge == HTLEFT, "the gutter's inner pixel is a resize edge for the window that is really there", "got " + inEdge);
+                check(pastEdge == HTCLIENT, "one pixel past the gutter is content", "got " + pastEdge);
+            }
 
             // Restore keeps the place WINDOWS chose (Win+Shift+Arrow, a monitor change, a drag down from maximised).
             var normal = f.Bounds;

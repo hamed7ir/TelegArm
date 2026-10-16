@@ -23,6 +23,13 @@ namespace TelegArm.SelfTest
             Add(t, "theme: an accent override wins everywhere and SetAccent raises once, palette already rebuilt", OverridePrecedence);
             Add(t, "theme: accent notifications debounce on the TRAILING edge; an override ignores them", TrailingDebounce);
             Add(t, "theme: PaletteFor(mode) is the cached palette for the current mode and a golden build for the other (step 1.7)", PaletteForModes);
+            Add(t, "base: the default base (or none) builds today's palette, every token, both modes", BaseDefaultIsIdentity);
+            Add(t, "base: true black grounds the chat at 0, keeps the surface steps and 4.5:1 text", BaseTrueBlack);
+            Add(t, "base: a warm white becomes the paper; text, status colours, accent tokens and out-bubble ink stay", BaseWarmWhite);
+            Add(t, "base: an out-of-range base is clamped into its mode (a white dark base stays dark)", BaseClamped);
+            Add(t, "theme: SetBase rebuilds the palette of that mode (current and other), and null restores it", SetBaseRebuilds);
+            Add(t, "bubble: a custom out-bubble colour fills the bubble and inks it by ITS contrast (yellow accent + graphite = white ink)", OutBubbleCustom);
+            Add(t, "bubble: a white accent's bubbles stay apart from a light chat (>= 1.2:1); a dark-mode custom bubble is softened", OutBubbleSeparation);
         }
 
         private static void PaletteForModes()
@@ -43,6 +50,104 @@ namespace TelegArm.SelfTest
                 Check.Equal(Color.FromArgb(0x40, 0xA7, 0xE3).ToArgb(), ThemeHelper.PaletteFor(!ThemeHelper.Palette.Dark).Accent.ToArgb(), "an accent change rebuilds the other mode");
             }
             finally { ThemeHelper.SetAccent(null); }
+        }
+
+        private static void BaseDefaultIsIdentity()
+        {
+            foreach (bool dark in new[] { false, true })
+            {
+                var plain = Palette.Build(dark, Magenta);
+                foreach (var b in new Color?[] { null, dark ? Palette.DefaultDarkBase : Palette.DefaultLightBase })
+                {
+                    var got = Palette.Build(dark, Magenta, b);
+                    foreach (var pi in typeof(Palette).GetProperties())
+                        if (pi.PropertyType == typeof(Color))
+                            Check.Equal(((Color)pi.GetValue(plain, null)).ToArgb(), ((Color)pi.GetValue(got, null)).ToArgb(),
+                                        (dark ? "dark " : "light ") + pi.Name + (b.HasValue ? " (default base)" : " (no base)"));
+                }
+            }
+        }
+
+        private static void BaseTrueBlack()
+        {
+            var d = Palette.Build(true, Magenta);
+            var k = Palette.Build(true, Magenta, Color.Black);
+            Same(Color.Black, k.ChatBg, "the chat background is black");
+            Check.True(k.ChatBg.R <= k.Window.R && k.Window.R < k.ListBg.R && k.ListBg.R < k.Card.R && k.Card.R < k.BubbleIn.R,
+                       "surfaces keep their order: chat <= window < list < card < bubble");
+            Check.True(k.Card.R < d.Card.R && k.BubbleIn.R < d.BubbleIn.R, "and are darker than graphite's");
+            foreach (var pair in new[] { new[] { k.Text, k.Card }, new[] { k.ListName, k.ListBg }, new[] { k.BubbleInText, k.BubbleIn }, new[] { k.Text, k.Window } })
+                Check.True(ColorMath.Contrast(pair[0], pair[1]) >= 4.5, "text contrast " + ColorMath.Contrast(pair[0], pair[1]).ToString("0.0"));
+            Same(d.Accent, k.Accent, "the accent is untouched");
+            Same(d.Danger, k.Danger, "status colours are untouched");
+            Same(d.BubbleOutText, k.BubbleOutText, "out-bubble ink is untouched");
+            Same(ColorMath.Mix(k.Surface, Magenta, 0.18f), k.AccentSoft, "AccentSoft is re-derived from the new surface");
+        }
+
+        private static void BaseWarmWhite()
+        {
+            var warm = Color.FromArgb(255, 244, 224);
+            var l = Palette.Build(false, Magenta);
+            var w = Palette.Build(false, Magenta, warm);
+            Same(warm, w.ListBg, "white surfaces become the base");
+            Same(warm, w.Card, "cards too");
+            Check.True(w.Window.B < l.Window.B && w.Window.R == l.Window.R, "a light grey is tinted, not replaced");
+            Check.True(ColorMath.Contrast(w.Text, w.Window) >= 4.5 && ColorMath.Contrast(w.BubbleInText, w.BubbleIn) >= 4.5, "text keeps 4.5:1");
+            Same(l.Danger, w.Danger, "Danger untouched"); Same(l.OnlineDot, w.OnlineDot, "OnlineDot untouched");
+            Same(l.Accent, w.Accent, "the accent untouched"); Same(l.BubbleOutText, w.BubbleOutText, "out-bubble ink untouched");
+            Same(l.ServicePillBg, w.ServicePillBg, "translucent overlays untouched");
+            Same(ColorMath.Ink(Magenta, w.Surface), w.AccentFg, "AccentFg is re-derived against the new surface");
+        }
+
+        private static void BaseClamped()
+        {
+            var k = Palette.Build(true, Magenta, Color.White);
+            Same(Color.FromArgb(Palette.DarkBaseMax, Palette.DarkBaseMax, Palette.DarkBaseMax), k.Base, "a white dark base is clamped");
+            Check.True(ColorMath.Contrast(k.Text, k.ChatBg) >= 4.5, "and the dark theme stays readable");
+            var l = Palette.Build(false, Magenta, Color.Black);
+            Same(Color.FromArgb(Palette.LightBaseMin, Palette.LightBaseMin, Palette.LightBaseMin), l.Base, "a black light base is clamped");
+            Check.True(ColorMath.Contrast(l.Text, l.ListBg) >= 4.5, "and the light theme stays readable");
+        }
+
+        private static void SetBaseRebuilds()
+        {
+            bool cur = ThemeHelper.Palette.Dark;
+            try
+            {
+                ThemeHelper.SetBase(cur, cur ? Color.Black : Color.FromArgb(255, 244, 224));
+                Same(cur ? Color.Black : Color.FromArgb(255, 244, 224), ThemeHelper.Palette.Base, "the current mode's palette took the base");
+                ThemeHelper.SetBase(!cur, !cur ? Color.Black : Color.FromArgb(255, 244, 224));
+                Same(!cur ? Color.Black : Color.FromArgb(255, 244, 224), ThemeHelper.PaletteFor(!cur).Base, "the other mode's too");
+            }
+            finally { ThemeHelper.SetBase(true, null); ThemeHelper.SetBase(false, null); }
+            Same(cur ? Palette.DefaultDarkBase : Palette.DefaultLightBase, ThemeHelper.Palette.Base, "null restores the default");
+            Same(!cur ? Palette.DefaultDarkBase : Palette.DefaultLightBase, ThemeHelper.PaletteFor(!cur).Base, "in both modes");
+        }
+
+        private static void OutBubbleCustom()
+        {
+            var yellow = Color.FromArgb(245, 196, 0);
+            var plain = Palette.Build(false, yellow);
+            Check.True(plain.BubbleOutText.R < 60, "yellow accent alone: dark out-bubble ink");
+            var graphite = Palette.OutBubblePresets[4];
+            var p = Palette.Build(false, yellow, null, graphite);
+            Same(graphite, p.BubbleOut, "the bubble is the custom colour");
+            Same(Color.White, p.BubbleOutText, "and its ink is white again (graphite's contrast), not the yellow accent's dark ink");
+            Same(Color.FromArgb(p.BubbleOutTime.A, 255, 255, 255), p.BubbleOutTime, "time ink follows, alpha kept");
+            Same(Color.Black.R == 0 ? ColorMath.OnColor(graphite) : Color.Empty, p.OnBubbleOut, "OnBubbleOut = OnColor(bubble)");
+            Same(plain.Accent, p.Accent, "the accent itself is untouched");
+            var none = Palette.Build(false, Magenta, null, null);
+            Same(Palette.Build(false, Magenta).BubbleOut, none.BubbleOut, "no custom colour = the accent, as before");
+        }
+
+        private static void OutBubbleSeparation()
+        {
+            var w = Palette.Build(false, Color.White);
+            Check.True(ColorMath.Contrast(w.BubbleOut, w.ChatBg) >= 1.2, "white accent: bubble vs chat " + ColorMath.Contrast(w.BubbleOut, w.ChatBg).ToString("0.00"));
+            Same(ColorMath.OnColor(w.BubbleOut), w.BubbleOutText, "and inked by the separated bubble");
+            var mint = Palette.OutBubblePresets[0];
+            var d = Palette.Build(true, Magenta, null, mint);
+            Same(ColorMath.Mix(mint, d.ChatBg, 0.25f), d.BubbleOut, "dark mode softens a custom bubble by 25% toward the chat");
         }
 
         private static void Add(List<KeyValuePair<string, Action>> t, string name, Action a) { t.Add(new KeyValuePair<string, Action>(name, a)); }
@@ -73,7 +178,7 @@ namespace TelegArm.SelfTest
                 Same(Color.FromArgb(220, 255, 255, 255), p.BubbleOutTime, m + "BubbleOutTime");
                 Same(Color.FromArgb(110, Magenta), p.SelectionIn, m + "SelectionIn");
                 Same(Color.FromArgb(95, 255, 255, 255), p.SelectionOut, m + "SelectionOut");
-                Same(Magenta, p.LinkIn, m + "LinkIn");
+                Same(ColorMath.Ink(Magenta, p.BubbleIn), p.LinkIn, m + "LinkIn (step 5.3: 4.5:1 on the incoming bubble)");
                 Same(Color.FromArgb(235, 255, 255, 255), p.LinkOut, m + "LinkOut");
                 Same(dark ? Color.FromArgb(70, 0, 0, 0) : Color.FromArgb(26, 0, 0, 0), p.ServicePillBg, m + "ServicePillBg");
                 Same(dark ? Color.FromArgb(190, 190, 196) : Color.FromArgb(105, 105, 110), p.ServicePillText, m + "ServicePillText");

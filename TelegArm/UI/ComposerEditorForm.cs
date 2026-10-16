@@ -413,7 +413,7 @@ namespace TelegArm.UI
             {
                 var p = ThemeHelper.Palette;
                 var g = e.Graphics;
-                g.Clear(Parent != null ? Parent.BackColor : p.Window);
+                WindowBackdrop.ClearBehind(g, this, Parent, ClientRectangle, p.Window);   // step 5.9
                 var r = new Rectangle(0, 0, Width - 1, Height - 1);
                 int dpi = Dpi.Of(this);
                 if (Enabled && (_hot || _down))

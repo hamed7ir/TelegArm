@@ -145,9 +145,14 @@ namespace TelegArm.UI
 
         // ── Login + initial load ─────────────────────────────────────────────
 
+        /// <summary>The LIVE rig only (ShotRig.RunLive): the demo window is shown with no session — no resume, so no
+        /// fall-back to the login window. Never set anywhere else.</summary>
+        internal static bool DemoNoSession;
+
         protected override async void OnLoad(EventArgs e)
         {
             base.OnLoad(e);
+            if (DemoNoSession) return;
             PerfLog.Boot("MainForm.OnLoad → ResumeSessionAsync");
             await ResumeSessionAsync();
 

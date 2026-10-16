@@ -75,7 +75,8 @@ namespace TelegArm.UI.Controls
             Color accent = pal.Accent;
             int dpi = _modern ? Dpi.Of(this) : Dpi.Logical;
             Color pbg = Parent != null ? Parent.BackColor : pal.DialogPanelBg;
-            g.Clear(pbg);   // so the rounded corners reveal the form behind, not a square
+            // so the rounded corners reveal the form behind, not a square (step 5.9: the window backdrop when it is on)
+            WindowBackdrop.ClearBehind(g, this, Parent, ClientRectangle, pal.DialogPanelBg);
 
             Color fill, text; Color border = Color.Empty;
             switch (_kind)
@@ -92,9 +93,9 @@ namespace TelegArm.UI.Controls
                     fill = pal.RoundedBtnNeutralFill;
                     text = pal.RoundedBtnNeutralText; break;
                 case RoundedButtonKind.Secondary:
-                    fill = pbg; text = _modern ? pal.AccentFg : accent; border = accent; break;
+                    fill = pbg; text = _modern ? pal.AccentFg : accent; border = _modern ? pal.AccentGlyph : accent; break;
                 default:   // Primary
-                    fill = accent; text = _modern ? pal.OnAccent : Color.White; break;
+                    fill = accent; text = pal.OnAccent; break;
             }
 
             if (!Enabled)

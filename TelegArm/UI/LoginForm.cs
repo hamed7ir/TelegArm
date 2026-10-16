@@ -633,7 +633,7 @@ namespace TelegArm.UI
                 using (var path = DrawHelper.RoundedRect(new Rectangle(0, 0, Width - 1, Height - 1), Dpi.Px(8, dpi)))
                 {
                     using (var b = new SolidBrush(p.Card)) g.FillPath(b, path);
-                    using (var pen = new Pen(focused ? p.Accent : p.Divider, focused ? Dpi.F(1.5f, dpi) : 1f)) g.DrawPath(pen, path);
+                    using (var pen = new Pen(focused ? p.AccentGlyph : p.Divider, focused ? Dpi.F(1.5f, dpi) : 1f)) g.DrawPath(pen, path);
                 }
                 if (SeparatorX > 0)
                     using (var pen = new Pen(p.Divider, Dpi.F(1.6f, dpi)))

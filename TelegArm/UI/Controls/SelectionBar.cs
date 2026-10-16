@@ -84,8 +84,8 @@ namespace TelegArm.UI.Controls
             using (var sf = new StringFormat { LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter })
                 g.DrawString(text, f, b, new RectangleF(P(16), 0, _fwdR.X - P(24), h), sf);
 
-            DrawCircle(g, _fwdR); DrawForward(g, _fwdR);
-            DrawCircle(g, _closeR); DrawClose(g, _closeR);
+            DrawCircle(g, _fwdR); DrawForward(g, _fwdR, ColorMath.OnColor(AccentColor));
+            DrawCircle(g, _closeR); DrawClose(g, _closeR, ColorMath.OnColor(AccentColor));
         }
 
         private void DrawCircle(Graphics g, Rectangle r)
@@ -94,20 +94,20 @@ namespace TelegArm.UI.Controls
         }
 
         // The glyphs are drawn for the 30 px circle; they scale with it (k == 1 at 96).
-        private static void DrawForward(Graphics g, Rectangle r)
+        private static void DrawForward(Graphics g, Rectangle r, Color ink)
         {
             float k = r.Width / 30f, cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
-            using (var pen = new Pen(Color.White, 2f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+            using (var pen = new Pen(ink, 2f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
             {
                 g.DrawLine(pen, cx - 7 * k, cy, cx + 6 * k, cy);
                 g.DrawLines(pen, new[] { new PointF(cx + 1 * k, cy - 5 * k), new PointF(cx + 6 * k, cy), new PointF(cx + 1 * k, cy + 5 * k) });
             }
         }
 
-        private static void DrawClose(Graphics g, Rectangle r)
+        private static void DrawClose(Graphics g, Rectangle r, Color ink)
         {
             float k = r.Width / 30f, cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
-            using (var pen = new Pen(Color.White, 2f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            using (var pen = new Pen(ink, 2f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round })
             {
                 g.DrawLine(pen, cx - 5 * k, cy - 5 * k, cx + 5 * k, cy + 5 * k);
                 g.DrawLine(pen, cx + 5 * k, cy - 5 * k, cx - 5 * k, cy + 5 * k);

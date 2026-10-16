@@ -63,6 +63,7 @@ namespace TelegArm.UI
             rows.Add(Sep());
             rows.Add(Row("⚙", "Settings", OpenSettings));
             rows.Add(Row("🎨", "Appearance…", OpenAppearanceSettings));   // 2.7b: Settings, on the Appearance page
+            rows.Add(Row("🖌", "Theme & accent ▸", ShowThemeQuickMenu));   // step 5.2: the quick menu (DF's Theme ▸ / Accent ▸)
             rows.Add(Toggle("🌙", "Night Mode", () => ThemeHelper.IsDark, ToggleNightMode));
             rows.Add(Sep());
             rows.Add(Row("ℹ", "About TelegArm", ShowAbout));   // "Sticker engine…" moved into Settings → General
@@ -181,6 +182,78 @@ namespace TelegArm.UI
             Color fg = ThemeHelper.PaletteFor(_dark).DrawerFg;
             string text = _replyPreview ?? "";
             EmojiRenderer.DrawLine(g, text, FontHelper.ForAt(text, 9.5f, WindowDpiValue), fg, rect);
+        }
+
+        // ── Step 5.2: the drawer's quick theme + accent menu (ported from DroidFinestra's Theme ▸ / Accent ▸, one row here) ──
+
+        private static readonly Dictionary<long, Bitmap> _swatchIcons = new Dictionary<long, Bitmap>();
+
+        /// <summary>A swatch disc for a menu's icon slot, cached by colour and pixel size (a menu never disposes it).</summary>
+        private static Bitmap SwatchIcon(Color c, int size)
+        {
+            long key = ((long)(c.ToArgb() & 0xFFFFFF) << 16) | (uint)size;
+            Bitmap bmp;
+            if (_swatchIcons.TryGetValue(key, out bmp)) return bmp;
+            bmp = new Bitmap(size, size);
+            using (var g = Graphics.FromImage(bmp))
+            {
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                int inset = Math.Max(1, size / 8);
+                var r = new Rectangle(inset, inset, size - 2 * inset - 1, size - 2 * inset - 1);
+                using (var b = new SolidBrush(c)) g.FillEllipse(b, r);
+                using (var pen = new Pen(ColorMath.WithAlpha(ColorMath.OnColor(c), 90))) g.DrawEllipse(pen, r);
+            }
+            _swatchIcons[key] = bmp;
+            return bmp;
+        }
+
+        /// <summary>System / Light / Dark, then Follow Windows, the fixed accents and Custom…, the current ones checked.
+        /// Opens at the cursor (the drawer has closed by now); applies live and saves, like Settings.</summary>
+        private void ShowThemeQuickMenu()
+        {
+            var menu = new ThemedContextMenuStrip { FontPt = 10.5f };
+            int size = Dpi.Px(MenuIcons.IconSize, Dpi.ForPoint(Cursor.Position));
+            var mode = ThemeHelper.Mode;
+            foreach (var m in new[] { ThemeMode.System, ThemeMode.Light, ThemeMode.Dark })
+            {
+                var mm = m;
+                var it = new ToolStripMenuItem(mm == ThemeMode.System ? "Follow Windows theme" : mm == ThemeMode.Light ? "Light" : "Dark") { Checked = mode == mm };
+                it.Click += (s, e) => SetThemeMode(mm);
+                menu.Items.Add(it);
+            }
+            menu.Items.Add(new ToolStripSeparator());
+            var cur = ThemeHelper.AccentOverride;
+            var follow = new ToolStripMenuItem("Follow Windows accent") { Checked = !cur.HasValue, Image = SwatchIcon(ThemeHelper.ReadWindowsAccent(), size) };
+            follow.Click += (s, e) => ApplyQuickAccent(null);
+            menu.Items.Add(follow);
+            var names = new[] { "Telegram blue", "Violet", "Magenta", "Pink", "Red", "Orange", "Green", "Teal" };
+            var accents = SwatchRow.Accents;
+            bool matched = !cur.HasValue;
+            for (int i = 0; i < accents.Length; i++)
+            {
+                var c = accents[i];
+                bool on = cur.HasValue && cur.Value.ToArgb() == c.ToArgb();
+                matched |= on;
+                var it = new ToolStripMenuItem(i < names.Length ? names[i] : ColorMath.Hex(c)) { Checked = on, Image = SwatchIcon(c, size) };
+                it.Click += (s, e) => ApplyQuickAccent(c);
+                menu.Items.Add(it);
+            }
+            var custom = new ToolStripMenuItem("Custom…") { Checked = !matched, Image = !matched ? SwatchIcon(cur.Value, size) : null };
+            custom.Click += (s, e) =>
+            {
+                var c = ColorPickerDialog.Pick(this, "Accent colour", ThemeHelper.Palette.Accent);
+                if (c.HasValue) ApplyQuickAccent(c.Value);
+            };
+            menu.Items.Add(custom);
+            menu.Closed += (s, e) => BeginInvoke((Action)menu.Dispose);
+            menu.ShowAt(this, PointToClient(Cursor.Position));
+        }
+
+        private static void ApplyQuickAccent(Color? c)
+        {
+            ThemeHelper.SetAccent(c);
+            AppSettings.Instance.AccentColor = ThemeHelper.FormatAccent(c);
+            AppSettings.Instance.Save();
         }
 
         // Drawer row builders: each action closes the drawer first, then runs deferred.
@@ -470,7 +543,7 @@ namespace TelegArm.UI
                     }
 
                     Color danger = ThemeHelper.Palette.Danger;
-                    Color glyphC = row.IsDanger ? danger : _accent;
+                    Color glyphC = row.IsDanger ? danger : ThemeHelper.PaletteFor(_dark).AccentGlyph;
                     var gr = new Rectangle(P(16), r.Y, P(30), r.Height);
                     // Render the glyph via the Noto emoji pack (consistent + crisp on RT). The old font-char
                     // path substituted an UGLY system emoji glyph on RT (like the hamburger did). Fall back to
@@ -516,7 +589,7 @@ namespace TelegArm.UI
                     g.FillPath(track, p);
                 int inset = P(3), d = r.Height - 2 * inset;   // knob inset (3 logical) on every side; d = 14 at 96, as before
                 int kx = on ? r.Right - d - inset : r.X + inset;
-                using (var kb = new SolidBrush(Color.White))
+                using (var kb = new SolidBrush(on ? ColorMath.OnColor(_accent) : Color.White))
                     g.FillEllipse(kb, kx, r.Y + inset, d, d);
             }
 

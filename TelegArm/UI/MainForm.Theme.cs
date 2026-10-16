@@ -92,7 +92,7 @@ namespace TelegArm.UI
         /// <summary>Pushes the current accent/dark state into the custom-painted controls.</summary>
         private void RefreshThemedControls()
         {
-            if (_hamburger != null) { _hamburger.ForeColor = _accent; _hamburger.Invalidate(); }   // repaint the drawn icon with the current accent
+            if (_hamburger != null) { _hamburger.ForeColor = ThemeHelper.PaletteFor(_dark).AccentGlyph; _hamburger.Invalidate(); }   // repaint the drawn icon with the current accent
             if (_chatSearchBtn != null) _chatSearchBtn.Invalidate();   // INCHAT-SEARCH: repaint the drawn magnifier with the current accent
             if (_chatMenuBtn != null)
             {

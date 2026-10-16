@@ -84,8 +84,9 @@ namespace TelegArm.UI.Controls
 
             float cx = Width / 2f;
             float cy = Height / 2f;
-            using (var white = new SolidBrush(Color.White))
-            using (var pen = new Pen(Color.White, 2f * k))
+            Color ink = _active ? ThemeHelper.Palette.OnAccent : Color.White;   // 5.3: ink on the accent fill
+            using (var white = new SolidBrush(ink))
+            using (var pen = new Pen(ink, 2f * k))
             {
                 switch (_icon)
                 {
@@ -143,7 +144,7 @@ namespace TelegArm.UI.Controls
 
                     case MediaButtonIcon.Forward:
                         // Right-pointing arrow (shaft + head).
-                        using (var p2 = new Pen(Color.White, 2f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+                        using (var p2 = new Pen(ink, 2f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
                         {
                             g.DrawLine(p2, cx - 7 * k, cy, cx + 6 * k, cy);
                             g.DrawLines(p2, new[] { new PointF(cx + 1 * k, cy - 5 * k), new PointF(cx + 6 * k, cy), new PointF(cx + 1 * k, cy + 5 * k) });
@@ -151,7 +152,7 @@ namespace TelegArm.UI.Controls
                         break;
 
                     case MediaButtonIcon.Close:
-                        using (var p3 = new Pen(Color.White, 2f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                        using (var p3 = new Pen(ink, 2f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round })
                         {
                             g.DrawLine(p3, cx - 5 * k, cy - 5 * k, cx + 5 * k, cy + 5 * k);
                             g.DrawLine(p3, cx + 5 * k, cy - 5 * k, cx - 5 * k, cy + 5 * k);

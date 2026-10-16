@@ -93,7 +93,7 @@ namespace TelegArm.UI.Controls
                 using (var b = new SolidBrush(AccentColor))
                 using (var path = DrawHelper.RoundedRect(_btnRect, P(8)))
                     g.FillPath(b, path);
-                TextRenderer.DrawText(g, _text, FontHelper.ForAt(_text, 10f, dpi, FontStyle.Bold), _btnRect, Color.White,
+                TextRenderer.DrawText(g, _text, FontHelper.ForAt(_text, 10f, dpi, FontStyle.Bold), _btnRect, ColorMath.OnColor(AccentColor),
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter
                     | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
             }

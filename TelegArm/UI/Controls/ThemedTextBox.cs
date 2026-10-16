@@ -196,14 +196,14 @@ namespace TelegArm.UI.Controls
             var p = ThemeHelper.Palette;
             var g = e.Graphics;
             int dpi = Dpi.Of(this);
-            g.Clear(Parent != null ? Parent.BackColor : p.Window);
+            WindowBackdrop.ClearBehind(g, this, Parent, ClientRectangle, p.Window);   // step 5.9: the rounded frame's corners
             g.SmoothingMode = SmoothingMode.AntiAlias;
             bool focused = _inner.Focused && _inputEnabled;
             using (var path = DrawHelper.RoundedRect(Frame, Dpi.Px(Radius, dpi)))
             {
                 // Disabled: the flat window colour inside a plain hairline — visibly not a field you can type into.
                 using (var b = new SolidBrush(_inputEnabled ? p.Card : p.Window)) g.FillPath(b, path);
-                using (var pen = new Pen(focused ? p.Accent : p.Divider, focused ? Dpi.F(1.5f, dpi) : 1f)) g.DrawPath(pen, path);
+                using (var pen = new Pen(focused ? p.AccentGlyph : p.Divider, focused ? Dpi.F(1.5f, dpi) : 1f)) g.DrawPath(pen, path);
             }
         }
 

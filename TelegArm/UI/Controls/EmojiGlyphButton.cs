@@ -57,9 +57,9 @@ namespace TelegArm.UI.Controls
             g.SmoothingMode = SmoothingMode.AntiAlias;
             Color bg = Parent != null ? Parent.BackColor
                        : ThemeHelper.Palette.GlyphButtonBg;
-            g.Clear(bg);
+            WindowBackdrop.ClearBehind(g, this, Parent, ClientRectangle, bg);   // step 5.9: the window backdrop when it is on
 
-            Color c = Enabled ? ThemeHelper.Palette.Accent
+            Color c = Enabled ? ThemeHelper.Palette.AccentGlyph
                               : ThemeHelper.Palette.GlyphButtonDisabled;
             if (Enabled && _hover)
                 using (var hb = new SolidBrush(ColorMath.WithAlpha(c, ThemeHelper.Palette.Dark ? 45 : 30)))

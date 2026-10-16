@@ -70,7 +70,7 @@ namespace TelegArm.UI
                 Size = new Size(Px(38), Px(38)),
                 Anchor = AnchorStyles.None,            // centered in its cell
                 FlatStyle = FlatStyle.Flat,
-                ForeColor = _accent,
+                ForeColor = ThemeHelper.PaletteFor(_dark).AccentGlyph,
                 BackColor = Color.Transparent,
                 Cursor = Cursors.Hand,
                 TabStop = false
@@ -82,7 +82,8 @@ namespace TelegArm.UI
             // Draw the hamburger as a FIXED GDI+ shape (3 rounded accent lines), NOT a font glyph: the glyph
             // (☰ U+2630 / Segoe UI Symbol) rendered inconsistently across fonts/DPI/RT — 2-vs-3 lines and a
             // small font-fallback with no accent. A drawn shape is deterministic: always 3 lines, always accent.
-            _hamburger.Paint += (s, e) => DrawHamburger(e.Graphics, _hamburger.ClientRectangle, _accent);
+            _hamburger.Paint += (s, e) => PaintButtonBackdrop(e.Graphics, _hamburger);   // step 5.9: before the glyph
+            _hamburger.Paint += (s, e) => DrawHamburger(e.Graphics, _hamburger.ClientRectangle, ThemeHelper.PaletteFor(_dark).AccentGlyph);
 
             var searchRow = new TableLayoutPanel
             {
@@ -142,6 +143,7 @@ namespace TelegArm.UI
                 RebuildFolderRail();
 
                 var right = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
+                right.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));   // owner bug 2026-10-15: an explicit column, or the AUTO-SIZED default column takes a DPI-scaled child's width and never shrinks back
                 right.RowStyles.Add(RowPx(60));
                 right.RowStyles.Add(RowPx(0));      // STORIES: tray row 1 (hidden until stories load)
                 right.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -164,6 +166,7 @@ namespace TelegArm.UI
             {
                 // TABBED (default): today's exact 3-row layout — search / horizontal folder bar / chat list.
                 var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4 };
+                layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));   // owner bug 2026-10-15: an explicit column, or the AUTO-SIZED default column takes a DPI-scaled child's width and never shrinks back
                 layout.RowStyles.Add(RowPx(60));
                 layout.RowStyles.Add(RowPx(0));     // STORIES: tray row 1 (hidden until stories load)
                 layout.RowStyles.Add(RowPx(46));
@@ -230,6 +233,38 @@ namespace TelegArm.UI
         private Panel _headerBar, _headerDivider;   // 2.7b: themed from the chrome tokens in ApplyPanelColors
 
         private const string EmptyStateText = "Select a chat to start messaging";
+
+        // ── Step 5.4/5.5: the chat background ──────────────────────────────────────────────────────────────────────
+
+        /// <summary>The chat panel's own background (between and below the rows); plain = the panel's BackColor, as before.</summary>
+        private void PaintChatBackdrop(object sender, PaintEventArgs e)
+        {
+            if (!ChatBackdrop.IsPlain(_dark) || WindowBackdrop.Enabled) ChatBackdrop.PaintHost(e.Graphics, _messagePanel, e.ClipRectangle, _dark);
+        }
+
+        /// <summary>A viewport-fixed background (vertical / diagonal gradient, photo) cannot be blitted by a scroll: repaint the
+        /// visible rows. Scroll-invariant ones (and plain) need nothing.</summary>
+        private void InvalidateFixedBackdrop()
+        {
+            if (_messagePanel == null || IsDisposed || ChatBackdrop.ScrollInvariant(_dark)) return;
+            _messagePanel.Invalidate(true);
+        }
+
+        /// <summary>Step 5.9: a flat header / search-row button over the window backdrop. WinForms fills a "transparent" flat
+        /// button with its parent's solid colour; with the backdrop on, paint the slice (and the hover tint) before the glyph.</summary>
+        private void PaintButtonBackdrop(Graphics g, Button b)
+        {
+            if (!WindowBackdrop.Enabled || b == null || b.IsDisposed) return;
+            WindowBackdrop.ClearBehind(g, b, b.Parent, b.ClientRectangle, ThemeHelper.PaletteFor(_dark).Header);
+            if (b.ClientRectangle.Contains(b.PointToClient(Cursor.Position)))
+                using (var hb = new SolidBrush(ColorMath.WithAlpha(_accent, 40))) g.FillRectangle(hb, b.ClientRectangle);
+        }
+
+        private void OnChatBackdropChanged()
+        {
+            if (IsDisposed || !IsHandleCreated) return;
+            try { BeginInvoke((Action)(() => { if (_messagePanel != null) _messagePanel.Invalidate(true); })); } catch { }
+        }
 
         /// <summary>Redesign 2.7b: the empty chat pane. A service pill (the same tokens as the date and "pinned" lines),
         /// centred; only while no chat is open and the panel is empty.</summary>
@@ -473,6 +508,7 @@ namespace TelegArm.UI
                 RowCount = 10
             };
             _rightLayout = layout;
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));   // owner bug 2026-10-15: an explicit column, or the AUTO-SIZED default column takes a DPI-scaled child's width and never shrinks back
             layout.RowStyles.Add(RowPx(56));  // 0 header
             layout.RowStyles.Add(RowPx(0));   // 1 mini player (toggled)
             layout.RowStyles.Add(RowPx(0));   // 2 pinned bar (toggled)
@@ -487,6 +523,7 @@ namespace TelegArm.UI
             var topBar = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0), Cursor = Cursors.Hand };
             _headerBar = topBar;   // 2.7b: its surface comes from the Header token (ApplyPanelColors)
             var titleStack = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Margin = new Padding(0) };
+            titleStack.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));   // owner bug 2026-10-15: an explicit column, or the AUTO-SIZED default column takes a DPI-scaled child's width and never shrinks back
             titleStack.RowStyles.Add(new RowStyle(SizeType.Percent, 58));
             titleStack.RowStyles.Add(new RowStyle(SizeType.Percent, 42));
             // Redesign 2.7a: ThemedLabels (were MaterialLabel H6 / Caption). HEADER-FIT: one line, ellipsis — never wrap or
@@ -540,7 +577,8 @@ namespace TelegArm.UI
             };
             _chatMenuBtn.FlatAppearance.BorderSize = 0;
             _chatMenuBtn.FlatAppearance.MouseOverBackColor = ColorMath.WithAlpha(_accent, 40);
-            _chatMenuBtn.Paint += (s, e) => DrawKebab(e.Graphics, _chatMenuBtn.ClientRectangle, _accent);
+            _chatMenuBtn.Paint += (s, e) => PaintButtonBackdrop(e.Graphics, _chatMenuBtn);
+            _chatMenuBtn.Paint += (s, e) => DrawKebab(e.Graphics, _chatMenuBtn.ClientRectangle, ThemeHelper.PaletteFor(_dark).AccentGlyph);
             _chatMenuBtn.Click += (s, e) => ShowChatHeaderMenu();
             topBar.Controls.Add(_chatMenuBtn);
             // INCHAT-SEARCH: a magnifier in the chat header → enter in-chat search (the left panel becomes scoped
@@ -553,7 +591,8 @@ namespace TelegArm.UI
             };
             _chatSearchBtn.FlatAppearance.BorderSize = 0;
             _chatSearchBtn.FlatAppearance.MouseOverBackColor = ColorMath.WithAlpha(_accent, 40);
-            _chatSearchBtn.Paint += (s, e) => DrawMagnifier(e.Graphics, _chatSearchBtn.ClientRectangle, _accent);
+            _chatSearchBtn.Paint += (s, e) => PaintButtonBackdrop(e.Graphics, _chatSearchBtn);
+            _chatSearchBtn.Paint += (s, e) => DrawMagnifier(e.Graphics, _chatSearchBtn.ClientRectangle, ThemeHelper.PaletteFor(_dark).AccentGlyph);
             _chatSearchBtn.Click += (s, e) => EnterInChatSearch();
             topBar.Controls.Add(_chatSearchBtn);
             // BATCH-TA-23/D1c — the dock toggle. Added LAST of the right-docked group, so per the measured
@@ -571,13 +610,19 @@ namespace TelegArm.UI
             };
             _dockBtn.FlatAppearance.BorderSize = 0;
             _dockBtn.FlatAppearance.MouseOverBackColor = ColorMath.WithAlpha(_accent, 40);
-            _dockBtn.Paint += (s, e) => DrawDockGlyph(e.Graphics, _dockBtn.ClientRectangle, _accent,
+            _dockBtn.Paint += (s, e) => PaintButtonBackdrop(e.Graphics, _dockBtn);
+            _dockBtn.Paint += (s, e) => DrawDockGlyph(e.Graphics, _dockBtn.ClientRectangle, ThemeHelper.PaletteFor(_dark).AccentGlyph,
                                                       _dock != null && _dock.Visible);
             _dockBtn.Click += (s, e) => ToggleDock();
             topBar.Controls.Add(_dockBtn);
             // Peer avatar before the name. Added LAST so its Dock.Left resolves outermost-left; titleStack (Fill,
             // added first) then occupies the space between the avatar and the right-docked transfers indicator.
             _headerAvatar = new Panel { Dock = DockStyle.Left, Width = Px(54), Margin = new Padding(0), Cursor = Cursors.Hand };
+            _headerAvatar.Paint += (s2, e2) =>   // step 5.9: behind the round avatar, the backdrop (before the avatar is drawn)
+            {
+                if (WindowBackdrop.Enabled)
+                    WindowBackdrop.ClearBehind(e2.Graphics, _headerAvatar, _headerAvatar.Parent, _headerAvatar.ClientRectangle, ThemeHelper.PaletteFor(_dark).Header);
+            };
             _headerAvatar.Paint += HeaderAvatar_Paint;
             _headerAvatar.Click += (s, e) => OnHeaderClick();
             topBar.Controls.Add(_headerAvatar);
@@ -619,15 +664,22 @@ namespace TelegArm.UI
                 }
             };
             // Redesign 2.7b: the empty state. With no chat open, a centred service pill says what to do, as in Telegram.
+            _messagePanel.Paint += PaintChatBackdrop;   // step 5.4: before the empty state, which draws over it
             _messagePanel.Paint += PaintEmptyState;
             _messagePanel.Resize += (s, e) => { if (_selectedChat == null) _messagePanel.Invalidate(); };
             _messagePanel.Scroll += MessagePanel_Scroll;
+            _messagePanel.Scroll += (s, e) => InvalidateFixedBackdrop();   // step 5.5
+            _messagePanel.Resize += (s, e) => InvalidateFixedBackdrop();
+            ChatBackdrop.Changed += OnChatBackdropChanged;
+            FormClosed += (s, e) => ChatBackdrop.Changed -= OnChatBackdropChanged;
+            Resize += (s, e) => { if (WindowState == FormWindowState.Minimized) ChatBackdrop.Release(); };
             // Mouse-wheel scrolling doesn't reliably raise Scroll with NewValue==0, so
             // check the position right after the wheel is applied (hence BeginInvoke)
             // and page in older messages when we land near the top.
             _messagePanel.MouseWheel += (s, e) =>
             {
                 if (LogOn) System.Diagnostics.Debug.WriteLine("[SCROLL] wheel-handled (delta=" + e.Delta + ")");
+                BeginInvoke((Action)InvalidateFixedBackdrop);   // step 5.5: after the wheel has scrolled
                 BeginInvoke((Action)(() =>
                 {
                     if (!_loadingOlder && _hasMoreHistory &&
@@ -671,7 +723,7 @@ namespace TelegArm.UI
             _botMenuButton.Click += (s, e) => ShowBotMenu();
             // The "≡" menu icon is DRAWN (3 accent lines, like the hamburger) — a font "≡" substitutes an ugly
             // glyph on RT. In web-app mode the button shows the "Menu" text instead (_botMenuIcon = false).
-            _botMenuButton.Paint += (s, e) => { if (_botMenuIcon) DrawHamburger(e.Graphics, _botMenuButton.ClientRectangle, _accent); };
+            _botMenuButton.Paint += (s, e) => { if (_botMenuIcon) DrawHamburger(e.Graphics, _botMenuButton.ClientRectangle, ColorMath.Ink(_accent, ThemeHelper.PaletteFor(_dark).BotMenuBg, 3.0)); };
 
             _attachButton = new AttachButton
             {
@@ -907,6 +959,16 @@ namespace TelegArm.UI
             _footerBar.ActionClicked += (s, e) => OnFooterAction();
             layout.Controls.Add(_footerBar, 0, 9);   // FORUM-TOPICS: +1
             _split.Panel2.Controls.Add(layout);
+            // Step 5.9 (owner: the main window too): with "Wallpaper", these show the window backdrop; cards, rows' contents,
+            // bubbles and the text boxes stay solid. Solid (the default) changes nothing.
+            WindowBackdrop.Attach(_split.Panel1);
+            WindowBackdrop.Attach(_split.Panel2);
+            WindowBackdrop.Attach(_headerBar);
+            WindowBackdrop.Attach(bottomBar);
+            WindowBackdrop.Attach(_chatListPanel);
+            if (_folderBar != null) WindowBackdrop.Attach(_folderBar);
+            if (_folderRail != null) WindowBackdrop.Attach(_folderRail);
+            WindowBackdrop.AttachTree(_split, _messagePanel);   // the panes' inner containers (header title stack, search row…)
             BuildDock();   // BATCH-TA-23/D1b — added AFTER the Fill layout; see BuildDock's remarks
 
             TouchScroller.Enable(_messagePanel, horizontal: false);
@@ -918,6 +980,7 @@ namespace TelegArm.UI
                 NoteActivity();   // PRESENCE 1.1: touch pans are real user input (taps arrive via the posted click)
                 if (surface == _chatListPanel) { CheckChatListPaging(); return; }   // list paging on touch pans
                 if (surface != _messagePanel) return;
+                InvalidateFixedBackdrop();   // step 5.5
                 // TOUCH-FREEZE: this runs per coalesced pan tick (~100Hz) — a pan parked near the top
                 // fired the line + call 85×/s. Attempts are tick-limited; the head limiter in
                 // LoadOlderMessages spaces the actual work for every other trigger path too.

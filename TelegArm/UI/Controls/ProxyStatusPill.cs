@@ -265,7 +265,7 @@ namespace TelegArm.UI.Controls
                 float s = body.Height * 0.52f;
                 var sr = new RectangleF(body.X + (body.Width - s) / 2f, body.Y + (body.Height - s) / 2f, s, s);
                 using (var sp = ShieldPath(sr))
-                using (var sb = new SolidBrush(AccentColor))
+                using (var sb = new SolidBrush(ColorMath.Ink(AccentColor, fill, 3.0)))
                     g.FillPath(sb, sp);
                 // A tick inside the shield, in the pill's own fill so it reads on any accent.
                 using (var pen = new Pen(fill, Math.Max(Dpi.F(1.6f, dpi), s * 0.13f)) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
@@ -294,7 +294,7 @@ namespace TelegArm.UI.Controls
                 // The ring's radius is half the INSET rect's own height (== (body.Height - 6) / 2 at 96): Px(6) can round
                 // past 2 × Px(3), and RoundedRect turns a too-large radius into a square.
                 var ring = Rectangle.Inflate(body, -P(3), -P(3));
-                using (var fp = new Pen(AccentColor, Dpi.F(1.4f, dpi)) { DashStyle = DashStyle.Dot })
+                using (var fp = new Pen(ColorMath.Ink(AccentColor, fill, 3.0), Dpi.F(1.4f, dpi)) { DashStyle = DashStyle.Dot })
                 using (var fr = DrawHelper.RoundedRect(ring, Math.Max(1, ring.Height / 2)))
                     g.DrawPath(fp, fr);
             }

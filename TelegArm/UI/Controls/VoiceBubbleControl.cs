@@ -266,13 +266,14 @@ namespace TelegArm.UI.Controls
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             Color baseBg = ThemeHelper.PaletteFor(IsDark).ChatBg;
-            g.Clear((SelectionMode && Selected) ? Blend(AccentColor, baseBg, 0.18f) : baseBg);
+            ChatBackdrop.PaintRow(g, this, e.ClipRectangle, IsDark, (SelectionMode && Selected) ? Blend(AccentColor, baseBg, 0.18f) : baseBg,
+                                  (SelectionMode && Selected) ? AccentColor : (Color?)null);   // step 5.4
 
             var card = CardRect(dpi);
             int bx = card.X, by = card.Y;
 
-            Color bubble = _outgoing ? AccentColor : (ThemeHelper.PaletteFor(IsDark).BubbleIn);
-            Color fg = _outgoing ? Color.White : (ThemeHelper.PaletteFor(IsDark).BubbleInText);
+            Color bubble = _outgoing ? ThemeHelper.PaletteFor(IsDark).BubbleOut : (ThemeHelper.PaletteFor(IsDark).BubbleIn);
+            Color fg = _outgoing ? ThemeHelper.PaletteFor(IsDark).BubbleOutText : (ThemeHelper.PaletteFor(IsDark).BubbleInText);
             Color sub = _outgoing ? ThemeHelper.PaletteFor(IsDark).BubbleOutSub : (ThemeHelper.PaletteFor(IsDark).BubbleInSub);
 
             using (var b = new SolidBrush(bubble))
@@ -327,7 +328,7 @@ namespace TelegArm.UI.Controls
             if (Selected)
             {
                 using (var b = new SolidBrush(AccentColor)) g.FillEllipse(b, circle);
-                using (var pen = new Pen(Color.White, 2f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                using (var pen = new Pen(ThemeHelper.PaletteFor(IsDark).OnAccent, 2f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round })
                     g.DrawLines(pen, new[]
                     {
                         new PointF(x + 4.5f * k, y + 9f * k), new PointF(x + 7.5f * k, y + 12f * k), new PointF(x + 13.5f * k, y + 6f * k)
@@ -359,12 +360,12 @@ namespace TelegArm.UI.Controls
                 // Real progress ring filling to % + an ✕ in the center (tap = cancel).
                 int inset = Dpi.Px(5, dpi);
                 DrawHelper.DrawProgressRing(g, Rectangle.Inflate(btn, -inset, -inset), _handle.Fraction,
-                    Color.White, ThemeHelper.PaletteFor(IsDark).MediaRingTrack, cancel: true);
+                    (_outgoing ? ThemeHelper.PaletteFor(IsDark).OnBubbleOut : ThemeHelper.PaletteFor(IsDark).OnAccent), ThemeHelper.PaletteFor(IsDark).MediaRingTrack, cancel: true);
                 return;
             }
 
-            using (var wb = new SolidBrush(Color.White))
-            using (var pen = new Pen(Color.White, 2.4f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            using (var wb = new SolidBrush((_outgoing ? ThemeHelper.PaletteFor(IsDark).OnBubbleOut : ThemeHelper.PaletteFor(IsDark).OnAccent)))
+            using (var pen = new Pen((_outgoing ? ThemeHelper.PaletteFor(IsDark).OnBubbleOut : ThemeHelper.PaletteFor(IsDark).OnAccent), 2.4f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round })
             {
                 if (string.IsNullOrEmpty(_path) || !File.Exists(_path))
                 {

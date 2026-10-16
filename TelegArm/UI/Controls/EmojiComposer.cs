@@ -308,7 +308,7 @@ namespace TelegArm.UI.Controls
                     g.FillPath(hb, hp);
             float inset = r.Width * 0.27f, h = r.Width * 0.17f;
             float l = r.X + inset, t = r.Y + inset, rr = r.Right - inset, bt = r.Bottom - inset;
-            using (var pen = new Pen(_expandHot ? p.AccentFg : p.TextDim, Dpi.F(1.5f, d)) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+            using (var pen = new Pen(_expandHot ? p.AccentGlyph : p.TextDim, Dpi.F(1.5f, d)) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
             {
                 g.DrawLines(pen, new[] { new PointF(rr - h, t), new PointF(rr, t), new PointF(rr, t + h) });
                 g.DrawLine(pen, rr, t, rr - (rr - l) * 0.36f, t + (bt - t) * 0.36f);
@@ -856,7 +856,7 @@ namespace TelegArm.UI.Controls
             using (var path = DrawHelper.RoundedRect(Frame, Dpi.Px(Radius, d)))
             {
                 using (var b = new SolidBrush(_inputEnabled ? p.Card : p.Window)) g.FillPath(b, path);
-                using (var pen = new Pen(focused ? p.Accent : p.Divider, focused ? Dpi.F(1.5f, d) : 1f)) g.DrawPath(pen, path);
+                using (var pen = new Pen(focused ? p.AccentGlyph : p.Divider, focused ? Dpi.F(1.5f, d) : 1f)) g.DrawPath(pen, path);
             }
             g.SmoothingMode = SmoothingMode.None;
 
@@ -899,7 +899,7 @@ namespace TelegArm.UI.Controls
                 {
                     var line = LineOf(_caret);
                     int x = ta.X + CaretX(_caret), top = ta.Y + line.Y - _scrollY;
-                    using (var b = new SolidBrush(p.Accent)) g.FillRectangle(b, x, top + Dpi.Px(2, d), Dpi.Px(CaretW, d), line.Height - Dpi.Px(4, d));
+                    using (var b = new SolidBrush(p.AccentGlyph)) g.FillRectangle(b, x, top + Dpi.Px(2, d), Dpi.Px(CaretW, d), line.Height - Dpi.Px(4, d));
                 }
             }
             g.Clip = oldClip;

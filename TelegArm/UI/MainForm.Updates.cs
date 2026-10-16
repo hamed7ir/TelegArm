@@ -627,6 +627,17 @@ namespace TelegArm.UI
             long peerId = m.peer_id?.ID ?? 0;
             if (peerId == 0) return;
             bool outgoing = IsOut(m);
+            // OWNER BUG 2026-10-15 ("older messages keep coming one by one"): a getDifference catch-up arrives through this
+            // same path, oldest first. The chat list already holds each chat's newest message and unread count from the
+            // dialogs, so an incoming message that is not newer than that is HISTORY, not news: it must not rewrite the
+            // preview, bump a badge or land at the bottom of the open chat. Ids only grow within a chat (per channel; per
+            // account for the rest), so the id decides. Own messages are left alone: a send's echo can trail a newer
+            // incoming message, and its pending bubble must still be swapped.
+            if (!outgoing && IsReplayedHistory(peerId, m.ID))
+            {
+                if (LogOn) System.Diagnostics.Debug.WriteLine("[UM] incoming id=" + m.ID + " peer=" + peerId + " -> replayed history, skipped");
+                return;
+            }
             HandleForumTopicUnread(m, peerId, outgoing);   // FORUM-TOPICS: bump the live per-topic unread badge (fires regardless of _thread)
 
             // COMMENTS-THREAD: while a comment thread is open, nothing is the "open chat" for live-append — defer live
@@ -790,9 +801,24 @@ namespace TelegArm.UI
         private static Peer PeerOf(MessageBase mb)
             => mb is Message mm ? mm.peer_id : mb is MessageService ms ? ms.peer_id : null;
 
+        /// <summary>True when the chat list already shows a message at least as new as <paramref name="messageId"/> for
+        /// this chat — i.e. the message is a catch-up of history (see HandleIncomingMessage).</summary>
+        private bool IsReplayedHistory(long peerId, int messageId)
+        {
+            var entry = _allChats.FirstOrDefault(c => c.PeerId == peerId);
+            return entry != null && entry.TopMessageId > 0 && messageId <= entry.TopMessageId;
+        }
+
         private void UpdateChatListForMessageCore(long peerId, MessageBase m, bool outgoing)
         {
             var entry = _allChats.FirstOrDefault(c => c.PeerId == peerId);
+            // Owner bug 2026-10-15: an OLDER message never becomes the preview (a catch-up, or a send's echo that trails a
+            // newer message) — the row keeps its newest message, date, position and badge.
+            if (entry != null && entry.TopMessageId > 0 && m.ID < entry.TopMessageId)
+            {
+                if (LogOn) System.Diagnostics.Debug.WriteLine("[UPDATE] chat-list keep peer=" + peerId + " id=" + m.ID + " < top=" + entry.TopMessageId);
+                return;
+            }
             if (entry == null)
             {
                 // LIST-UPDATE-SYNC: the chat isn't in _allChats yet — it sits below the initial dialog page

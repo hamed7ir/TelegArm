@@ -61,6 +61,9 @@ namespace TelegArm.UI
             Content.Controls.Add(Footer);
             Body = ScrollHost.Wrap(bodyHost, p.Dark, p.Accent);
             Body.ClientSizeChanged += (s, e) => Restack();
+            WindowBackdrop.Attach(Footer);   // step 5.9: body and footer show the window backdrop when it is on
+            WindowBackdrop.Attach(bodyHost);
+            WindowBackdrop.Attach(Body);
             _scrollBar = bodyHost.Controls.OfType<ThemedScrollBar>().FirstOrDefault();
 
             ApplyDialogTheme();

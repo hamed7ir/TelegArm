@@ -230,6 +230,8 @@ namespace TelegArm.UI
         /// 144 DPI. Every WinForms path that converts (ClientSize setter, restore, autoscroll) goes through here.</summary>
         protected override Size SizeFromClientSize(Size clientSize)
         {
+            if (CustomChrome && UsesNativeEdges && IsHandleCreated && !_ncExtra.IsEmpty && !IsZoomed(Handle))
+                return new Size(clientSize.Width + _ncExtra.Width, clientSize.Height + _ncExtra.Height);   // + the native side/bottom frame
             return CustomChrome ? clientSize : base.SizeFromClientSize(clientSize);
         }
 
@@ -243,11 +245,37 @@ namespace TelegArm.UI
         {
             if (!CustomChrome) { Padding = Padding.Empty; return; }
             if (WindowState == FormWindowState.Maximized) Padding = Padding.Empty;
-            else if (_resizable) { int g = Px(EdgeWidth); Padding = new Padding(g, 0, g, g); }
+            else if (_resizable) { int g = UsesNativeEdges ? 0 : Px(EdgeWidth); Padding = new Padding(g, 0, g, g); }
             else Padding = new Padding(1, 0, 1, 1);
         }
 
         public const int Gutter = 6, Corner = 10, TouchGutter = 12, TouchCorner = 16;
+
+        /// <summary>Owner, 2026-10-15 — TRUE ROUND CORNERS, NO SIDE BARS. On Windows 10/11 a resizable window keeps Windows'
+        /// own left / right / bottom frame: there it is an INVISIBLE resize border outside the visible window (with the
+        /// shadow, and Windows 11's rounded border drawn by DWM), so the content runs edge to edge and there is no gutter.
+        /// Only the top frame is removed (WM_NCCALCSIZE gives it back to the title bar). Windows 8.1 (the Surface RT) draws
+        /// that frame thick and visible, so there the gutter stays. TELEGARM_EDGES=gutter | native overrides (the rig uses
+        /// "gutter" to reproduce the RT).</summary>
+        public static bool NativeEdges
+        {
+            get
+            {
+                if (!_nativeEdges.HasValue)
+                {
+                    string env = null;
+                    try { env = Environment.GetEnvironmentVariable("TELEGARM_EDGES"); } catch { }
+                    _nativeEdges = env == "native" ? true : env == "gutter" ? false : Platform.WindowsMajor >= 10;
+                }
+                return _nativeEdges.Value;
+            }
+        }
+        private static bool? _nativeEdges;
+
+        /// <summary>This window uses the native resize edges (see <see cref="NativeEdges"/>).</summary>
+        protected bool UsesNativeEdges { get { return CustomChrome && _resizable && NativeEdges; } }
+
+        private Size _ncExtra;   // native-edge mode: window size minus client size, from the last WM_NCCALCSIZE
 
         /// <summary>The resize gutter in logical px: <see cref="TouchGutter"/> on a machine with a touch digitizer
         /// (SM_MAXIMUMTOUCHES &gt; 0 — the Surface, and many laptops), <see cref="Gutter"/> otherwise.</summary>
@@ -270,6 +298,7 @@ namespace TelegArm.UI
         private Size _normalSize;
         private int _normalDpi;
         private FormWindowState _lastState = FormWindowState.Normal;
+        private FormWindowState _layoutState = FormWindowState.Normal;   // OnResize's own view, for the native-edge re-layout
         private bool _liveNormal = true;      // IsZoomed/IsIconic as of the last WM_MOVE/WM_SIZE — NOT WinForms' cached state
         private Point _osRestorePlace;        // where WINDOWS put the window when it last left maximised/minimised
         private Size? _sizeAfterDrag;         // a size correction owed once a drag-restore ends
@@ -280,11 +309,24 @@ namespace TelegArm.UI
             if (Bar != null) Bar.SyncWindowState(WindowState);
             ApplyGutter();
             if (WindowState != FormWindowState.Minimized && !IsPane) _windowDpi.Resync("restore");
+            var stateBefore = _layoutState;
+            _layoutState = WindowState;
             KeepNormalBounds();
+            // ⚠ NATIVE EDGES (owner bug 2026-10-15, live rig): on maximise the docking layout runs INSIDE the state change,
+            //   while the client origin is still moving from inside Windows' frame to the work area. It places the title bar
+            //   and content at (0,0), and Windows reports them back at the OLD window position — (192,84) in the rig: the
+            //   whole UI shifted right and down. A layout after the change settles puts them right.
+            if (UsesNativeEdges && WindowState != stateBefore && WindowState != FormWindowState.Minimized)
+                try { BeginInvoke((Action)(() => { if (IsDisposed) return; PerformLayout(); Invalidate(true); })); } catch { }
             Invalidate();
         }
 
-        protected override void OnMove(EventArgs e) { base.OnMove(e); KeepNormalBounds(); UpdateCompact(); }
+        protected override void OnMove(EventArgs e) { base.OnMove(e); KeepNormalBounds(); UpdateCompact(); WindowBackdrop.RepaintForm(this); }
+
+        /// <summary>Step 5.9 — whether the content area shows the window backdrop ("Wallpaper"). MainForm says no: its content
+        /// is covered by opaque panes, and repainting it on every move would be pure cost; its gutter still shows it.</summary>
+        protected virtual bool ContentShowsBackdrop { get { return true; } }
+        private bool _backdropAttached;
 
         /// <summary>⚠ RESTORE MUST NOT GROW THE WINDOW. Measured by the gallery probe: maximise → restore came back
         /// 20 x 20 px larger at 144 DPI. WinForms' restore path converts a size it stored as a CLIENT size through an
@@ -328,7 +370,10 @@ namespace TelegArm.UI
                 }
                 catch { }
             }
-            else if (state == FormWindowState.Normal) { _normalSize = Size; _normalDpi = WindowDpiValue; }
+            // ⚠ Only when Windows says the window IS normal (owner bug 2026-10-15, live rig): during a maximise WinForms' cached
+            //   state is still Normal for a message or two while the window already has the maximised size; recording it then
+            //   made "restore" bring the full-screen size back.
+            else if (state == FormWindowState.Normal && liveNormal) { _normalSize = Size; _normalDpi = WindowDpiValue; }
             _lastState = state;
         }
 
@@ -365,6 +410,12 @@ namespace TelegArm.UI
 
         protected override void OnHandleCreated(EventArgs e)
         {
+            if (!_backdropAttached)
+            {
+                _backdropAttached = true;
+                WindowBackdrop.Mark_(this);                       // step 5.9: the form's background (and gutter) is a surface
+                if (ContentShowsBackdrop) WindowBackdrop.Attach(Content);
+            }
             base.OnHandleCreated(e);
             if (CustomChrome) ApplyDwmAttributes();
             if (!IsPane)
@@ -426,8 +477,9 @@ namespace TelegArm.UI
         protected override void OnPaintBackground(PaintEventArgs e)
         {
             var p = ThemeHelper.Palette;
-            e.Graphics.Clear(p.Window);
-            if (CustomChrome && WindowState != FormWindowState.Maximized)
+            if (WindowBackdrop.Enabled) WindowBackdrop.Paint(e.Graphics, this, e.ClipRectangle, p.Window);   // step 5.9
+            else e.Graphics.Clear(p.Window);
+            if (CustomChrome && WindowState != FormWindowState.Maximized && !UsesNativeEdges)   // native edges: DWM draws the border
                 using (var pen = new Pen(p.Divider)) e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
         }
 
@@ -453,11 +505,20 @@ namespace TelegArm.UI
                             // IsZoomed, not WindowState: WinForms' WindowState is still the CACHED Normal during the
                             // WM_NCCALCSIZE that maximises the window (review 1.3), so the clip never fired.
                             if (IsZoomed(Handle)) ClipToWorkArea(m.LParam);
+                            else if (UsesNativeEdges) { NativeEdgesCalc(ref m); return; }
                             m.Result = (IntPtr)WVR_REDRAW;
                             return;
                         }
                         break;
                     case WM_NCHITTEST:
+                        if (UsesNativeEdges && WindowState == FormWindowState.Normal)
+                        {
+                            base.WndProc(ref m);   // Windows answers for its own (invisible) left / right / bottom frame
+                            int native = (int)m.Result;
+                            if (native >= HTLEFT && native <= HTBOTTOMRIGHT) return;
+                            m.Result = (IntPtr)HitTestTopAndCaption(m.LParam);
+                            return;
+                        }
                         m.Result = (IntPtr)HitTest(m.LParam);
                         return;
                     case WM_NCACTIVATE:
@@ -498,6 +559,33 @@ namespace TelegArm.UI
         private void ClearAutoRefocusedTextField()
         {
             try { if (!IsDisposed && (ActiveControl is TextBoxBase || ActiveControl is ITextInputTarget)) ActiveControl = null; } catch { }
+        }
+
+        /// <summary>Native-edge mode: Windows computes the client area WITH its frame, then the top is given back — the title
+        /// bar reaches the window's top edge, the left / right / bottom frames stay (invisible resize borders on Windows 10/11).</summary>
+        private void NativeEdgesCalc(ref Message m)
+        {
+            var calc = (NCCALCSIZE_PARAMS)Marshal.PtrToStructure(m.LParam, typeof(NCCALCSIZE_PARAMS));
+            var window = calc.rgrc0;
+            base.WndProc(ref m);   // DefWindowProc: the window minus the thick frame on every side
+            calc = (NCCALCSIZE_PARAMS)Marshal.PtrToStructure(m.LParam, typeof(NCCALCSIZE_PARAMS));
+            calc.rgrc0.Top = window.Top;
+            Marshal.StructureToPtr(calc, m.LParam, true);
+            _ncExtra = new Size((window.Right - window.Left) - (calc.rgrc0.Right - calc.rgrc0.Left),
+                                (window.Bottom - window.Top) - (calc.rgrc0.Bottom - calc.rgrc0.Top));
+            m.Result = IntPtr.Zero;
+        }
+
+        /// <summary>Native-edge mode, inside the client: the top band resizes (there is no top frame), the title bar is the
+        /// caption, the rest is content.</summary>
+        private int HitTestTopAndCaption(IntPtr lParam)
+        {
+            var screen = new Point((short)(lParam.ToInt64() & 0xFFFF), (short)((lParam.ToInt64() >> 16) & 0xFFFF));
+            var p = PointToClient(screen);
+            if (p.Y >= 0 && p.Y < Px(Gutter) && p.X >= 0 && p.X < ClientSize.Width)
+                return p.X < Px(CornerWidth) ? HTTOPLEFT : p.X >= ClientSize.Width - Px(CornerWidth) ? HTTOPRIGHT : HTTOP;
+            var caption = Bar != null && Bar.Visible ? Bar.Bounds : Rectangle.Empty;
+            return WindowHit.Compute(ClientSize, p, 0, 0, false, caption);
         }
 
         private int HitTest(IntPtr lParam)
@@ -593,7 +681,11 @@ namespace TelegArm.UI
                 RECT wr;
                 GetWindowRect(Handle, out wr);
                 var client = RectangleToScreen(ClientRectangle);
-                if (WindowState == FormWindowState.Normal && (wr.Left != client.Left || wr.Top != client.Top || wr.Right != client.Right || wr.Bottom != client.Bottom))
+                bool sameRect = wr.Left == client.Left && wr.Top == client.Top && wr.Right == client.Right && wr.Bottom == client.Bottom;
+                // native edges: the client is the window minus the side / bottom frame, flush at the top
+                bool framed = wr.Top == client.Top && client.Left >= wr.Left && client.Right <= wr.Right && client.Bottom <= wr.Bottom
+                              && client.Left - wr.Left < 40 && wr.Right - client.Right < 40 && wr.Bottom - client.Bottom < 40;
+                if (WindowState == FormWindowState.Normal && !(UsesNativeEdges ? framed : sameRect))
                     why = "window " + Rectangle.FromLTRB(wr.Left, wr.Top, wr.Right, wr.Bottom) + " != client " + client;
                 else if (Bar != null && Bar.Visible && Bar.Width > Px(200))
                 {

@@ -609,7 +609,8 @@ namespace TelegArm.Helpers
                     float size = (text.Length == 2 ? 0.58f : 0.68f) * side;
                     using (var f = new Font("Segoe UI", size, FontStyle.Bold, GraphicsUnit.Pixel))
                     using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
-                        g.DrawString(text, f, Brushes.White, new RectangleF(0, 0, side, side), sf);
+                    using (var tb = new SolidBrush(ColorMath.OnColor(fill)))   // ink on the accent disc
+                        g.DrawString(text, f, tb, new RectangleF(0, 0, side, side), sf);
                 }
                 return bmp.GetHicon();
             }

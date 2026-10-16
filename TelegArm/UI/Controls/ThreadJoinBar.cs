@@ -116,7 +116,7 @@ namespace TelegArm.UI.Controls
             using (var b = new SolidBrush(AccentColor))
             using (var path = DrawHelper.RoundedRect(_joinRect, P(8)))
                 g.FillPath(b, path);
-            TextRenderer.DrawText(g, _joinText, joinFont, _joinRect, Color.White,
+            TextRenderer.DrawText(g, _joinText, joinFont, _joinRect, ColorMath.OnColor(AccentColor),
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
 
             if (ShowDismiss)

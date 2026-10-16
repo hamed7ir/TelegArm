@@ -79,7 +79,7 @@ namespace TelegArm.UI.Controls
             g.Clear(ThemeHelper.PaletteFor(IsDark).PinnedBarBg);
 
             // Accent bar at the leading edge.
-            using (var b = new SolidBrush(AccentColor))
+            using (var b = new SolidBrush(ColorMath.Ink(AccentColor, ThemeHelper.PaletteFor(IsDark).PinnedBarBg, 3.0)))
                 g.FillRectangle(b, P(12), P(8), P(3), Math.Max(P(4), Height - P(16)));
 
             int x = P(24), iconBox = P(IconBox);
@@ -104,7 +104,7 @@ namespace TelegArm.UI.Controls
                                             | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
 
             // shared fonts: never dispose
-            TextRenderer.DrawText(g, _title, FontHelper.UiAt(8.25f, dpi, FontStyle.Bold), new Rectangle(x, P(4), cw, P(15)), AccentColor,
+            TextRenderer.DrawText(g, _title, FontHelper.UiAt(8.25f, dpi, FontStyle.Bold), new Rectangle(x, P(4), cw, P(15)), ColorMath.Ink(AccentColor, ThemeHelper.PaletteFor(IsDark).PinnedBarBg),
                 baseFlags | TextFormatFlags.Left);
 
             // Preview: give it the taller remaining space so Persian isn't vertically clipped; RTL right-aligned.

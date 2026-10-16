@@ -392,6 +392,9 @@ namespace TelegArm.UI
             PerfLog.Boot("MainForm ctor EXIT (BuildUi + RestorePhotoCacheIndex done)");
         }
 
+        /// <summary>Step 5.9 — the main window's panes are opaque: only its gutter shows the window backdrop.</summary>
+        protected override bool ContentShowsBackdrop { get { return false; } }
+
         protected override bool ProcessCmdKey(ref System.Windows.Forms.Message msg, Keys keyData)
         {
             switch (keyData)

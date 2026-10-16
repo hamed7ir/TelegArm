@@ -196,7 +196,7 @@ namespace TelegArm.UI.Controls
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
-            g.Clear(ThemeHelper.PaletteFor(IsDark).ChatBg);
+            ChatBackdrop.PaintRow(g, this, e.ClipRectangle, IsDark, ThemeHelper.PaletteFor(IsDark).ChatBg, null);   // step 5.4
 
             _cardRect = new Rectangle(SideGap, VMargin, Width - 2 * SideGap, Height - 2 * VMargin);
             Color cardBg = ThemeHelper.PaletteFor(IsDark).SponsoredCardBg;
@@ -234,7 +234,7 @@ namespace TelegArm.UI.Controls
 
             // LABEL ("Sponsored"/"Recommended")
             _labelRect = new Rectangle(headLeft, y, headW, LabelH);
-            TextRenderer.DrawText(g, _label.ToUpperInvariant(), FontHelper.UiAt(7.75f, CurDpi, FontStyle.Bold), _labelRect, AccentColor, leftFlags);
+            TextRenderer.DrawText(g, _label.ToUpperInvariant(), FontHelper.UiAt(7.75f, CurDpi, FontStyle.Bold), _labelRect, ColorMath.Ink(AccentColor, ThemeHelper.PaletteFor(IsDark).SponsoredCardBg), leftFlags);
             y += LabelH;
 
             // TITLE
@@ -256,7 +256,7 @@ namespace TelegArm.UI.Controls
                 Color body = ThemeHelper.PaletteFor(IsDark).SponsoredBody;
                 _rich.Position(innerW, rtl);
                 _bodyOrigin = new Point(left, y + P(4));
-                _rich.Paint(g, left, y + P(4), body, AccentColor, BodyFont(), IsDark, AccentColor, false);
+                _rich.Paint(g, left, y + P(4), body, ColorMath.Ink(AccentColor, ThemeHelper.PaletteFor(IsDark).SponsoredCardBg), BodyFont(), IsDark, AccentColor, false);
                 y += P(4) + _bodyH;
             }
             _textBottom = y - _cardRect.Y;
@@ -291,7 +291,7 @@ namespace TelegArm.UI.Controls
             _buttonRect = new Rectangle(left, y + P(8), innerW, ButtonH);
             using (var bb = new SolidBrush(AccentColor))
             using (var bp = DrawHelper.RoundedRect(_buttonRect, P(8))) g.FillPath(bb, bp);
-            TextRenderer.DrawText(g, _buttonText, FontHelper.ForAt(_buttonText, 9.5f, CurDpi, FontStyle.Bold), _buttonRect, Color.White,
+            TextRenderer.DrawText(g, _buttonText, FontHelper.ForAt(_buttonText, 9.5f, CurDpi, FontStyle.Bold), _buttonRect, ThemeHelper.PaletteFor(IsDark).OnAccent,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         }
 

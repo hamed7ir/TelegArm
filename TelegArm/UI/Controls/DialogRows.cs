@@ -56,7 +56,7 @@ namespace TelegArm.UI.Controls
         {
             var p = ThemeHelper.Palette;
             int dpi = Dpi.Of(this), padX = Dpi.Px(PadX, dpi), padY = Dpi.Px(PadY, dpi);
-            e.Graphics.Clear(Parent != null ? Parent.BackColor : p.Window);
+            WindowBackdrop.ClearBehind(e.Graphics, this, Parent, ClientRectangle, p.Window);   // step 5.9
             TextRenderer.DrawText(e.Graphics, Text, Font, new Rectangle(padX, padY, Math.Max(1, Width - 2 * padX), Math.Max(1, Height - padY)), p.Text, Flags);
         }
     }
@@ -132,14 +132,14 @@ namespace TelegArm.UI.Controls
             var p = ThemeHelper.Palette;
             var g = e.Graphics;
             int dpi = Dpi.Of(this);
-            g.Clear(Parent != null ? Parent.BackColor : p.Window);
+            WindowBackdrop.ClearBehind(g, this, Parent, ClientRectangle, p.Window);   // step 5.9
             TextRenderer.DrawText(g, Text, Font, new Point(Dpi.Px(PadX, dpi), Dpi.Px(Top0, dpi)), p.TextDim, TextFormatFlags.NoPrefix);
             var f = FieldRect;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             using (var path = DrawHelper.RoundedRect(new Rectangle(f.X, f.Y, f.Width - 1, f.Height - 1), Dpi.Px(6, dpi)))
             {
                 using (var b = new SolidBrush(p.Card)) g.FillPath(b, path);
-                using (var pen = new Pen(Box.Focused ? p.Accent : p.Divider, Box.Focused ? Dpi.F(1.5f, dpi) : 1f)) g.DrawPath(pen, path);
+                using (var pen = new Pen(Box.Focused ? p.AccentGlyph : p.Divider, Box.Focused ? Dpi.F(1.5f, dpi) : 1f)) g.DrawPath(pen, path);
             }
         }
     }
@@ -185,7 +185,7 @@ namespace TelegArm.UI.Controls
             var p = ThemeHelper.Palette;
             var g = e.Graphics;
             int dpi = Dpi.Of(this), padX = Dpi.Px(PadX, dpi), s = Dpi.Px(Box, dpi);
-            g.Clear(Parent != null ? Parent.BackColor : p.Window);
+            WindowBackdrop.ClearBehind(g, this, Parent, ClientRectangle, p.Window);   // step 5.9
             g.SmoothingMode = SmoothingMode.AntiAlias;
             var box = new Rectangle(padX, (Height - s) / 2, s, s);
             using (var path = DrawHelper.RoundedRect(new Rectangle(box.X, box.Y, box.Width - 1, box.Height - 1), Dpi.Px(4, dpi)))
@@ -205,7 +205,7 @@ namespace TelegArm.UI.Controls
             var tr = new Rectangle(box.Right + Dpi.Px(10, dpi), 0, Math.Max(1, Width - box.Right - Dpi.Px(10, dpi) - padX), Height);
             TextRenderer.DrawText(g, Text, Font, tr, p.Text, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
             if (Focused && ShowFocusCues)
-                using (var pen = new Pen(p.Accent, 1f) { DashStyle = DashStyle.Dot })
+                using (var pen = new Pen(p.AccentGlyph, 1f) { DashStyle = DashStyle.Dot })
                     g.DrawRectangle(pen, Dpi.Px(4, dpi), 1, Width - Dpi.Px(8, dpi), Height - 3);
         }
     }

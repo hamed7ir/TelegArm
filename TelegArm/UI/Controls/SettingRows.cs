@@ -217,7 +217,7 @@ namespace TelegArm.UI.Controls
         {
             var grp = Parent as SettingGroup;
             if (grp != null && CardEnd) grp.PaintSlice(g, this, p);
-            else g.Clear(Backdrop(p));
+            else WindowBackdrop.ClearBehind(g, this, Parent, ClientRectangle, p.Window);   // step 5.9: the backdrop when on
         }
 
         /// <summary>True when the row's text and controls are drawn dimmed. TextRow overrides it: it is never really
@@ -286,7 +286,7 @@ namespace TelegArm.UI.Controls
             int grow = Dpi.Px(3, dpi);
             var r = Rectangle.Inflate(target, grow, grow);
             using (var path = DrawHelper.RoundedRect(new Rectangle(r.X, r.Y, r.Width - 1, r.Height - 1), radius + grow))
-            using (var pen = new Pen(p.Accent, Dpi.F(1.5f, dpi)))
+            using (var pen = new Pen(p.AccentGlyph, Dpi.F(1.5f, dpi)))
                 g.DrawPath(pen, path);
             g.SmoothingMode = old;
         }
@@ -410,7 +410,7 @@ namespace TelegArm.UI.Controls
             var p = ThemeHelper.Palette;
             var g = e.Graphics;
             int dpi = Dpi.Of(this), padX = Dpi.Px(PadX, dpi);
-            g.Clear(Backdrop(p));
+            WindowBackdrop.ClearBehind(g, this, Parent, ClientRectangle, p.Window);   // step 5.9
             int band = Dpi.Px(BandHeight, dpi);
             var r = new Rectangle(padX, Height - Dpi.Px(BottomPad, dpi) - band, Math.Max(1, Width - 2 * padX), band);
             DrawTextLine(g, Text, FontHelper.ForAt(Text, 11f, dpi, FontStyle.Bold), p.AccentFg, r, false, true);
@@ -1562,7 +1562,7 @@ namespace TelegArm.UI.Controls
         /// exactly the ones OnPaint puts there.</summary>
         internal void PaintSlice(Graphics g, Control row, Palette p)
         {
-            g.Clear(OuterBackdrop(p));
+            WindowBackdrop.ClearBehind(g, row, Parent, row.ClientRectangle, p.Window);   // step 5.9: OuterBackdrop, or the slice
             if (Width < 3 || Height < 3) return;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             int dpi = Dpi.Of(this);
@@ -1579,7 +1579,7 @@ namespace TelegArm.UI.Controls
         {
             var p = ThemeHelper.Palette;
             var g = e.Graphics;
-            g.Clear(OuterBackdrop(p));
+            WindowBackdrop.ClearBehind(g, this, Parent, ClientRectangle, p.Window);   // step 5.9: OuterBackdrop, or the slice
             if (Width < 3 || Height < 3) return;
             int dpi = Dpi.Of(this);
             g.SmoothingMode = SmoothingMode.AntiAlias;

@@ -479,7 +479,7 @@ namespace TelegArm.UI
                     _pendingVoiceDur = durationSec;
                     _pendingVoiceWave = waveform;
                     _voiceState = VoiceState.Ready;
-                    _recordingBar.DotColor = _accent;
+                    _recordingBar.DotColor = ColorMath.Ink(_accent, ThemeHelper.PaletteFor(_dark).RecordingBarBg, 3.0);
                     _recordingBar.Caption = "Voice  " + FormatDuration(durationSec) + "   — tap Send";
                     ApplyVoiceUi();
                 }));

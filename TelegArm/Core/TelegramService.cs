@@ -392,7 +392,7 @@ namespace TelegArm.Core
             if (Client == null || Updates != null) return;
             System.Diagnostics.Debug.WriteLine("[UM] StartUpdateManager: authorized user="
                 + (Me != null ? Me.id.ToString() : "NULL") + " — attaching UpdateManager (post-login)");
-            Updates = Client.WithUpdateManager(onUpdate, UpdateStatePath, null, false);
+            Updates = Client.WithUpdateManager(onUpdate, LoadUpdateStateIfRecent(), null, false);
             System.Diagnostics.Debug.WriteLine("[UM] WithUpdateManager attached; state file=" + UpdateStatePath);
         }
 
@@ -407,6 +407,35 @@ namespace TelegArm.Core
         /// a live refresh catches up in the background. May be slightly stale (messages that arrived while warm were
         /// silenced by the router); the refresh reconciles it.</summary>
         public Messages_DialogsBase CachedDialogs { get; private set; }
+
+        /// <summary>How old a saved update state may be and still be resumed. See <see cref="LoadUpdateStateIfRecent"/>.</summary>
+        internal static readonly TimeSpan UpdateStateMaxAge = TimeSpan.FromHours(12);
+
+        /// <summary>The saved update state to resume from — or null (start fresh, as a new install does) when the file is
+        /// missing, unreadable, or older than <see cref="UpdateStateMaxAge"/>.
+        /// ⚠ WHY (owner bug 2026-10-15, "older messages keep coming one by one" after 30 days away): resuming makes WTC
+        ///   fetch EVERYTHING since the saved pts — LoadDialogs → GetChannelDifference loops until `final` — and raise each
+        ///   message through onUpdate, oldest first, while it holds the manager's lock, so live updates wait behind the
+        ///   whole backlog. On a cold start that replay buys nothing: the chat list comes from the dialogs (newest message,
+        ///   unread count) and history loads when a chat opens. Fresh = pts 0 → LoadDialogs takes each channel's pts from its
+        ///   dialog, and the first live update of the common box is applied as a "first appearance" (WTC RecoverGaps).
+        ///   The file is not deleted; the next save overwrites it.</summary>
+        private IDictionary<long, WTelegram.UpdateManager.MBoxState> LoadUpdateStateIfRecent()
+        {
+            string path = UpdateStatePath;
+            try
+            {
+                if (!File.Exists(path)) return null;
+                var age = DateTime.UtcNow - File.GetLastWriteTimeUtc(path);
+                if (age > UpdateStateMaxAge)
+                {
+                    Logger.Diag("[UM] saved update state is " + (int)age.TotalHours + " h old -> starting fresh (no backlog replay); file=" + path);
+                    return null;
+                }
+                return WTelegram.UpdateManager.LoadState(path);
+            }
+            catch (Exception ex) { Logger.Diag("[UM] saved update state unreadable -> starting fresh: " + ex.Message); return null; }
+        }
 
         public async Task SeedUpdateManagerAsync()
         {

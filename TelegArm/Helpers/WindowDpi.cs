@@ -74,9 +74,15 @@ namespace TelegArm.Helpers
         /// or hidden window does it when it comes back (Resync compares the effective DPI).</summary>
         public void ApplyScale(string why)
         {
-            if (!_form.IsHandleCreated || _form.IsDisposed || _form.WindowState == FormWindowState.Minimized || !_form.Visible) return;
+            if (!_form.IsHandleCreated || _form.IsDisposed || _form.WindowState == FormWindowState.Minimized || !_form.Visible)
+            {
+                Logger.Diag("[DPI] " + why + " deferred on " + _form.GetType().Name + " (" + (_form.IsDisposed ? "disposed" : !_form.Visible ? "hidden" : "minimised") + ")");
+                return;
+            }
             int raw = MonitorDpi > 0 ? MonitorDpi : Helpers.Dpi.ForWindow(_form.Handle);
-            if (EffectiveFor(raw, null) != Dpi) Apply(raw, null, why);
+            int want = EffectiveFor(raw, null);
+            Logger.Diag("[DPI] " + why + " on " + _form.GetType().Name + ": monitor " + raw + " want " + want + " have " + Dpi + (_busy ? " (busy: pending)" : ""));
+            if (want != Dpi) Apply(raw, null, why);
         }
 
         /// <summary>Step 3.8b — the effective DPI on this window's screen (or <paramref name="at"/>'s): the user's scale, capped
@@ -121,7 +127,19 @@ namespace TelegArm.Helpers
                         + " rescale=" + sw.ElapsedMilliseconds + "ms");
             if (_pending > 0 && EffectiveFor(_pending, null) != Dpi) { int p = _pending; _pending = 0; Apply(p, null, "pending"); }
             else _pending = 0;
+            if (!_busy) try { RelayoutTree(_form); } catch (Exception ex) { Logger.Diag("[DPI] relayout failed: " + ex.Message); }
             DpiCaches.AfterDpiChange();   // step 3.5: trim what no open window can still use (never throws)
+        }
+
+        /// <summary>⚠ Owner bug 2026-10-15 (the live rig): DpiScaler sets every child's bounds by ratio, and a TableLayoutPanel
+        /// cell's content then KEEPS the scaled width — MainForm's chat header came out 1364 px wide in a 1096 px column
+        /// after 100% → 125%, and stayed wrong through every later change until a restart. One top-down layout pass after
+        /// the rescale puts every docked, anchored and cell child back where its container wants it.</summary>
+        private static void RelayoutTree(Control c)
+        {
+            if (c == null || c.IsDisposed || !c.HasChildren) return;
+            c.PerformLayout();
+            foreach (Control child in c.Controls) RelayoutTree(child);
         }
 
         /// <summary>The form's bounds rescaled old → new about its top-left, kept inside its monitor's work area.</summary>
