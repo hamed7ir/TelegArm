@@ -368,6 +368,7 @@ namespace TelegArm.UI
                 LoadFolders();     // fetch chat folders and build their tabs (non-blocking)
                 LoadArchivedAsync(); // fetch archived dialogs into the model (non-blocking)
                 WarmUpMedia();     // load FFmpeg in the background so the first playback doesn't pay for it
+                WarmUpCalls();     // and the call library (17 MB on x86), so the first call doesn't
             }
             catch (Exception ex)
             {
@@ -865,6 +866,7 @@ namespace TelegArm.UI
                 _selectedChat = null; ClearMessagePanel(); _chatTitle.Text = "Select a chat"; SetHeaderAvatar(null);
                 if (_chatSearchBtn != null) _chatSearchBtn.Visible = false;   // INCHAT-SEARCH: chat closed → hide the magnifier
                 if (_chatMenuBtn != null) _chatMenuBtn.Visible = false;       // TA-21/S1a: …and the ⋮ with it
+                if (_callBtn != null) _callBtn.Visible = false;
                 if (_dockBtn != null) _dockBtn.Visible = false;               // TA-23/D1c: …and the dock toggle
                 SetDockOpen(false);
                 ShowColumn(true);                                             // one column: back to the list

@@ -585,6 +585,18 @@ namespace TelegArm.UI
             //   drawn-not-font glyph (":799 — for crisp/consistent rendering on RT"), same "hidden until a
             //   chat is open". Two adjacent header buttons that disagree by two pixels look like a bug.
             // ⚠ ACCENT COMES FROM ThemeHelper VIA _accent (the palette) — never a hard-coded colour.
+            // 2026-10-16: the phone (a call), leftmost of the header's buttons; shown for a private chat with a person (MainForm.Calls CanCall).
+            // Metrics as _chatMenuBtn below.
+            _callBtn = new Button
+            {
+                Dock = DockStyle.Right, Width = Px(44), FlatStyle = FlatStyle.Flat, Text = "",
+                BackColor = Color.Transparent, Cursor = Cursors.Hand, TabStop = false, Visible = false, AccessibleName = "Call"
+            };
+            _callBtn.FlatAppearance.BorderSize = 0;
+            _callBtn.FlatAppearance.MouseOverBackColor = ColorMath.WithAlpha(_accent, 40);
+            _callBtn.Paint += (s, e) => PaintButtonBackdrop(e.Graphics, _callBtn);
+            _callBtn.Paint += (s, e) => DrawPhoneGlyph(e.Graphics, _callBtn.ClientRectangle, ThemeHelper.PaletteFor(_dark).AccentGlyph);
+            _callBtn.Click += (s, e) => StartCallWith(_selectedChat);
             _chatMenuBtn = new Button
             {
                 Dock = DockStyle.Right, Width = Px(44), FlatStyle = FlatStyle.Flat, Text = "",
@@ -611,6 +623,7 @@ namespace TelegArm.UI
             _chatSearchBtn.Paint += (s, e) => DrawMagnifier(e.Graphics, _chatSearchBtn.ClientRectangle, ThemeHelper.PaletteFor(_dark).AccentGlyph);
             _chatSearchBtn.Click += (s, e) => EnterInChatSearch();
             topBar.Controls.Add(_chatSearchBtn);
+            topBar.Controls.Add(_callBtn);
             // BATCH-TA-23/D1c — the dock toggle. Added LAST of the right-docked group, so per the measured
             // rule (first-added = leftmost) it lands OUTERMOST RIGHT — at the very edge the dock itself
             // slides in from, which is the only placement that reads as "open the thing next to me".

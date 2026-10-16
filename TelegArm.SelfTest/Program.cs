@@ -32,6 +32,7 @@ namespace TelegArm.SelfTest
             ProxyTests.Register(tests);
             ComposerTests.Register(tests);
             MediaTests.Register(tests);
+            CallTests.Register(tests);
 
             string filter = args.Length > 0 ? args[0] : null;
             int pass = 0, fail = 0;

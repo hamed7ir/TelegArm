@@ -46,6 +46,7 @@
     <Reference Include="System.Drawing" />
     <Reference Include="System.IO.Compression" />
     <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Numerics" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Program.cs" />
@@ -60,6 +61,7 @@
     <Compile Include="ProxyTests.cs" />
     <Compile Include="ComposerTests.cs" />
     <Compile Include="MediaTests.cs" />
+    <Compile Include="CallTests.cs" />
   </ItemGroup>
   <!-- The app sources under test. Add a file here when a test needs it (and whatever it depends on). -->
   <ItemGroup>
@@ -68,6 +70,13 @@
     <Compile Include="..\TelegArm\Core\StoragePaths.cs"><Link>Linked\Core\StoragePaths.cs</Link></Compile>
     <Compile Include="..\TelegArm\Core\PrivacyRules.cs"><Link>Linked\Core\PrivacyRules.cs</Link></Compile>
     <Compile Include="..\TelegArm\Core\Media\Tgav.cs"><Link>Linked\Core\Media\Tgav.cs</Link></Compile>
+    <Compile Include="..\TelegArm\Core\Calls\CallCrypto.cs"><Link>Linked\Core\Calls\CallCrypto.cs</Link></Compile>
+    <Compile Include="..\TelegArm\Core\Calls\TgCalls.cs"><Link>Linked\Core\Calls\TgCalls.cs</Link></Compile>
+    <Compile Include="..\TelegArm\Core\Calls\NativeCall.cs"><Link>Linked\Core\Calls\NativeCall.cs</Link></Compile>
+    <Content Include="..\TelegArm\tgcalls\x86\*.dll">
+      <Link>tgcalls\x86\%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <!-- the x86 FFmpeg + tgav, beside the test exe as in the app (Tgav.Folder = ffmpeg\<arch>\) -->
     <Content Include="..\TelegArm\ffmpeg\x86\*.dll">
       <Link>ffmpeg\x86\%(Filename)%(Extension)</Link>

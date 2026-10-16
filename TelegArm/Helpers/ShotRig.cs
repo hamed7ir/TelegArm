@@ -239,6 +239,17 @@ namespace TelegArm.Helpers
                 Shot("p7-addcontact-" + t, () => new AddContactForm());   // T15
                 Shot("p7-inviteopts-" + t, () => new TelegArm.UI.Admin.InviteOptionsForm());   // T21
                 Shot("p7-scheduled-" + t, () => new ScheduledForm(null, new TL.InputPeerSelf(), "Ada"));   // T11 (chrome)
+                // 2026-10-16: the call window in four phases (an offline CallManager; no call is placed, no sound)
+                UI.Ringer.Silent = true;
+                var calls = new Core.Calls.CallManager(new TelegramService(), new WindowsFormsSynchronizationContext());
+                var ada = new TL.User { id = 1001, first_name = "Ada", last_name = "Lovelace" };
+                foreach (var ph in new[] { Core.Calls.CallPhase.Incoming, Core.Calls.CallPhase.Ringing, Core.Calls.CallPhase.Established, Core.Calls.CallPhase.Ended })
+                {
+                    var cs = new Core.Calls.CallSession { Peer = ada, PeerId = 1001, Outgoing = ph != Core.Calls.CallPhase.Incoming, Phase = ph };
+                    if (ph == Core.Calls.CallPhase.Established) { cs.EstablishedUtc = DateTime.UtcNow.AddSeconds(-83); cs.SignalBars = 3; }
+                    if (ph == Core.Calls.CallPhase.Ended) cs.EndText = "Call ended";
+                    Shot("p8-call-" + ph.ToString().ToLowerInvariant() + "-" + t, () => new CallWindow(calls, cs, null, s => "Ada Lovelace"));
+                }
                 // T22: the privacy exceptions editor (two people in "Always allow")
                 Shot("p7-privacyex-" + t, () => new PrivacyExceptionsForm("Last seen", new[] { new TL.User { id = 1001, first_name = "Ada", last_name = "Lovelace" },
                                                                                           new TL.User { id = 1002, first_name = "Charles" } }, null, null));
@@ -726,6 +737,10 @@ namespace TelegArm.Helpers
                 OpenDemoChat(f);
                 LivePump(600);
                 state("opened");
+                var callBtn = Field(f, "_callBtn") as Control; var lensBtn = Field(f, "_chatSearchBtn") as Control;
+                bool phoneOk = callBtn != null && callBtn.Visible && callBtn.Left < lensBtn.Left;
+                _log.AppendLine("  " + (phoneOk ? "PASS  " : "FAIL  ") + "header: the phone sits left of the magnifier");
+                if (!phoneOk) _failures++;
                 // T20: a venue message — its name, address and an "Open in map" link
                 var venueMsg = new TL.Message
                 {
@@ -1074,11 +1089,12 @@ namespace TelegArm.Helpers
             var entry = ((IEnumerable)Field(main, "_allChats")).Cast<ChatEntry>().First(c => c.PeerId == AdaId);
             SetField(main, "_selectedChat", entry);
             SetField(main, "_readOutboxMaxId", entry.ReadOutboxMaxId);
-            foreach (var btn in new[] { "_chatSearchBtn", "_chatMenuBtn", "_dockBtn" })
+            foreach (var btn in new[] { "_chatSearchBtn", "_chatMenuBtn", "_dockBtn", "_callBtn" })
             {
                 var c = Field(main, btn) as Control;
                 if (c != null) c.Visible = true;
             }
+            Invoke(main, "PlaceCallButton");   // as OpenChat does after showing the phone
             var row = Invoke(main, "FindChatItem", entry.PeerId);
             if (row != null)
             {

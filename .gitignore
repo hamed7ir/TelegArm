@@ -63,3 +63,5 @@ packages/
 /trip/
 # tgav build output (native/tgav/build.ps1 stages the DLLs into TelegArm/ffmpeg/<arch>/)
 /native/tgav/out/
+# tgcalls_native build output (native/tgcalls_native/build.ps1 stages the DLL into TelegArm/tgcalls/<arch>/)
+/native/tgcalls_native/out/

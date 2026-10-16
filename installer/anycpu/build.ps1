@@ -101,6 +101,7 @@ try {
     Copy-Item (Join-Path $root 'THIRD-PARTY-NOTICES.txt') $files
     Copy-Item (Join-Path $rel 'rlottie') $files -Recurse
     Copy-Item (Join-Path $rel 'ffmpeg') $files -Recurse   # FFmpeg + tgav per arch (ffmpeg\ARM, ffmpeg\x86): Core\Media\Tgav
+    Copy-Item (Join-Path $rel 'tgcalls') $files -Recurse  # Telegram calls (tgcalls_native.dll per arch): Core\Calls\TgCalls
     Copy-Item (Join-Path $rel '*.dll') (Join-Path $files 'dll')
     # Text files as CRLF + UTF-8 BOM: Windows 8.1 Notepad shows an LF-only file as ONE line and may misread
     # BOM-less UTF-8. The working tree is CRLF only when git's autocrlf happens to be on (review).

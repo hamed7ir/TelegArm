@@ -332,7 +332,8 @@ non-infringement.
 
 --------------------------------------------------------------------------------
 Apache License 2.0
-  Applies to: SixLabors.ImageSharp 2.1.3, and Roboto-Medium.ttf v1.100141.
+  Applies to: SixLabors.ImageSharp 2.1.3, Roboto-Medium.ttf v1.100141, and the phone icon's outline
+  (Google Material Design icon "call", https://github.com/google/material-design-icons, used in the chat header).
   Reproduced verbatim from https://www.apache.org/licenses/LICENSE-2.0.txt
 --------------------------------------------------------------------------------
 

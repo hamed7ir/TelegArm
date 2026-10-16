@@ -645,6 +645,7 @@ namespace TelegArm.UI
             _headerAvatarImg = null; _headerAvatarPeerId = 0; _headerAvatarTitle = null;
             if (_chatSearchBtn != null) _chatSearchBtn.Visible = false;   // INCHAT-SEARCH: no open chat → no header magnifier
             if (_chatMenuBtn != null) _chatMenuBtn.Visible = false;       // TA-21/S1a: …and no header ⋮ (it acts on the open chat)
+            if (_callBtn != null) _callBtn.Visible = false;               // 2026-10-16: …nor the phone. UI only.
             if (_dockBtn != null) _dockBtn.Visible = false;               // TA-23/D1c: …nor the dock toggle
             SetDockOpen(false);                                           // an open dock with no chat has nothing to show
             ClearMessagePanel();                         // disposes message bubbles + per-chat photo caches

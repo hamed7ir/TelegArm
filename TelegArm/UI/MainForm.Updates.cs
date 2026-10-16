@@ -227,6 +227,7 @@ namespace TelegArm.UI
         private void ProcessSingleUpdateCore(Update update)
         {
             if (LogOn) System.Diagnostics.Debug.WriteLine("[UM] ProcessSingleUpdate: " + (update != null ? update.GetType().Name : "null"));
+            if (TryHandleCallUpdate(update)) return;   // 2026-10-16: calls (MainForm.Calls → CallManager)
             if (update is UpdateNewMessage unm && unm.message is MessageBase mb)
                 HandleIncomingMessage(mb);
             else if (update is UpdateReadHistoryOutbox ro)

@@ -103,6 +103,11 @@ namespace TelegArm.UI
                 _chatMenuBtn.FlatAppearance.MouseOverBackColor = ColorMath.WithAlpha(_accent, 40);
                 _chatMenuBtn.Invalidate();
             }
+            if (_callBtn != null)
+            {
+                _callBtn.FlatAppearance.MouseOverBackColor = ColorMath.WithAlpha(_accent, 40);   // the one-shot hover tint, as _dockBtn
+                _callBtn.Invalidate();
+            }
             if (_backBtn != null)
             {
                 _backBtn.FlatAppearance.MouseOverBackColor = ColorMath.WithAlpha(_accent, 40);   // same one-shot gap as _dockBtn

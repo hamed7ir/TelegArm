@@ -127,6 +127,7 @@ namespace TelegArm.UI
             SetDockOpen(false);
             if (_chatSearchBtn != null) _chatSearchBtn.Visible = false;
             if (_chatMenuBtn != null) _chatMenuBtn.Visible = false;
+            if (_callBtn != null) _callBtn.Visible = false;
             if (_dockBtn != null) _dockBtn.Visible = false;
             ClearMessagePanel();
             _currentChatMessages.Clear();
