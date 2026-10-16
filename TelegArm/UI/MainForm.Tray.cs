@@ -171,6 +171,7 @@ namespace TelegArm.UI
         private void HideToTray()
         {
             if (_notifyIcon == null) { WindowState = FormWindowState.Minimized; return; }
+            SaveWindowPlacement();   // R1: the process may end in the tray (logoff, shutdown) without another chance
             Hide();
         }
 
@@ -178,9 +179,65 @@ namespace TelegArm.UI
         {
             ShowInTaskbar = true;   // STARTUP-SETTING: a --startup launch began off-taskbar; ensure the taskbar button returns
             Show();
-            if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+            if (WindowState == FormWindowState.Minimized) WindowState = RestoreState;   // R1: back maximised if it was
             Activate();
             BringToFront();
+        }
+
+        // ── R1: window placement ─────────────────────────────────────────────────────────────────────────────────────
+
+        /// <summary>Redesign R1 — records the window's NORMAL bounds (also while maximised, minimised or in the tray) and
+        /// whether it was maximised. ⚠ Never the touch-keyboard-shrunk rectangle: while that shrink is active the bounds
+        /// to keep are the ones saved before it (MainForm.Keyboard's _savedBounds).</summary>
+        private void SaveWindowPlacement()
+        {
+            try
+            {
+                if (!IsHandleCreated || IsDisposed) return;
+                Rectangle normal;
+                bool max;
+                if (_kbShrinkActive) { normal = _savedBounds; max = _savedState == FormWindowState.Maximized; }
+                else
+                {
+                    normal = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+                    max = (WindowState == FormWindowState.Minimized ? RestoreState : WindowState) == FormWindowState.Maximized;
+                }
+                if (normal.Width <= 0 || normal.Height <= 0) return;
+                int dpi = Math.Max(48, WindowDpiValue);
+                var s = AppSettings.Instance;
+                s.MainWindow = new WindowPlacementSettings
+                {
+                    X = normal.X, Y = normal.Y,
+                    Width = (int)Math.Round(normal.Width * 96.0 / dpi),
+                    Height = (int)Math.Round(normal.Height * 96.0 / dpi),
+                    Maximized = max,
+                };
+                s.Save();
+                if (LogOn) Logger.Diag("[PLACEMENT] saved " + normal.X + "," + normal.Y + " " + s.MainWindow.Width + "x" + s.MainWindow.Height
+                                       + " (logical) dpi=" + dpi + " max=" + max);
+            }
+            catch (Exception ex) { Logger.Diag("[PLACEMENT] save failed: " + ex.Message); }
+        }
+
+        /// <summary>Redesign R1 — puts the window where it was, at its saved logical size in this window's pixels, if a
+        /// working area still holds its title bar (else: centred at the default size, as before). Called from the
+        /// constructor, before the first show.</summary>
+        private void ApplySavedPlacement()
+        {
+            try
+            {
+                var p = AppSettings.Instance.MainWindow;
+                if (p == null || p.Width <= 0 || p.Height <= 0) return;
+                var size = new Size(Math.Max(Px(p.Width), Px(LogicalMinimumSize.Width)), Math.Max(Px(p.Height), Px(LogicalMinimumSize.Height)));
+                var areas = Array.ConvertAll(Screen.AllScreens, sc => sc.WorkingArea);
+                var fit = WindowPlacementMath.Fit(new Point(p.X, p.Y), size, areas, Px(40));
+                if (fit == null) { Logger.Diag("[PLACEMENT] saved position is off every screen; centring"); return; }
+                StartPosition = FormStartPosition.Manual;
+                Bounds = fit.Value;
+                if (p.Maximized) { WindowState = FormWindowState.Maximized; RestoreState = FormWindowState.Maximized; }
+                if (LogOn) Logger.Diag("[PLACEMENT] restored " + fit.Value + " max=" + p.Maximized);
+            }
+            catch (Exception ex) { Logger.Diag("[PLACEMENT] restore failed: " + ex.Message); }
         }
 
         private void ExitApp()
@@ -218,6 +275,7 @@ namespace TelegArm.UI
                 }
                 _reallyClosing = true;   // Exit: fall through to the real close below
             }
+            SaveWindowPlacement();   // R1: a real close
             // DRAFTS: best-effort save of the open chat's draft on a REAL close (bounded like presence; never blocks
             // shutdown). The primary save is on chat/account switch — this covers "typed then closed without switching".
             try

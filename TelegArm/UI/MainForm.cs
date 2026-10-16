@@ -139,6 +139,7 @@ namespace TelegArm.UI
         // top-edge position (Top = 8). A property (not a field) so it's a clean, assignable hook with no unused-field warning.
         private int DateFlyoutTopOffset { get; set; }
         private JumpToBottomButton _jumpBtn;        // floating "scroll to bottom" + unread badge
+        private JumpToBottomButton _mentionBtn, _reactionBtn;   // T2: jump to the unread @mentions / reactions
         private int _jumpUnread;                    // new messages that arrived while scrolled up
         private System.Windows.Forms.Timer _scrollWatch;
         private System.Windows.Forms.Timer _perfTimer;   // [PERF] 1.5s flush of the diagnosis counters
@@ -317,6 +318,7 @@ namespace TelegArm.UI
             // STARTUP-SETTING: a --startup (auto-launch-at-login) start is SILENT — minimized + off-taskbar, no full
             // window. OnLoad still fires (the form is shown, just minimized) so the session resumes + the tray icon
             // appears (SetupTray, post-auth); a tray click restores via RestoreFromTray (which re-enables the taskbar).
+            ApplySavedPlacement();   // R1: before the start-minimised line, so a tray start keeps the saved bounds to restore to
             if (startMinimized) { WindowState = FormWindowState.Minimized; ShowInTaskbar = false; }
 
             BuildUi();
@@ -397,6 +399,7 @@ namespace TelegArm.UI
 
         protected override bool ProcessCmdKey(ref System.Windows.Forms.Message msg, Keys keyData)
         {
+            if (TryShortcut(keyData)) return true;   // R5: MainForm.Shortcuts.cs
             switch (keyData)
             {
                 case Keys.Control | Keys.F:           // focus search
@@ -409,8 +412,9 @@ namespace TelegArm.UI
                 case Keys.Control | Keys.W:           // hide to tray (or minimize if no tray yet)
                     HideToTray();
                     return true;
-                case Keys.Escape:                     // clear an active search
+                case Keys.Escape:                     // clear an active search, then (R5) one layer at a time
                     if (!string.IsNullOrEmpty(_searchBox.Text)) { _searchBox.Text = ""; return true; }
+                    if (EscapeOneLevel()) return true;
                     break;
                 // Step 3.8b: the interface scale from the keyboard (the safety net when a size is unusable).
                 case Keys.Control | Keys.Oemplus:

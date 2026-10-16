@@ -30,6 +30,7 @@ namespace TelegArm.UI
             SetHeaderAvatar(entry);   // BORDERLESS-CAPTION: peer photo in the accent header
             MarkMentionsReactionsRead(entry);   // MENTION-REACTION: opening = seen → clear @ badge + heart glyph
             CancelReply();                 // a pending reply belongs to the chat we're leaving
+            _sendNoLinkPreview = false;    // T10: so does "no link preview" for the next message
             CancelTyping();                // stop any "typing…" we were showing in the chat we're leaving (QUICKWINS-1)
             if (_selectionMode) ExitSelectionMode();   // selection belongs to the old chat too
             if (_voiceState != VoiceState.None) AbortVoice();
@@ -293,7 +294,7 @@ namespace TelegArm.UI
         }
 
         // ── In-app link / mention router (Part A) ────────────────────────────
-        private enum TgKind { External, User, PrivateChannel, Invite }
+        private enum TgKind { External, User, PrivateChannel, Invite, StickerSet }
 
         /// <summary>Single router every link/mention/sponsored-button click goes through: opens t.me/tg://
         /// targets IN-APP, sends everything else to the browser (with the Telegram-domain confirm gate).</summary>
@@ -313,10 +314,33 @@ namespace TelegArm.UI
                         break;
                     case TgKind.PrivateChannel: await OpenByChannelId(channelId, msgId); break;
                     case TgKind.Invite: await OpenInvite(invite); break;
+                    case TgKind.StickerSet: await ShowStickerSetLink(username); break;   // T5: the set's short name
                     default: OpenExternalUrl(url); break;
                 }
             }
             catch { OpenExternalUrl(url); }   // any resolution failure → graceful browser fallback
+        }
+
+        /// <summary>Redesign T5 — a sticker / emoji pack link: what the pack is, then Add (or "you already have it").</summary>
+        private async System.Threading.Tasks.Task ShowStickerSetLink(string shortName)
+        {
+            var r = await _service.GetStickerSetByNameAsync(shortName);
+            if (IsDisposed) return;
+            var set = r != null ? r.set : null;
+            if (set == null) { ThemedDialog.Show(this, "Stickers", "That pack doesn't exist, or it was removed.", "OK"); return; }
+            bool emoji = (set.flags & StickerSet.Flags.emojis) != 0;
+            string what = emoji ? "emoji pack" : "sticker pack";
+            string count = set.count + (emoji ? " emoji" : set.count == 1 ? " sticker" : " stickers");
+            bool installed = (set.flags & StickerSet.Flags.has_installed_date) != 0 && (set.flags & StickerSet.Flags.archived) == 0;
+            if (installed) { ThemedDialog.Show(this, set.title, "You already have this " + what + " (" + count + ").", "OK"); return; }
+            if (ThemedDialog.Show(this, set.title, "A " + what + " with " + count + ".\n\nAdd it to your packs?", "Add", "Cancel") != 0) return;
+            try
+            {
+                await _service.InstallStickerSetAsync(set);
+                if (LogOn) Logger.Diag("[STICKERS] installed set id=" + set.id + " count=" + set.count);
+                ShowToast(emoji ? "Emoji pack added" : "Sticker pack added");
+            }
+            catch (Exception ex) { ThemedDialog.Show(this, set.title, "Couldn't add the pack: " + ex.Message, "OK"); }
         }
 
         /// <summary>Opens an external url; confirms first UNLESS the host is one of Telegram's own domains.</summary>
@@ -457,6 +481,10 @@ namespace TelegArm.UI
                 }
                 if (u.StartsWith("tg://join", StringComparison.OrdinalIgnoreCase) && q.TryGetValue("invite", out var inv) && !string.IsNullOrEmpty(inv))
                 { invite = inv; return TgKind.Invite; }
+                // T5: tg://addstickers?set=NAME / tg://addemoji?set=NAME → install in-app (the name goes out as username)
+                if ((u.StartsWith("tg://addstickers", StringComparison.OrdinalIgnoreCase) || u.StartsWith("tg://addemoji", StringComparison.OrdinalIgnoreCase))
+                    && q.TryGetValue("set", out var setName) && !string.IsNullOrEmpty(setName))
+                { username = setName; return TgKind.StickerSet; }
                 return TgKind.External;
             }
 
@@ -482,6 +510,10 @@ namespace TelegArm.UI
                 }
                 return TgKind.External;
             }
+            // T5: t.me/addstickers/NAME and t.me/addemoji/NAME install in-app (the name goes out as username)
+            if ((first.Equals("addstickers", StringComparison.OrdinalIgnoreCase) || first.Equals("addemoji", StringComparison.OrdinalIgnoreCase))
+                && segs.Length >= 2 && segs[1].Length > 0)
+            { username = segs[1]; return TgKind.StickerSet; }
             // non-username reserved first segments → browser
             if (first.Equals("share", StringComparison.OrdinalIgnoreCase) || first.Equals("addstickers", StringComparison.OrdinalIgnoreCase)
                 || first.Equals("addemoji", StringComparison.OrdinalIgnoreCase) || first.Equals("setlanguage", StringComparison.OrdinalIgnoreCase)

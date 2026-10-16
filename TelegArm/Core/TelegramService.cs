@@ -1859,6 +1859,39 @@ namespace TelegArm.Core
         /// <summary>MENTION-REACTION: marks unread @mentions/replies in a peer as read (clears unread_mentions_count).</summary>
         public Task ReadMentionsAsync(InputPeer peer) => Client.Messages_ReadMentions(peer);
 
+        /// <summary>Redesign T9 — who reacted to a message (groups), a page at a time; pass the previous page's next_offset.</summary>
+        public Task<Messages_MessageReactionsList> GetReactionsListAsync(InputPeer peer, int msgId, int limit, string offset)
+            => Client.Messages_GetMessageReactionsList(peer, msgId, limit, null, string.IsNullOrEmpty(offset) ? null : offset);
+
+        /// <summary>Redesign T3 — the t.me link of a message in a channel or supergroup (public: t.me/name/id; private:
+        /// t.me/c/…, which only members can open). channels.exportMessageLink.</summary>
+        public async Task<string> ExportMessageLinkAsync(InputChannelBase channel, int id)
+        {
+            var r = await Client.Channels_ExportMessageLink(channel, id);
+            return r.link;
+        }
+
+        /// <summary>Redesign T3 — messages.report, one step of Telegram's report flow: an empty <paramref name="option"/>
+        /// asks for the choices (ReportResultChooseOption), a chosen option may ask for a comment (ReportResultAddComment),
+        /// and ReportResultReported ends it. WTC 4.4.9 types option as a string (checked on the DLL, rail R8).</summary>
+        public Task<ReportResult> ReportMessagesAsync(InputPeer peer, int[] ids, string option, string comment)
+            => Client.Messages_Report(peer, ids, option ?? "", comment ?? "");
+
+        /// <summary>Redesign T2 — the ids of the chat's unread @mentions (newest <paramref name="limit"/>, ascending), read
+        /// BEFORE ReadMentionsAsync clears them, so the chat can jump to each.</summary>
+        public async Task<List<int>> GetUnreadMentionIdsAsync(InputPeer peer, int limit)
+        {
+            var r = await Client.Messages_GetUnreadMentions(peer, 0, 0, limit, 0, 0);
+            return r.Messages.Select(m => m.ID).OrderBy(id => id).ToList();
+        }
+
+        /// <summary>Redesign T2 — the same for messages with unread reactions to MY messages.</summary>
+        public async Task<List<int>> GetUnreadReactionIdsAsync(InputPeer peer, int limit)
+        {
+            var r = await Client.Messages_GetUnreadReactions(peer, 0, 0, limit, 0, 0, null, null);
+            return r.Messages.Select(m => m.ID).OrderBy(id => id).ToList();
+        }
+
         /// <summary>MENTION-REACTION: marks unread reactions-to-you in a peer as read (clears unread_reactions_count).</summary>
         public Task ReadReactionsAsync(InputPeer peer) => Client.Messages_ReadReactions(peer);
 
@@ -2082,12 +2115,20 @@ namespace TelegArm.Core
         /// silently reverted on relaunch (MUTE-PERSIST). Returns the server's bool; callers commit the local
         /// state only on success.</summary>
         public Task<bool> ToggleMuteAsync(InputPeer peer, bool mute)
+            => MuteUntilAsync(peer, mute ? DateTime.UtcNow.AddYears(10) : UnmutedAt);
+
+        /// <summary>An explicit "not muted" (the epoch), which overrides a muted category — see ChatEntry.MuteUntil.</summary>
+        public static readonly DateTime UnmutedAt = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        /// <summary>Redesign T1 — mute until a moment (UTC): an hour, eight, two days, or "forever" (ten years ahead, as
+        /// above); <see cref="UnmutedAt"/> unmutes. Same flag rule as ToggleMuteAsync (has_mute_until must be set).</summary>
+        public Task<bool> MuteUntilAsync(InputPeer peer, DateTime untilUtc)
             => Client.Account_UpdateNotifySettings(
                    new InputNotifyPeer { peer = peer },
                    new InputPeerNotifySettings
                    {
                        flags = InputPeerNotifySettings.Flags.has_mute_until,
-                       mute_until = mute ? DateTime.UtcNow.AddYears(10) : new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+                       mute_until = untilUtc
                    });
 
         /// <summary>Blocks/unblocks a user (contacts.block / contacts.unblock).</summary>
@@ -2442,6 +2483,22 @@ namespace TelegArm.Core
             catch { return new Document[0]; }
         }
 
+        /// <summary>Redesign T5 — a sticker (or custom-emoji) set by the short name an addstickers / addemoji link
+        /// carries; null when Telegram has no such set.</summary>
+        public async Task<Messages_StickerSet> GetStickerSetByNameAsync(string shortName)
+        {
+            try { return await Client.Messages_GetStickerSet(new InputStickerSetShortName { short_name = shortName }, 0); }
+            catch (RpcException ex) when (ex.Message == "STICKERSET_INVALID") { return null; }
+        }
+
+        /// <summary>Redesign T5 — adds a set to the user's packs; the cached list of installed sets is dropped so the
+        /// sticker panel shows it the next time it opens.</summary>
+        public async Task InstallStickerSetAsync(StickerSet set)
+        {
+            await Client.Messages_InstallStickerSet(new InputStickerSetID { id = set.id, access_hash = set.access_hash }, false);
+            _allSetsCache.Value = null;
+        }
+
         /// <summary>The sticker documents in a set.</summary>
         public async Task<Document[]> GetStickerSetAsync(long id, long accessHash)
         {
@@ -2455,6 +2512,29 @@ namespace TelegArm.Core
 
         /// <summary>The user's saved GIFs (cache-first).</summary>
         public Task<Document[]> GetSavedGifsAsync() => CachedMeta(_savedGifsCache, "gifs", FetchSavedGifs, EmptyDocs);
+
+        /// <summary>Redesign T6 — bumped when the saved GIFs change here, so an open GIF panel knows to reload.</summary>
+        public int SavedGifsVersion { get; private set; }
+
+        /// <summary>Redesign T6 — adds a GIF to (or, <paramref name="unsave"/>, removes it from) the saved GIFs.</summary>
+        public async Task SaveGifAsync(Document doc, bool unsave = false)
+        {
+            await Client.Messages_SaveGif(new InputDocument { id = doc.id, access_hash = doc.access_hash, file_reference = doc.file_reference }, unsave);
+            _savedGifsCache.Value = null;
+            SavedGifsVersion++;
+        }
+
+        private User _gifBot;
+
+        /// <summary>Redesign T6 — GIF search: @gif's inline results for <paramref name="query"/> (what Telegram's own apps
+        /// show), as documents the GIF panel sends like a saved GIF. The bot is resolved once per session.</summary>
+        public async Task<Document[]> SearchGifsAsync(string query)
+        {
+            if (_gifBot == null) _gifBot = (await Client.Contacts_ResolveUsername("gif")).User;
+            if (_gifBot == null) return EmptyDocs;
+            var r = await Client.Messages_GetInlineBotResults(_gifBot, new InputPeerSelf(), query ?? "", "");
+            return r.results.OfType<BotInlineMediaResult>().Select(x => x.document as Document).Where(d => d != null).ToArray();
+        }
         private async Task<Document[]> FetchSavedGifs()
         { var r = await Client.Messages_GetSavedGifs(); return (r as Messages_SavedGifs)?.gifs.OfType<Document>().ToArray() ?? EmptyDocs; }
 
@@ -2469,11 +2549,14 @@ namespace TelegArm.Core
         /// Sends a plain-text message to a peer; returns the sent message. When
         /// <paramref name="replyToMsgId"/> is &gt; 0 the message is sent as a reply.
         /// </summary>
-        public Task<Message> SendTextAsync(InputPeer peer, string text, int replyToMsgId = 0, MessageEntity[] entities = null)
+        public Task<Message> SendTextAsync(InputPeer peer, string text, int replyToMsgId = 0, MessageEntity[] entities = null,
+                                           bool noLinkPreview = false)
         {
+            // T10: WTC's helper takes the preview choice itself (Client.LinkPreview, default BelowText — checked on the DLL)
+            var preview = noLinkPreview ? WTelegram.Client.LinkPreview.Disabled : WTelegram.Client.LinkPreview.BelowText;
             return replyToMsgId > 0
-                ? Client.SendMessageAsync(peer, text, reply_to_msg_id: replyToMsgId, entities: entities)
-                : Client.SendMessageAsync(peer, text, entities: entities);
+                ? Client.SendMessageAsync(peer, text, reply_to_msg_id: replyToMsgId, entities: entities, preview: preview)
+                : Client.SendMessageAsync(peer, text, entities: entities, preview: preview);
         }
 
         /// <summary>COMMENTS-POST: post a comment into a channel post's discussion thread. The SendMessageAsync helper
@@ -2730,27 +2813,29 @@ namespace TelegArm.Core
             return client.Account_UpdateStatus(offline);
         }
 
-        /// <summary>Forwards messages (by id) from one peer to another.</summary>
-        public Task<UpdatesBase> ForwardMessagesAsync(InputPeer fromPeer, int[] ids, InputPeer toPeer)
+        /// <summary>Forwards messages (by id) from one peer to another. T4: <paramref name="dropAuthor"/> sends them as
+        /// copies without "Forwarded from"; <paramref name="dropCaptions"/> (only with it) also leaves media captions out.</summary>
+        public Task<UpdatesBase> ForwardMessagesAsync(InputPeer fromPeer, int[] ids, InputPeer toPeer, bool dropAuthor = false, bool dropCaptions = false)
         {
             // Each forwarded message needs a unique client random_id.
             var rnd = new long[ids.Length];
             var rng = new Random();
             for (int i = 0; i < ids.Length; i++)
                 rnd[i] = ((long)rng.Next(int.MinValue, int.MaxValue) << 32) ^ (uint)rng.Next();
-            return Client.Messages_ForwardMessages(fromPeer, ids, rnd, toPeer);
+            return Client.Messages_ForwardMessages(fromPeer, ids, rnd, toPeer, drop_author: dropAuthor, drop_media_captions: dropAuthor && dropCaptions);
         }
 
         /// <summary>Forwards to a SINGLE target, off the UI thread + time-bounded (for the multi-target picker
         /// loop — one slow/black-holed target must not hang the others). Returns the RPC's UpdatesBase (so the
         /// caller can route it through the single chat-list refresh), or null on timeout/error.</summary>
-        public async Task<UpdatesBase> ForwardToAsync(InputPeer fromPeer, int[] ids, InputPeer toPeer, int timeoutMs = 20000)
+        public async Task<UpdatesBase> ForwardToAsync(InputPeer fromPeer, int[] ids, InputPeer toPeer, int timeoutMs = 20000,
+                                                      bool dropAuthor = false, bool dropCaptions = false)
         {
             var client = Client;
             if (client == null || ids == null || ids.Length == 0 || toPeer == null) return null;
             try
             {
-                var task = Task.Run(() => ForwardMessagesAsync(fromPeer, ids, toPeer));
+                var task = Task.Run(() => ForwardMessagesAsync(fromPeer, ids, toPeer, dropAuthor, dropCaptions));
                 var done = await Task.WhenAny(task, Task.Delay(timeoutMs)).ConfigureAwait(false);
                 if (done != task) { SwallowTaskFault(task); System.Diagnostics.Debug.WriteLine("[FWD] target TIMED OUT"); return null; }
                 return await task.ConfigureAwait(false);

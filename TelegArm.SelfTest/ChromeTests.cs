@@ -15,8 +15,25 @@ namespace TelegArm.SelfTest
             t.Add(new KeyValuePair<string, Action>("chrome: hit-test table at 96 DPI (gutter 6, corner 10)", HitTable96));
             t.Add(new KeyValuePair<string, Action>("chrome: hit-test at 144 DPI and with the touch gutter", HitTableScaled));
             t.Add(new KeyValuePair<string, Action>("chrome: no resize edges when maximised or fixed-size", HitNoResize));
+            t.Add(new KeyValuePair<string, Action>("placement (R1): a saved window comes back on screen, clamped, or not at all", Placement));
             t.Add(new KeyValuePair<string, Action>("dialogs: KeyboardInset raises on a change only, and only while listened to", InsetChangesOnly));
             t.Add(new KeyValuePair<string, Action>("dialogs: a throwing KeyboardInset listener does not stop the others", InsetIsolatesListeners));
+        }
+
+        private static void Placement()
+        {
+            var one = new[] { new Rectangle(0, 0, 1920, 1040) };
+            var two = new[] { new Rectangle(0, 0, 1920, 1040), new Rectangle(1920, 0, 1366, 728) };
+            Check.Equal(new Rectangle(100, 80, 900, 560), WindowPlacementMath.Fit(new Point(100, 80), new Size(900, 560), one, 40), "on screen: unchanged");
+            Check.True(WindowPlacementMath.Fit(new Point(-30000, -30000), new Size(900, 560), one, 40) == null, "on no screen: null (centre)");
+            Check.Equal(new Rectangle(0, 0, 1920, 1040), WindowPlacementMath.Fit(new Point(0, 0), new Size(6000, 4000), one, 40), "too big: the working area");
+            Check.Equal(new Rectangle(1020, 480, 900, 560), WindowPlacementMath.Fit(new Point(1500, 900), new Size(900, 560), one, 40), "hanging off the corner: moved in");
+            Check.True(WindowPlacementMath.Fit(new Point(1860, 100), new Size(900, 560), one, 40) == null, "only 60 px of the title bar visible: null");
+            var second = WindowPlacementMath.Fit(new Point(2000, 100), new Size(1000, 900), two, 40).Value;
+            Check.True(second.Left >= 1920 && second.Right <= 3286 && second.Height == 728, "the second monitor holds most of it: fitted there " + second);
+            Check.Equal(new Rectangle(0, 0, 1920, 1040), WindowPlacementMath.Fit(new Point(0, 0), new Size(6000, 4000), two, 40),
+                        "too big at the primary's corner: stays on the primary, though its title bar crosses the second more");
+            Check.Equal(new Rectangle(500, 0, 900, 560), WindowPlacementMath.Fit(new Point(500, -10), new Size(900, 560), one, 40), "title bar a little above the top: moved down");
         }
 
         // A 400x300 client with a 46-pixel title bar across the top.

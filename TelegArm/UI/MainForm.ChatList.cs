@@ -656,7 +656,18 @@ namespace TelegArm.UI
             if (c.PinAllowed)
                 AddMenuItem(menu, IsPinnedInView(entry) ? "📌   Unpin" : "📌   Pin", () => TogglePin(entry));
 
-            AddMenuItem(menu, entry.Muted ? "🔔   Unmute" : "🔕   Mute", () => ToggleChatMute(entry));
+            // T1: mute for a while (1 h / 8 h / 2 days / forever); a timed mute says until when
+            if (entry.Muted)
+            {
+                string until = MuteMenu.Until(entry.MuteUntil);
+                AddMenuItem(menu, "🔔   Unmute" + (until != null ? "  (muted " + until + ")" : ""), () => SetChatMute(entry, null));
+            }
+            else
+            {
+                var mute = new ToolStripMenuItem("🔕   Mute");
+                MuteMenu.AddChoices(mute.DropDownItems, this, d => SetChatMute(entry, d));
+                menu.Items.Add(mute);
+            }
 
             if (entry.UnreadCount > 0)
                 AddMenuItem(menu, "✓   Mark as read", () => MarkChatRead(entry));
@@ -702,11 +713,21 @@ namespace TelegArm.UI
             menu.ShowAt(_chatMenuBtn.PointToScreen(new Point(0, _chatMenuBtn.Height)));
         }
 
-        private async void ToggleChatMute(ChatEntry entry)
+        /// <summary>Unmute a muted chat, or mute it forever (the composer's Mute button, Ctrl+Shift+M).</summary>
+        private void ToggleChatMute(ChatEntry entry)
         {
-            bool target = !entry.Muted;
+            if (entry != null) SetChatMute(entry, entry.Muted ? (TimeSpan?)null : MuteMenu.Forever);
+        }
+
+        /// <summary>Redesign T1 — mute for <paramref name="duration"/> (<see cref="MuteMenu.Forever"/> = forever), or unmute
+        /// (null). The local state is committed only when Telegram accepts the write, as before.</summary>
+        private async void SetChatMute(ChatEntry entry, TimeSpan? duration)
+        {
+            if (entry == null) return;
+            bool target = duration.HasValue;
+            DateTime until = target ? MuteMenu.UntilUtc(duration.Value) : TelegramService.UnmutedAt;
             bool ok;
-            try { ok = await _service.ToggleMuteAsync(entry.Peer, target); }
+            try { ok = await _service.MuteUntilAsync(entry.Peer, until); }
             catch (Exception ex)
             {
                 if (Logger.Enabled) Logger.Diag("[NOTIFY] mute write peer=" + entry.PeerId + " mute=" + target + " FAILED ex=" + ex.Message);   // R7: survives Release (BATCH-TA-6/P1)
@@ -714,12 +735,12 @@ namespace TelegArm.UI
             }
             if (Logger.Enabled) Logger.Diag("[NOTIFY] mute write peer=" + entry.PeerId + " mute=" + target + (ok ? " ok" : " FAILED (server returned false)"));   // R7 (BATCH-TA-6/P1)
             if (!ok) { ThemedDialog.Show(this, "Mute", "Telegram didn't accept the change — try again.", "OK"); return; }
+            // Keep the explicit-setting mirror consistent for the notify gate until the server echo lands.
+            entry.MuteUntil = until;
             entry.Muted = target;
-            // Keep the explicit-setting mirror consistent for the notify gate until the server echo lands
-            // (mirrors ToggleMuteAsync's own values: 10 years forward / epoch).
-            entry.MuteUntil = target ? DateTime.UtcNow.AddYears(10) : new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
             FindChatItem(entry.PeerId)?.Invalidate();   // repaint badge color + mute glyph
             if (entry == _selectedChat) ResolveAndApplyComposer(entry);   // refresh the footer Mute/Unmute label
+            ArmMuteExpiry();                            // T1: a timed mute ends by itself
         }
 
         private async void MarkChatRead(ChatEntry entry)

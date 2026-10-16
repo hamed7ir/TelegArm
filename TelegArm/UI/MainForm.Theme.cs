@@ -60,6 +60,8 @@ namespace TelegArm.UI
                 _jumpBtn.IsDark = _dark;
                 _jumpBtn.AccentColor = _accent;
                 _jumpBtn.Invalidate();
+                foreach (var jb in new[] { _mentionBtn, _reactionBtn })   // T2
+                    if (jb != null) { jb.IsDark = _dark; jb.AccentColor = _accent; jb.Invalidate(); }
             }
 
             // BATCH-TA-16d/D5 — recolor the proxy pill on the SAME live path. The jump button shipped a bug

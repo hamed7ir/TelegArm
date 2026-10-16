@@ -191,6 +191,7 @@ namespace TelegArm.UI
             _openLatchPeer = entry.PeerId; _openLatchTick = Environment.TickCount;
             if (_inChatSearchEntry != null) ExitInChatSearch();   // INCHAT-SEARCH: opening a (different) chat leaves in-chat search
             if (LogOn) Logger.Diag("[OPEN] OpenChat peer=" + entry.PeerId + " focus=" + focusMessageId);   // R7 (BATCH-TA-6/P1)
+            if (_editTarget != null) CancelReplyByUser();   // R5: leaving mid-edit keeps what was typed BEFORE the edit as the draft
             PersistDraftForCurrentChat();   // DRAFTS: save the chat we're LEAVING (its composer text → server draft) before switching
             ClearThreadMode();        // COMMENTS-NAV-FIX Bug 2: leaving ANY comment thread — clear _thread so the loaders,
                                       // composer, and send target the NEW chat (LoadHistoryAsync below then resets the panel).
@@ -298,6 +299,42 @@ namespace TelegArm.UI
             if (isButton) _footerBar.SetButton(label); else _footerBar.SetLabel(label);
             _footerBar.Visible = true;
             _footerBar.BringToFront();
+            StartComposerCountdown(st);   // T7: the label counts down; at zero the composer comes back
+        }
+
+        // ── T7: the footer's countdown (slow mode, a timed restriction) ─────────────────────────────────────────────
+        private System.Windows.Forms.Timer _composerCountdown;
+        private ComposerState _countdownState;
+        private ChatEntry _countdownChat;
+
+        private void StartComposerCountdown(ComposerState st)
+        {
+            bool counting = (st.Kind == ComposerKind.SlowmodeWait || st.Kind == ComposerKind.Restricted) && st.HasCountdown;
+            if (!counting) { if (_composerCountdown != null) _composerCountdown.Stop(); return; }
+            _countdownState = st;
+            _countdownChat = _selectedChat;
+            if (_composerCountdown == null)
+            {
+                _composerCountdown = new System.Windows.Forms.Timer { Interval = 1000 };
+                _composerCountdown.Tick += (s, e) => ComposerCountdownTick();
+            }
+            _composerCountdown.Start();
+        }
+
+        private void ComposerCountdownTick()
+        {
+            if (IsDisposed || _selectedChat == null || !ReferenceEquals(_selectedChat, _countdownChat) || _footerKind != _countdownState.Kind)
+            { _composerCountdown.Stop(); return; }
+            if (_countdownState.Until <= DateTime.UtcNow)
+            {
+                _composerCountdown.Stop();
+                ResolveAndApplyComposer(_selectedChat);   // the wait is over: re-resolve (normally back to the composer)
+                return;
+            }
+            if (_footerBar == null) return;
+            _footerBar.SetLabel(_countdownState.Kind == ComposerKind.SlowmodeWait
+                ? "Slow mode — wait " + FormatComposerUntil(_countdownState.Until)
+                : "You can send again in " + FormatComposerUntil(_countdownState.Until));
         }
 
         /// <summary>Gathers the inputs (fetching UserFull for the blocked flag) and applies the footer state.</summary>
@@ -314,9 +351,16 @@ namespace TelegArm.UI
                 try { uf = await _service.GetUserFullAsync(u); } catch { }
                 if (entry != _selectedChat) return;   // chat switched while fetching
             }
-            // channelFull is null in v1 (base Channel carries left/broadcast/admin_rights/banned_rights;
-            // slow-mode timing — the only full-only field — is deferred → resolves as COMPOSE).
-            var st = ComposerResolver.Resolve(entry.PeerInfo, null, uf, entry.Muted, _currentChatMessages.Count == 0);
+            // T7: slow-mode timing is the only full-only field the resolver needs — fetched only for a supergroup that
+            // HAS slow mode and where it applies to us (not the creator, not an admin): one bounded call, most chats none.
+            ChannelFull cf = null;
+            if (entry.PeerInfo is Channel sch && (sch.flags & Channel.Flags.slowmode_enabled) != 0
+                && (sch.flags & (Channel.Flags.broadcast | Channel.Flags.creator)) == 0 && sch.admin_rights == null)
+            {
+                try { var full = await _service.GetChannelFullAsync(sch); cf = full != null ? full.full_chat as ChannelFull : null; } catch { }
+                if (entry != _selectedChat) return;
+            }
+            var st = ComposerResolver.Resolve(entry.PeerInfo, cf, uf, entry.Muted, _currentChatMessages.Count == 0);
             ApplyComposerState(st);
         }
 
@@ -324,8 +368,8 @@ namespace TelegArm.UI
         {
             var ts = until - DateTime.UtcNow;
             if (ts.TotalHours >= 1) return (int)ts.TotalHours + "h " + ts.Minutes + "m";
-            if (ts.TotalMinutes >= 1) return (int)ts.TotalMinutes + "m";
-            return Math.Max(1, (int)ts.TotalSeconds) + "s";
+            if (ts.TotalMinutes >= 1) return (int)ts.TotalMinutes + "m " + ts.Seconds.ToString("00") + "s";   // T7: it ticks
+            return Math.Max(1, (int)Math.Ceiling(ts.TotalSeconds)) + "s";
         }
 
         /// <summary>The footer button was tapped — dispatch by the current state.</summary>

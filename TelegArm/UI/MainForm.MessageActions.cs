@@ -80,6 +80,13 @@ namespace TelegArm.UI
             {
                 AddMenuItem(menu, "↩   Reply", () => StartReply(msg));
                 AddReactMenu(menu, msg);
+                // T9: who reacted — groups only (a channel's reactions are anonymous)
+                int reacted = ReactionTotal(msg);
+                if (reacted > 0 && _selectedChat.IsGroup)
+                    AddMenuItem(menu, "👥   Who reacted (" + reacted + ")", () =>
+                    {
+                        using (var f = new ReactorsForm(_service, _selectedChat.Peer, msg.ID, reacted)) f.ShowDialog(this);
+                    });
                 if ((msg.flags & Message.Flags.pinned) != 0)
                     AddMenuItem(menu, "📌   Unpin", () => UnpinMessage(msg));
                 else
@@ -92,11 +99,20 @@ namespace TelegArm.UI
                 else
                     AddMenuItem(menu, "⮕   Forward", () => ForwardMessage(msg));
                 AddMenuItem(menu, "☑   Select", () => EnterSelectionMode(msg.ID));
+                // T3: a link to the message (channels and supergroups only: the only chats with message links)
+                var linkChannel = InputChannelOf(msg);
+                if (linkChannel != null)
+                    AddMenuItem(menu, "🔗   Copy link", () => CopyMessageLink(linkChannel, msg.ID));
+                // T3: report someone else's message (Telegram's own option list)
+                if (!IsOut(msg) && !(_selectedChat.PeerInfo is User su && (su.flags & User.Flags.self) != 0))
+                    AddMenuItem(menu, "⚑   Report", () => ReportMessage(_selectedChat.Peer, msg.ID, "", null));
                 if (MediaClassifier.FromMessage(msg) != null)   // any media (photo/video/audio/voice/file/gif/sticker)
                 {
                     AddMenuItem(menu, "💾   Save", () => { var _ = SaveMediaAsync(msg); });
                     AddMenuItem(menu, "📁   Reveal in folder", () => RevealMedia(msg));
                 }
+                var gifDoc = GifDocumentOf(msg);   // T6: keep it in the GIF panel
+                if (gifDoc != null) AddMenuItem(menu, "🎞   Save to GIFs", () => SaveGif(gifDoc));
                 AddMenuItem(menu, "✖   Delete", () => DeleteMessage(ctl, msg));
             }
 
@@ -104,6 +120,98 @@ namespace TelegArm.UI
 
             menu.Closed += (s, e) => BeginInvoke((Action)menu.Dispose);
             menu.ShowAt(screenPt);
+        }
+
+        /// <summary>T9: how many reactions a message carries (all kinds together).</summary>
+        private static int ReactionTotal(Message m)
+        {
+            int n = 0;
+            if (m != null && m.reactions != null && m.reactions.results != null)
+                foreach (var rc in m.reactions.results) n += rc.count;
+            return n;
+        }
+
+        // ── T6: save a GIF ─────────────────────────────────────────────────────────────────────────────────────────
+
+        /// <summary>The message's GIF (an animation: DocumentAttributeAnimated, or a raw image/gif — MediaClassifier's rule).</summary>
+        private static Document GifDocumentOf(Message msg)
+        {
+            var d = (msg != null ? msg.media as MessageMediaDocument : null)?.document as Document;
+            if (d == null || d.attributes == null) return null;
+            bool animated = d.attributes.OfType<DocumentAttributeAnimated>().Any() || d.mime_type == "image/gif";
+            bool sticker = d.attributes.OfType<DocumentAttributeSticker>().Any();
+            return animated && !sticker ? d : null;
+        }
+
+        private async void SaveGif(Document doc)
+        {
+            try { await _service.SaveGifAsync(doc); ShowToast("Saved to GIFs"); }
+            catch (Exception ex) { ThemedDialog.Show(this, "Save GIF", "Couldn't save the GIF: " + ex.Message, "OK"); }
+        }
+
+        // ── T3: message link + report ──────────────────────────────────────────────────────────────────────────────
+
+        /// <summary>The channel a message lives in (a broadcast channel, a supergroup, or the discussion group of an open
+        /// comment thread), or null — a private chat or a basic group has no message links.</summary>
+        private InputChannelBase InputChannelOf(Message msg)
+        {
+            var pc = msg != null ? msg.peer_id as PeerChannel : null;
+            if (pc == null) return null;
+            var ch = ResolvePeer(pc) as Channel;
+            return ch != null ? new InputChannel(ch.id, ch.access_hash) : null;
+        }
+
+        private async void CopyMessageLink(InputChannelBase channel, int id)
+        {
+            try
+            {
+                string link = await _service.ExportMessageLinkAsync(channel, id);
+                if (string.IsNullOrEmpty(link)) { ThemedDialog.Show(this, "Copy link", "Telegram returned no link for this message.", "OK"); return; }
+                try { Clipboard.SetText(link); } catch { }
+                ShowToast("Link copied");
+            }
+            catch (Exception ex) { ThemedDialog.Show(this, "Copy link", "Couldn't get the link: " + ex.Message, "OK"); }
+        }
+
+        /// <summary>T3 — the report flow, one server round per step: choose a reason (as a menu at the pointer, since the
+        /// list is long), sometimes add a comment, then "Reported". Same shape as the ad report (ReportSponsored).</summary>
+        private async void ReportMessage(InputPeer peer, int id, string option, string comment)
+        {
+            try
+            {
+                var result = await _service.ReportMessagesAsync(peer, new[] { id }, option, comment);
+                if (IsDisposed) return;
+                var choose = result as ReportResultChooseOption;
+                var add = result as ReportResultAddComment;
+                if (choose != null)
+                {
+                    if (choose.options == null || choose.options.Length == 0) return;
+                    var menu = new ThemedContextMenuStrip();
+                    var title = new ToolStripMenuItem(string.IsNullOrEmpty(choose.title) ? "Report" : choose.title) { Enabled = false };
+                    menu.Items.Add(title);
+                    menu.Items.Add(new ToolStripSeparator());
+                    foreach (var o in choose.options)
+                    {
+                        string opt = o.option;
+                        AddMenuItem(menu, o.text, () => ReportMessage(peer, id, opt, null));
+                    }
+                    menu.Closed += (s, e) => BeginInvoke((Action)menu.Dispose);
+                    menu.ShowAt(Cursor.Position);
+                }
+                else if (add != null)
+                {
+                    bool optional = (add.flags & ReportResultAddComment.Flags.optional) != 0;
+                    string text = InputDialog.Ask(this, "Report", optional ? "Add details (optional)" : "Describe the problem", "");
+                    if (text == null && !optional) return;   // cancelled
+                    ReportMessage(peer, id, add.option, text ?? "");
+                }
+                else
+                {
+                    if (LogOn) Logger.Diag("[REPORT] message " + id + " reported");
+                    ShowToast("Reported. Thank you.");
+                }
+            }
+            catch (Exception ex) { ThemedDialog.Show(this, "Report", "Couldn't report: " + ex.Message, "OK"); }
         }
 
         /// <summary>Pins a message after asking who should see it (everyone vs. just me).</summary>
@@ -372,12 +480,13 @@ namespace TelegArm.UI
             if (_selectedChat == null) return;
 
             List<ChatEntry> targets;
+            bool hide, drop;   // T4: the picker's forward options
             using (var picker = new ForwardPickerDialog(_allChats, _dark, _accent, GetCachedAvatar, GetAvatarBoundedAsync))
             {
                 if (picker.ShowDialog(this) != DialogResult.OK || picker.SelectedChats.Count == 0) return;
-                targets = picker.SelectedChats;
+                targets = picker.SelectedChats; hide = picker.HideSender; drop = picker.DropCaptions;   // T4
             }
-            int ok = await ForwardToTargets(_selectedChat.Peer, new[] { msg.ID }, targets);
+            int ok = await ForwardToTargets(_selectedChat.Peer, new[] { msg.ID }, targets, hide, drop);
             ThemedDialog.Show(this, ok > 0 ? "Forwarded" : "Forward failed", ForwardResultText(ok, targets.Count), "OK");
         }
 
@@ -465,14 +574,15 @@ namespace TelegArm.UI
             if (_selectedChat == null || _selectedMessageIds.Count == 0) return;
 
             List<ChatEntry> targets;
+            bool hide, drop;   // T4: the picker's forward options
             using (var picker = new ForwardPickerDialog(_allChats, _dark, _accent, GetCachedAvatar, GetAvatarBoundedAsync))
             {
                 if (picker.ShowDialog(this) != DialogResult.OK || picker.SelectedChats.Count == 0) return;
-                targets = picker.SelectedChats;
+                targets = picker.SelectedChats; hide = picker.HideSender; drop = picker.DropCaptions;   // T4
             }
 
             var ids = _selectedMessageIds.OrderBy(x => x).ToArray();   // chronological order
-            int ok = await ForwardToTargets(_selectedChat.Peer, ids, targets);
+            int ok = await ForwardToTargets(_selectedChat.Peer, ids, targets, hide, drop);
             if (ok > 0) ExitSelectionMode();
             ThemedDialog.Show(this, ok > 0 ? "Forwarded" : "Forward failed",
                 ok == 0 ? "Couldn't forward — make sure your VPN is on."

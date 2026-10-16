@@ -730,16 +730,28 @@ namespace TelegArm.UI
         }
 
         // ── Action handlers ──────────────────────────────────────────────────
-        private async void ToggleMute()
+        /// <summary>T1: unmute, or offer how long to mute (the same four choices as the chat menu).</summary>
+        private void ToggleMute()
         {
-            bool target = !_muted;
+            if (_muted) { SetMute(null); return; }
+            var menu = new ThemedContextMenuStrip();
+            MuteMenu.AddChoices(menu.Items, this, d => SetMute(d));
+            menu.Closed += (s, e) => BeginInvoke((Action)menu.Dispose);
+            var anchor = (Control)_muteTile ?? this;
+            menu.ShowAt(anchor, new Point(0, anchor.Height));
+        }
+
+        private async void SetMute(TimeSpan? duration)
+        {
+            bool target = duration.HasValue;
+            DateTime until = target ? MuteMenu.UntilUtc(duration.Value) : TelegramService.UnmutedAt;
             bool ok;
-            try { ok = await _service.ToggleMuteAsync(_entry.Peer, target); }
+            try { ok = await _service.MuteUntilAsync(_entry.Peer, until); }
             catch (Exception ex) { ThemedDialog.Show(this, "Mute", "Couldn't change mute: " + ex.Message, "OK"); return; }
             if (Logger.Enabled) Logger.Diag("[NOTIFY] mute write peer=" + (_entry?.PeerId ?? 0) + " mute=" + target + (ok ? " ok" : " FAILED (server returned false)"));
             if (!ok) { ThemedDialog.Show(this, "Mute", "Telegram didn't accept the change — try again.", "OK"); return; }
             _muted = target;
-            if (_entry != null) _entry.Muted = target;
+            if (_entry != null) { _entry.Muted = target; _entry.MuteUntil = until; }
             if (_muteTile != null && !_muteTile.IsDisposed)
             {
                 _muteTile.Icon = _muted ? ProfileIcon.BellOff : ProfileIcon.Bell;

@@ -416,6 +416,38 @@ namespace TelegArm.UI
             if (_allChats.Count == 0) return;
             foreach (var e in _allChats) e.Muted = ComputeEffectiveMuted(e);
             if (_chatListPanel != null) RenderChatList(_searchBox != null ? _searchBox.Text : "");
+            ArmMuteExpiry();
+        }
+
+        private System.Windows.Forms.Timer _muteExpiry;
+
+        /// <summary>Redesign T1 — a timed mute (1 h / 8 h / 2 days, here or on another device) ends on its own: the
+        /// notifications already read MuteUntil, but the bell in the list and the composer's Mute/Unmute were computed
+        /// once. Wakes at the next end time (within the timer's ~24-day reach; later ones are re-armed by any relist or
+        /// notify update before then) and recomputes.</summary>
+        private void ArmMuteExpiry()
+        {
+            DateTime now = DateTime.UtcNow, next = DateTime.MaxValue;
+            foreach (var e in _allChats)
+                if (e.MuteUntil.HasValue && e.MuteUntil.Value > now && e.MuteUntil.Value < next) next = e.MuteUntil.Value;
+            if (_muteExpiry == null)
+            {
+                _muteExpiry = new System.Windows.Forms.Timer();
+                _muteExpiry.Tick += (s, e) =>
+                {
+                    _muteExpiry.Stop();
+                    if (IsDisposed) return;
+                    if (LogOn) Logger.Diag("[NOTIFY] a timed mute ended: recomputing the list's mutes");
+                    ReapplyEffectiveMutes();   // re-arms for the next one
+                    if (_selectedChat != null) ResolveAndApplyComposer(_selectedChat);
+                };
+            }
+            _muteExpiry.Stop();
+            if (next == DateTime.MaxValue) return;
+            double ms = (next - now).TotalMilliseconds + 1000;
+            if (ms >= int.MaxValue) return;
+            _muteExpiry.Interval = (int)Math.Max(1000, ms);
+            _muteExpiry.Start();
         }
 
         private string NameOf(Peer p)
@@ -435,6 +467,7 @@ namespace TelegArm.UI
             if (entry == null) return;
             entry.MuteUntil = MuteUntilOf(ns);   // explicit-vs-inherited (NOTIFY-FIX) — set BEFORE the effective compute
             entry.Muted = ComputeEffectiveMuted(entry);   // MUTE-EFFECTIVE: icon = explicit setting OR category default
+            ArmMuteExpiry();                              // T1: a timed mute set on another device ends here too
             // MUTE-PERSIST: the self-echo of our own mute write lands here — its presence in the log is the
             // proof the server ACCEPTED the write (its absence after a mute tap = the write was a no-op).
             if (Logger.Enabled) System.Diagnostics.Debug.WriteLine("[NOTIFY] settings update peer=" + peerId

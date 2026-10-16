@@ -299,6 +299,15 @@ namespace TelegArm.UI
         private int _normalDpi;
         private FormWindowState _lastState = FormWindowState.Normal;
         private FormWindowState _layoutState = FormWindowState.Normal;   // OnResize's own view, for the native-edge re-layout
+        private FormWindowState _restoreState = FormWindowState.Normal;   // R1: the last state that was not Minimized
+
+        /// <summary>Redesign R1 — the state a minimised (or tray-hidden) window comes back in: Normal or Maximized.
+        /// Settable for a window that STARTS minimised (a --startup launch) and should come back maximised.</summary>
+        protected FormWindowState RestoreState
+        {
+            get { return _restoreState; }
+            set { if (value != FormWindowState.Minimized) _restoreState = value; }
+        }
         private bool _liveNormal = true;      // IsZoomed/IsIconic as of the last WM_MOVE/WM_SIZE — NOT WinForms' cached state
         private Point _osRestorePlace;        // where WINDOWS put the window when it last left maximised/minimised
         private Size? _sizeAfterDrag;         // a size correction owed once a drag-restore ends
@@ -311,6 +320,7 @@ namespace TelegArm.UI
             if (WindowState != FormWindowState.Minimized && !IsPane) _windowDpi.Resync("restore");
             var stateBefore = _layoutState;
             _layoutState = WindowState;
+            if (WindowState != FormWindowState.Minimized) _restoreState = WindowState;
             KeepNormalBounds();
             // ⚠ NATIVE EDGES (owner bug 2026-10-15, live rig): on maximise the docking layout runs INSIDE the state change,
             //   while the client origin is still moving from inside Windows' frame to the work area. It places the title bar

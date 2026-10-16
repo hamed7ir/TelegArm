@@ -82,6 +82,9 @@ namespace TelegArm.UI
             AddTool(ref x, "Italic (Ctrl+I)", "I", FontStyle.Italic, null, () => Format("__", "__"));
             AddTool(ref x, "Strikethrough", "S", FontStyle.Regular, null, () => Format("~~", "~~"), strike: true);
             AddTool(ref x, "Monospace", "{ }", FontStyle.Regular, null, () => Format("`", "`"), mono: true);
+            AddTool(ref x, "Underline (Ctrl+U)", "U", FontStyle.Underline, null, () => Format("<u>", "</u>"));   // T8
+            AddTool(ref x, "Spoiler", "||", FontStyle.Bold, null, () => Format("||", "||"));
+            AddTool(ref x, "Quote", "\u201C", FontStyle.Bold, null, () => ComposerFormat.Quote(_box));
             AddTool(ref x, "Link (Ctrl+K)", "Link", FontStyle.Regular, null, () => ComposerFormat.InsertLink(_box));
             x += Px(10);
             _emoji = AddTool(ref x, "Emoji", null, FontStyle.Regular, DrawEmojiGlyph, OpenEmojiPicker);
@@ -179,6 +182,7 @@ namespace TelegArm.UI
             else if (e.Control && e.KeyCode == Keys.B) { e.SuppressKeyPress = true; Format("**", "**"); }
             else if (e.Control && e.KeyCode == Keys.I) { e.SuppressKeyPress = true; Format("__", "__"); }
             else if (e.Control && e.KeyCode == Keys.K) { e.SuppressKeyPress = true; ComposerFormat.InsertLink(_box); }
+            else if (e.Control && e.KeyCode == Keys.U) { e.SuppressKeyPress = true; Format("<u>", "</u>"); }   // T8
         }
 
         /// <summary>Esc closes and KEEPS the text (it goes back into the composer).</summary>
@@ -551,6 +555,30 @@ namespace TelegArm.UI
                 string sel = t.Substring(start, len);
                 tb.Text = t.Substring(0, start) + open + sel + close + t.Substring(start + len);
                 tb.SelectionStart = len > 0 ? start + open.Length + len + close.Length : start + open.Length;
+                tb.Focus();
+            }
+            catch { }
+        }
+
+        /// <summary>Redesign T8 — "> " in front of every selected line (or the caret's line): the parser turns a run of
+        /// them into one quote.</summary>
+        public static void Quote(InputBox tb)
+        {
+            if (tb == null || !tb.Enabled) return;
+            try
+            {
+                string t = tb.Text ?? "";
+                int start = tb.SelectionStart, len = tb.SelectionLength;
+                if (start < 0) start = 0; if (start > t.Length) start = t.Length;
+                if (len < 0 || start + len > t.Length) len = 0;
+                int from = start > 0 ? t.LastIndexOf('\n', start - 1) + 1 : 0;
+                int end = start + len;
+                int to = t.IndexOf('\n', len > 0 && end > start && t[end - 1] == '\n' ? end - 1 : end);
+                if (to < 0) to = t.Length;
+                string block = t.Substring(from, to - from);
+                string quoted = "> " + block.Replace("\n", "\n> ");
+                tb.Text = t.Substring(0, from) + quoted + t.Substring(to);
+                tb.SelectionStart = from + quoted.Length;
                 tb.Focus();
             }
             catch { }

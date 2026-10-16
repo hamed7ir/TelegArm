@@ -4,6 +4,18 @@ using Newtonsoft.Json;
 
 namespace TelegArm.Core
 {
+    /// <summary>Redesign R1 — where the main window was. Position in physical screen pixels (monitors can differ in DPI,
+    /// so a "logical" position means nothing); size in LOGICAL (96-dpi) pixels, so it comes back the same on a monitor
+    /// of another scale.</summary>
+    public sealed class WindowPlacementSettings
+    {
+        public int X { get; set; }
+        public int Y { get; set; }
+        public int Width { get; set; }
+        public int Height { get; set; }
+        public bool Maximized { get; set; }
+    }
+
     /// <summary>Redesign step 6.2 — how a connection reaches Telegram (<see cref="AppSettings.Transport"/>).</summary>
     public enum ProxyKind { Direct, MtProto, Socks5, WebSocket }
 
@@ -170,6 +182,11 @@ namespace TelegArm.Core
                 return string.IsNullOrWhiteSpace(u) ? null : u;
             }
         }
+
+        // ── Window (redesign R1) ─────────────────────────────────────────────
+        /// <summary>The main window's normal bounds and maximised flag when it last closed or went to the tray; null =
+        /// never saved (first run: centred at the default size). Additive: absent = null.</summary>
+        public WindowPlacementSettings MainWindow { get; set; }
 
         // ── WebSocket tunnel (redesign step 6.2) ─────────────────────────────
         // ⚠ ITS OWN FIELDS, NEVER AN ENTRY IN ProxyList: a 1.9.x build hands every ProxyList entry to WTC's MTProxyUrl,

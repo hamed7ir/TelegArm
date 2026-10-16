@@ -66,6 +66,8 @@ namespace TelegArm.Helpers
             string live = null;
             try { live = Environment.GetEnvironmentVariable("TELEGARM_LIVE"); } catch { }
             if (live == "1") return RunLive(dir);
+            if (live == "placement") return RunLivePlacement(dir);
+            if (live == "keys") return RunLiveKeys(dir);
 
             foreach (var mode in new[] { ThemeMode.Light, ThemeMode.Dark })
             {
@@ -229,6 +231,14 @@ namespace TelegArm.Helpers
                 Shot("trip-inputlab-" + t, () => new InputLabForm());   // device trip 2026-10: --input-lab
                 // Step 3.1: the emoji picker as a popup (no service: the sticker/GIF tabs stay empty).
                 Shot("p3-emoji-" + t, () => new EmojiPicker(null, ThemeHelper.IsDark, ThemeHelper.GetWindowsAccentColor()));
+                // T9: the Reactions dialog's chrome (no service: the list says it couldn't load)
+                WithForm("p7-reactors-" + t, () => new ReactorsForm(null, new TL.InputPeerSelf(), 1, 12), f => { Settle(f); Capture(f, "p7-reactors-" + t); });
+                WithForm("p3-gifs-" + t, () => new EmojiPicker(null, ThemeHelper.IsDark, ThemeHelper.GetWindowsAccentColor()), f =>
+                {
+                    Invoke(f, "ShowTab", 2);   // T6: the GIF tab with its search box (no service: no tiles)
+                    Settle(f);
+                    Capture(f, "p3-gifs-" + t);
+                });
                 // Step 2.7d: the composer editor window (no service: its emoji picker is not opened here).
                 Shot("editor-" + t, () => new ComposerEditorForm("Ada Lovelace",
                     "Draft line one \U0001F600\nline two with **bold** and __italic__\n\n"
@@ -319,6 +329,149 @@ namespace TelegArm.Helpers
             {
                 if (f != null) { try { f.Close(); } catch { } try { f.Dispose(); } catch { } }
             }
+            File.WriteAllText(Path.Combine(_dir, "shots.txt"), _log.ToString());
+            return _failures == 0 ? 0 : 1;
+        }
+
+        /// <summary>Redesign R1, on the real screen: a saved placement comes back (normal and maximised), a moved window
+        /// is saved in logical size, and a position on no screen falls back to centred. Isolated settings, no account.</summary>
+        private static int RunLivePlacement(string dir)
+        {
+            ThemeHelper.InitMode(ThemeMode.Dark);
+            var trace = new System.Diagnostics.TextWriterTraceListener(Path.Combine(dir, "trace.txt"));
+            System.Diagnostics.Trace.Listeners.Add(trace);
+            System.Diagnostics.Trace.AutoFlush = true;
+            Logger.Enabled = true;
+            MainForm.DemoNoSession = true;
+            var s = AppSettings.Instance;
+            var wa = Screen.PrimaryScreen.WorkingArea;
+            Func<string, MainForm> open = name =>
+            {
+                var m = new MainForm(new TelegramService());
+                m.TopMost = true;
+                m.Show();
+                LivePump(1200);
+                LiveShot(m, name);
+                return m;
+            };
+            Action<MainForm> close = m => { try { m.Close(); } catch { } try { m.Dispose(); } catch { } LivePump(300); };
+            Action<string> saved = what =>
+            {
+                var p = s.MainWindow;
+                _log.AppendLine("  " + what + ": saved " + (p == null ? "null" : p.X + "," + p.Y + " " + p.Width + "x" + p.Height + " max=" + p.Maximized));
+            };
+            try
+            {
+                // 1. a saved placement comes back, normal
+                s.MainWindow = new WindowPlacementSettings { X = wa.Left + 60, Y = wa.Top + 40, Width = 900, Height = 560 };
+                var f = open("place-1-restored-normal");
+                // 2. moved and resized by the user, then closed for real: saved in logical size
+                f.Bounds = new Rectangle(wa.Left + 120, wa.Top + 90, f.Width + 80, f.Height + 40); LivePump(600);
+                Invoke(f, "SaveWindowPlacement"); saved("after move");
+                // 3. maximised: the normal bounds stay, the flag is set
+                f.WindowState = FormWindowState.Maximized; LivePump(1200);
+                Invoke(f, "SaveWindowPlacement"); saved("maximised");
+                // 4. minimised from maximised: still remembered as maximised
+                f.WindowState = FormWindowState.Minimized; LivePump(800);
+                Invoke(f, "SaveWindowPlacement"); saved("minimised from maximised");
+                close(f);
+                // 5. the next start comes back maximised, and restoring returns to the saved normal bounds
+                f = open("place-2-restored-maximised");
+                f.WindowState = FormWindowState.Normal; LivePump(1200); LiveShot(f, "place-3-then-normal");
+                close(f);
+                // 6. a position on no screen (a monitor that is gone): centred at the saved size
+                s.MainWindow = new WindowPlacementSettings { X = -30000, Y = -30000, Width = 900, Height = 560 };
+                f = open("place-4-offscreen-centred");
+                close(f);
+                // 7. bigger than the screen: shrunk into the working area
+                s.MainWindow = new WindowPlacementSettings { X = wa.Left, Y = wa.Top, Width = 6000, Height = 4000 };
+                f = open("place-5-too-big");
+                close(f);
+            }
+            catch (Exception ex) { Fail("live-placement", ex); }
+            File.WriteAllText(Path.Combine(_dir, "shots.txt"), _log.ToString());
+            return _failures == 0 ? 0 : 1;
+        }
+
+        /// <summary>Redesign R5, on the real screen: Ctrl+E edits the last own message, Esc steps back one layer at a time
+        /// (the edit, then the chat), Ctrl+1 picks All. The keys go through TryShortcut / EscapeOneLevel, the same calls
+        /// ProcessCmdKey makes. No account: next-chat and mute need the network and are left out.</summary>
+        private static int RunLiveKeys(string dir)
+        {
+            ThemeHelper.InitMode(ThemeMode.Light);
+            var trace = new System.Diagnostics.TextWriterTraceListener(Path.Combine(dir, "trace.txt"));
+            System.Diagnostics.Trace.Listeners.Add(trace);
+            System.Diagnostics.Trace.AutoFlush = true;
+            Logger.Enabled = true;
+            MainForm.DemoNoSession = true;
+            MainForm f = null;
+            Action<string> state = what =>
+            {
+                var box = Field(f, "_messageInput");
+                string text = box != null ? (box.GetType().GetProperty("Text").GetValue(box, null) as string ?? "") : "?";
+                _log.AppendLine("  " + what + ": chat=" + (Field(f, "_selectedChat") != null ? "open" : "none")
+                    + " edit=" + (Field(f, "_editTarget") != null ? "yes" : "no") + " composer=[" + text.Replace('\n', ' ') + "]");
+            };
+            try
+            {
+                f = new MainForm(new TelegramService());
+                var wa = Screen.PrimaryScreen.WorkingArea;
+                f.StartPosition = FormStartPosition.Manual;
+                f.Bounds = new Rectangle(wa.Left + wa.Width / 10, wa.Top + wa.Height / 12, wa.Width * 7 / 10, wa.Height * 3 / 4);
+                f.TopMost = true;
+                f.Show();
+                LivePump(1200);
+                SeedChatList(f);
+                OpenDemoChat(f);
+                LivePump(600);
+                state("opened");
+                // T2: the "@" and heart buttons, seeded with the demo chat's own message ids (the fetch needs an account)
+                var msgs = ((IEnumerable)Field(f, "_currentChatMessages")).Cast<TL.Message>().Select(m => m.ID).OrderBy(i => i).ToList();
+                SetField(f, "_jumpListChat", Field(f, "_selectedChat"));
+                ((List<int>)Field(f, "_mentionIds")).AddRange(msgs.Take(2));
+                ((List<int>)Field(f, "_reactionIds")).Add(msgs[0]);
+                Invoke(f, "UpdateMentionButtons");
+                LivePump(400);
+                LiveShot(f, "keys-0-mention-buttons");
+                _log.AppendLine("  mention button: visible=" + ((Control)Field(f, "_mentionBtn")).Visible + " at " + ((Control)Field(f, "_mentionBtn")).Bounds
+                                + ", reaction: " + ((Control)Field(f, "_reactionBtn")).Bounds + ", jump: visible=" + ((Control)Field(f, "_jumpBtn")).Visible
+                                + " at " + ((Control)Field(f, "_jumpBtn")).Bounds);
+                Invoke(f, "JumpToNextUnread", true); LivePump(600);
+                _log.AppendLine("  after a mention jump: " + ((List<int>)Field(f, "_mentionIds")).Count + " mentions left");
+                Invoke(f, "JumpToNextUnread", true); Invoke(f, "JumpToNextUnread", false); LivePump(400);
+                _log.AppendLine("  after jumping through all: mention visible=" + ((Control)Field(f, "_mentionBtn")).Visible
+                                + " reaction visible=" + ((Control)Field(f, "_reactionBtn")).Visible);
+                _log.AppendLine("  Ctrl+E → " + Invoke(f, "TryShortcut", Keys.Control | Keys.E)); LivePump(500);
+                state("after Ctrl+E"); LiveShot(f, "keys-1-edit");
+                _log.AppendLine("  Esc → " + Invoke(f, "EscapeOneLevel")); LivePump(400); state("after Esc 1");
+                _log.AppendLine("  Esc → " + Invoke(f, "EscapeOneLevel")); LivePump(600); state("after Esc 2");
+                LiveShot(f, "keys-2-closed");
+                _log.AppendLine("  Esc → " + Invoke(f, "EscapeOneLevel") + " (nothing left)");
+                _log.AppendLine("  Ctrl+1 → " + Invoke(f, "TryShortcut", Keys.Control | Keys.D1) + ", Ctrl+5 → " + Invoke(f, "TryShortcut", Keys.Control | Keys.D5));
+                _log.AppendLine("  Ctrl+Shift+M with no chat → " + Invoke(f, "TryShortcut", Keys.Control | Keys.Shift | Keys.M));
+                // T1: the Mute submenu as the chat menu builds it (themed strip, four durations), on the real screen
+                var menu = new ThemedContextMenuStrip();
+                var mute = new ToolStripMenuItem("\U0001F515   Mute");
+                MuteMenu.AddChoices(mute.DropDownItems, f, d => { });
+                menu.Items.Add(new ToolStripMenuItem("\U0001F4CC   Pin"));
+                menu.Items.Add(mute);
+                menu.ShowAt(f, new Point(f.ClientSize.Width / 3, f.ClientSize.Height / 4));
+                LivePump(300);
+                mute.ShowDropDown();
+                LivePump(500);
+                var area = Rectangle.Union(menu.Bounds, mute.DropDown.Bounds);
+                area.Inflate(16, 16);
+                using (var bmp = new Bitmap(area.Width, area.Height))
+                {
+                    using (var g = Graphics.FromImage(bmp)) g.CopyFromScreen(area.Location, Point.Empty, area.Size);
+                    bmp.Save(Path.Combine(_dir, "keys-3-mute-menu.png"), ImageFormat.Png);
+                }
+                _log.AppendLine("  mute submenu: " + mute.DropDownItems.Count + " items");
+                menu.Close();
+                menu.Dispose();
+            }
+            catch (Exception ex) { Fail("live-keys", ex); }
+            finally { if (f != null) { try { f.Close(); } catch { } try { f.Dispose(); } catch { } } }
             File.WriteAllText(Path.Combine(_dir, "shots.txt"), _log.ToString());
             return _failures == 0 ? 0 : 1;
         }

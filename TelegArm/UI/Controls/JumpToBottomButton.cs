@@ -25,6 +25,10 @@ namespace TelegArm.UI.Controls
         public Color AccentColor { get; set; } = Color.DodgerBlue;
         public bool IsDark { get; set; }
 
+        /// <summary>Redesign T2 — a character drawn instead of the chevron ("@" for unread mentions, a heart for unread
+        /// reactions); null = the scroll-to-bottom chevron.</summary>
+        public string Glyph { get; set; }
+
         private int _count;
         /// <summary>New-message count shown in the badge (0 = no badge).</summary>
         public int UnreadCount
@@ -136,8 +140,12 @@ namespace TelegArm.UI.Controls
                 g.DrawEllipse(p, circle);
 
             float cx = circle.X + d / 2f, cy = circle.Y + d / 2f;
-            using (var pen = new Pen(ColorMath.Ink(AccentColor, fill, 3.0), 2.2f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round })
-                g.DrawLines(pen, new[] { new PointF(cx - 6 * k, cy - 3 * k), new PointF(cx, cy + 4 * k), new PointF(cx + 6 * k, cy - 3 * k) });
+            if (!string.IsNullOrEmpty(Glyph))
+                TextRenderer.DrawText(g, Glyph, FontHelper.UiAt(13f, dpi, FontStyle.Bold), circle, ColorMath.Ink(AccentColor, fill, 3.0),
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);   // shared font
+            else
+                using (var pen = new Pen(ColorMath.Ink(AccentColor, fill, 3.0), 2.2f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                    g.DrawLines(pen, new[] { new PointF(cx - 6 * k, cy - 3 * k), new PointF(cx, cy + 4 * k), new PointF(cx + 6 * k, cy - 3 * k) });
 
             if (_count > 0)
             {

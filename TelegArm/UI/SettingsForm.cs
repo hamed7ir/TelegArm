@@ -1201,6 +1201,16 @@ namespace TelegArm.UI
             probe.Click += (snd, ev) => { using (var f = new RoundProbeForm()) f.ShowDialog(this); };
             page.Section("Camera (round video)", backend, probe);
 
+            // Redesign R5 — what the main window's keys do (the list lives beside the code, MainForm.Shortcuts).
+            var keys = new ActionRow("Keyboard shortcuts", "Show") { Subtitle = "Chats, folders, editing and the window" };
+            keys.Click += (snd, ev) =>
+            {
+                var sb = new System.Text.StringBuilder();
+                foreach (var k in MainForm.Shortcuts) sb.Append(k[0]).Append("  —  ").Append(k[1]).Append(Environment.NewLine);
+                ThemedDialog.Show(this, "Keyboard shortcuts", sb.ToString().TrimEnd(), "OK");
+            };
+            page.Section("Keyboard", keys);
+
             // ── DIAGNOSTICS (LOG-TOGGLE+CRASH batch, amendment 2: per-session files) ──
             var rows = new List<Control>();
             var logSw = new ToggleRow("Enable diagnostic logging", s.FileLogging) { Subtitle = "Session logs for troubleshooting; off is fastest" };

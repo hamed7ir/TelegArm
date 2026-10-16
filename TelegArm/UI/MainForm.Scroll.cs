@@ -29,6 +29,15 @@ namespace TelegArm.UI
             int x = _msgHost.ClientSize.Width - _jumpBtn.Width - ThemedScrollBar.LaneWidth(WindowDpiValue) - Px(8);
             int y = _msgHost.ClientSize.Height - _jumpBtn.Height - Px(10);
             _jumpBtn.Location = new Point(Math.Max(0, x), Math.Max(0, y));
+            // T2: the "@" and heart buttons stack above it (above its spot when it is hidden)
+            int top = _jumpBtn.Visible ? y - Px(8) : y + _jumpBtn.Height;
+            foreach (var b in new Control[] { _mentionBtn, _reactionBtn })
+            {
+                if (b == null || !b.Visible) continue;
+                top -= b.Height;
+                b.Location = new Point(Math.Max(0, x), Math.Max(0, top));
+                top -= Px(8);
+            }
         }
 
         /// <summary>BUBBLE-DATETIME (C): the topmost visible message bubble, or null. Its display Top is the scroll
@@ -164,13 +173,13 @@ namespace TelegArm.UI
             if (_atLiveTail && AtBottom(40))   // at the REAL bottom → caught up
             {
                 _jumpUnread = 0;
-                if (_jumpBtn.Visible) _jumpBtn.Visible = false;
+                if (_jumpBtn.Visible) { _jumpBtn.Visible = false; PositionJumpButton(); }   // T2: the stack moves down
                 MarkCaughtUp();
             }
             else                // scrolled up, OR sitting at an island edge that isn't the true tail → show button
             {
                 _jumpBtn.UnreadCount = _jumpUnread;
-                if (!_jumpBtn.Visible) { PositionJumpButton(); _jumpBtn.Visible = true; _jumpBtn.BringToFront(); }
+                if (!_jumpBtn.Visible) { _jumpBtn.Visible = true; PositionJumpButton(); _jumpBtn.BringToFront(); }
             }
         }
 
@@ -214,17 +223,81 @@ namespace TelegArm.UI
         private void MarkMentionsReactionsRead(ChatEntry entry)
         {
             if (entry == null) return;
+            // T2: a DIFFERENT chat → the previous chat's jump lists go (a re-load of the same chat keeps them)
+            if (!ReferenceEquals(_jumpListChat, entry)) { _jumpListChat = entry; _mentionIds.Clear(); _reactionIds.Clear(); UpdateMentionButtons(); }
             if (entry.UnreadMentions > 0)
             {
+                int n = entry.UnreadMentions;
                 entry.UnreadMentions = 0;
-                var _ = SafeRead(() => _service.ReadMentionsAsync(entry.Peer));
+                var _ = CollectThenRead(entry, true, n);
             }
             if (entry.UnreadReactions > 0)
             {
+                int n = entry.UnreadReactions;
                 entry.UnreadReactions = 0;
-                var _ = SafeRead(() => _service.ReadReactionsAsync(entry.Peer));
+                var _ = CollectThenRead(entry, false, n);
             }
             FindChatItem(entry.PeerId)?.Invalidate();
+        }
+
+        // ── T2: jump to the unread mentions / reactions ─────────────────────────────────────────────────────────────
+        private ChatEntry _jumpListChat;
+        private readonly List<int> _mentionIds = new List<int>(), _reactionIds = new List<int>();
+
+        /// <summary>Redesign T2 — fetch the ids FIRST (the read below clears them on the server), keep them for the open
+        /// chat's "@" / heart buttons, then mark them read as before (opening = seen: the list badge clears at once).
+        /// Capped at the newest 100, the server's page.</summary>
+        private async System.Threading.Tasks.Task CollectThenRead(ChatEntry entry, bool mentions, int count)
+        {
+            List<int> ids = null;
+            try
+            {
+                ids = mentions ? await _service.GetUnreadMentionIdsAsync(entry.Peer, Math.Min(100, count))
+                               : await _service.GetUnreadReactionIdsAsync(entry.Peer, Math.Min(100, count));
+            }
+            catch (Exception ex) { Logger.Diag("[JUMP] unread " + (mentions ? "mentions" : "reactions") + " fetch failed: " + ex.Message); }
+            if (!IsDisposed && ids != null && ids.Count > 0 && ReferenceEquals(_selectedChat, entry) && ReferenceEquals(_jumpListChat, entry))
+            {
+                var list = mentions ? _mentionIds : _reactionIds;
+                list.Clear();
+                list.AddRange(ids);
+                if (LogOn) Logger.Diag("[JUMP] " + ids.Count + " unread " + (mentions ? "mentions" : "reactions") + " to jump to");
+                UpdateMentionButtons();
+            }
+            await SafeRead(() => mentions ? _service.ReadMentionsAsync(entry.Peer) : _service.ReadReactionsAsync(entry.Peer));
+        }
+
+        /// <summary>The "@" / heart buttons follow their lists (count badge, shown while anything is left).</summary>
+        private void UpdateMentionButtons()
+        {
+            if (_mentionBtn == null || _reactionBtn == null) return;
+            bool open = _selectedChat != null && ReferenceEquals(_jumpListChat, _selectedChat);
+            _mentionBtn.UnreadCount = _mentionIds.Count;
+            _reactionBtn.UnreadCount = _reactionIds.Count;
+            _mentionBtn.Visible = open && _mentionIds.Count > 0;
+            _reactionBtn.Visible = open && _reactionIds.Count > 0;
+            PositionJumpButton();
+            if (_mentionBtn.Visible) _mentionBtn.BringToFront();
+            if (_reactionBtn.Visible) _reactionBtn.BringToFront();
+        }
+
+        /// <summary>A click: the OLDEST id left — scrolled to and flashed when it is loaded, else a history load centred on
+        /// it (the reply-quote jump's path).</summary>
+        private void JumpToNextUnread(bool mentions)
+        {
+            var list = mentions ? _mentionIds : _reactionIds;
+            if (list.Count == 0 || _selectedChat == null) return;
+            int id = list[0];
+            list.RemoveAt(0);
+            UpdateMentionButtons();
+            if (LogOn) Logger.Diag("[JUMP] to unread " + (mentions ? "mention" : "reaction") + " id=" + id + " (" + list.Count + " left)");
+            if (ScrollToAndFlash(id)) return;
+            var chat = _selectedChat;
+            BeginInvoke((Action)(async () =>
+            {
+                await OpenChat(chat, id);   // focused load centred on it (same chat: the lists are kept)
+                ScrollToAndFlash(id);
+            }));
         }
 
         private static async System.Threading.Tasks.Task SafeRead(Func<System.Threading.Tasks.Task> op)

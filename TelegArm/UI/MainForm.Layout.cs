@@ -791,6 +791,7 @@ namespace TelegArm.UI
                 // becomes a MessageEntity on send (Ctrl+B bold, Ctrl+I italic, Ctrl+K link).
                 else if (e.Control && e.KeyCode == Keys.B) { e.SuppressKeyPress = true; WrapComposerSelection("**", "**"); }
                 else if (e.Control && e.KeyCode == Keys.I) { e.SuppressKeyPress = true; WrapComposerSelection("__", "__"); }
+                else if (e.Control && e.KeyCode == Keys.U) { e.SuppressKeyPress = true; WrapComposerSelection("<u>", "</u>"); }   // T8
                 else if (e.Control && e.KeyCode == Keys.K) { e.SuppressKeyPress = true; InsertComposerLink(); }
             };
             _messageInput.TextChanged += OnComposerTextChanged;   // QUICKWINS-1 PART 1: send our typing (throttled; inert when not typing)
@@ -807,7 +808,15 @@ namespace TelegArm.UI
             fmtMenu.Items.Add("Italic").Click += (s, e) => WrapComposerSelection("__", "__");
             fmtMenu.Items.Add("Strikethrough").Click += (s, e) => WrapComposerSelection("~~", "~~");
             fmtMenu.Items.Add("Monospace").Click += (s, e) => WrapComposerSelection("`", "`");
+            fmtMenu.Items.Add("Underline").Click += (s, e) => WrapComposerSelection("<u>", "</u>");   // T8
+            fmtMenu.Items.Add("Spoiler").Click += (s, e) => WrapComposerSelection("||", "||");
+            fmtMenu.Items.Add("Quote").Click += (s, e) => ComposerFormat.Quote(_messageInput);
             fmtMenu.Items.Add("Link…").Click += (s, e) => InsertComposerLink();
+            // T10: the server makes a preview of the first link unless told not to — for the next message only
+            var previewItem = new ToolStripMenuItem("Link preview") { CheckOnClick = true, Checked = true };
+            previewItem.CheckedChanged += (s, e) => _sendNoLinkPreview = !previewItem.Checked;
+            fmtMenu.Opening += (s, e) => previewItem.Checked = !_sendNoLinkPreview;
+            fmtMenu.Items.Add(previewItem);
             fmtMenu.Items.Add(new ToolStripSeparator());
             fmtMenu.Items.Add("Paste").Click += (s, e) => PasteIntoComposer();
             fmtMenu.Items.Add(new ToolStripSeparator());
@@ -867,7 +876,7 @@ namespace TelegArm.UI
                 Font = FontCache.Get("Segoe UI", 11f, FontStyle.Regular, WindowDpiValue)   // shared: never dispose
             };
             _replyCancelBtn.FlatAppearance.BorderSize = 0;
-            _replyCancelBtn.Click += (s, e) => CancelReply();
+            _replyCancelBtn.Click += (s, e) => CancelReplyByUser();
             // OWNER-DRAW the strip: we draw the ↩/✎ Noto glyph + the preview via EmojiRenderer.DrawLine
             // (Vazirmatn Persian + inline Noto emoji) ourselves. (History: it was a MaterialLabel, which
             // ignored .Image and forced its own font — the glyph vanished and Persian fell back.)
@@ -901,6 +910,13 @@ namespace TelegArm.UI
             _jumpBtn.Click += (s, e) => JumpToBottomClicked();
             _msgHost.Controls.Add(_jumpBtn);
             _jumpBtn.BringToFront();
+            // T2: jump to the unread @mentions / reactions of the open chat (MainForm.Scroll: CollectThenRead)
+            _mentionBtn = new JumpToBottomButton { IsDark = _dark, AccentColor = _accent, Visible = false, Glyph = "@", Anchor = AnchorStyles.Bottom | AnchorStyles.Right };
+            _mentionBtn.Click += (s, e) => JumpToNextUnread(true);
+            _msgHost.Controls.Add(_mentionBtn);
+            _reactionBtn = new JumpToBottomButton { IsDark = _dark, AccentColor = _accent, Visible = false, Glyph = "\u2665", Anchor = AnchorStyles.Bottom | AnchorStyles.Right };
+            _reactionBtn.Click += (s, e) => JumpToNextUnread(false);
+            _msgHost.Controls.Add(_reactionBtn);
             _msgHost.Resize += (s, e) => PositionJumpButton();
 
             // BUBBLE-DATETIME (C): floating date pill — same float-parent trick as the jump button (a child of the

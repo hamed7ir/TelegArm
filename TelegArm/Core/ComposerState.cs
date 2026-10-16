@@ -71,8 +71,13 @@ namespace TelegArm.Core
                     }
                 }
 
-                // 6. SLOWMODE_WAIT — v1 resolves as Compose; the post-send countdown
-                //    (channelFull?.slowmode_next_send_date) is a follow-up.
+                // 6. SLOWMODE_WAIT (T7) — slow mode is on and the server's next allowed send is still ahead.
+                //    Admins and the creator are exempt from slow mode. Needs the ChannelFull (the caller fetches it only
+                //    when the Channel carries slowmode_enabled); without it this resolves as Compose, as in v1.
+                if (!creator && ch.admin_rights == null && channelFull != null && channelFull.slowmode_seconds > 0
+                    && (channelFull.flags & ChannelFull.Flags.has_slowmode_next_send_date) != 0
+                    && channelFull.slowmode_next_send_date > DateTime.UtcNow)
+                    return new ComposerState { Kind = ComposerKind.SlowmodeWait, Until = channelFull.slowmode_next_send_date, HasCountdown = true };
                 return Of(ComposerKind.Compose);
             }
 

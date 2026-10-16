@@ -778,25 +778,27 @@ namespace TelegArm.UI
         {
             var owner = (IWin32Window)Form.ActiveForm ?? this;   // the topmost modal (gallery) owns the picker
             List<ChatEntry> targets;
+            bool hide, drop;   // T4: the picker's forward options
             using (var picker = new ForwardPickerDialog(_allChats, _dark, _accent, GetCachedAvatar, GetAvatarBoundedAsync))
             {
                 if (picker.ShowDialog(owner) != DialogResult.OK || picker.SelectedChats.Count == 0) return;
-                targets = picker.SelectedChats;
+                targets = picker.SelectedChats; hide = picker.HideSender; drop = picker.DropCaptions;   // T4
             }
-            int ok = await ForwardToTargets(src, new[] { msgId }, targets);
+            int ok = await ForwardToTargets(src, new[] { msgId }, targets, hide, drop);
             ThemedDialog.Show(owner, ok > 0 ? "Forwarded" : "Forward failed", ForwardResultText(ok, targets.Count), "OK");
         }
 
         /// <summary>Forwards ids to each selected target (bounded per target), routing EACH target's result
         /// through <see cref="ApplySendResult"/> — the single chat-list refresh — so forwarded chats update
         /// (preview + re-order) live, exactly like a received/sent message. Returns how many succeeded.</summary>
-        private async System.Threading.Tasks.Task<int> ForwardToTargets(InputPeer src, int[] ids, List<ChatEntry> targets)
+        private async System.Threading.Tasks.Task<int> ForwardToTargets(InputPeer src, int[] ids, List<ChatEntry> targets,
+                                                                        bool hideSender = false, bool dropCaptions = false)
         {
             int ok = 0;
             foreach (var t in targets)
             {
                 if (t == null || t.Peer == null) continue;
-                var result = await _service.ForwardToAsync(src, ids, t.Peer);
+                var result = await _service.ForwardToAsync(src, ids, t.Peer, 20000, hideSender, dropCaptions);   // T4
                 if (result == null) continue;
                 ApplySendResult(result);   // → ProcessSingleUpdate → HandleIncomingMessage → UpdateChatListForMessage
                 System.Diagnostics.Debug.WriteLine("[UPDATE] forward applied → peer=" + t.PeerId);

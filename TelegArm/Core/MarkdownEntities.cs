@@ -9,6 +9,7 @@ namespace TelegArm.Core
     /// SEND-ENTITIES: converts the composer's markdown into plain text + a <see cref="MessageEntity"/>[] for sending
     /// (the inverse of the inline RENDER engine). Supported syntax:
     ///   **bold**  __italic__  ~~strike~~  ||spoiler||  `code`  ```pre```  [text](url)
+    ///   <u>underline</u>  and "> " at the start of a line for a quote (consecutive lines make one quote) — T8
     /// Offsets/lengths are UTF-16 code units — the same as C# string indices AND Telegram's convention — so Persian
     /// and emoji land on the right characters and the sent formatting round-trips with the render side.
     /// A backslash escapes the next marker char (\* → literal *). Unmatched markers are left as literal text — the
@@ -24,10 +25,39 @@ namespace TelegArm.Core
             var ents = new List<MessageEntity>();
             var sb = new StringBuilder(input.Length);
             int i = 0, n = input.Length;
+            int quoteStart = -1;   // T8: output offset where the open quote began; -1 = none
 
             while (i < n)
             {
                 char c = input[i];
+
+                // T8: "> " opens (or continues) a quote at the start of a line; the prefix itself is dropped, and the
+                // line's own markers are parsed as usual. The quote ends before the newline of its last "> " line.
+                if ((i == 0 || input[i - 1] == '\n') && Has(input, i, "> "))
+                {
+                    if (quoteStart < 0) quoteStart = sb.Length;
+                    i += 2;
+                    continue;
+                }
+                if (c == '\n' && quoteStart >= 0 && !Has(input, i + 1, "> "))
+                {
+                    if (sb.Length > quoteStart) ents.Add(new MessageEntityBlockquote { offset = quoteStart, length = sb.Length - quoteStart });
+                    quoteStart = -1;
+                }
+
+                // T8: <u>underline</u> (Telegram's markdown has no underline marker, and "__" is italic here)
+                if (c == '<' && Has(input, i, "<u>"))
+                {
+                    int uclose = input.IndexOf("</u>", i + 3, StringComparison.Ordinal);
+                    if (uclose > i + 3)
+                    {
+                        int ustart = sb.Length;
+                        sb.Append(input, i + 3, uclose - (i + 3));
+                        ents.Add(new MessageEntityUnderline { offset = ustart, length = sb.Length - ustart });
+                        i = uclose + 4;
+                        continue;
+                    }
+                }
 
                 // Escape: "\<marker>" emits the literal marker char.
                 if (c == '\\' && i + 1 < n && IsMarkerChar(input[i + 1]))
@@ -68,6 +98,9 @@ namespace TelegArm.Core
                 i++;
             }
 
+            if (quoteStart >= 0 && sb.Length > quoteStart)   // T8: a quote running to the end
+                ents.Add(new MessageEntityBlockquote { offset = quoteStart, length = sb.Length - quoteStart });
+            ents.Sort((a, b) => a.offset != b.offset ? a.offset.CompareTo(b.offset) : b.length.CompareTo(a.length));   // by offset, outer first (a quote is found after the spans inside it)
             entities = ents.Count > 0 ? ents.ToArray() : null;
             return sb.ToString();
         }
@@ -75,7 +108,7 @@ namespace TelegArm.Core
         private static bool IsMarkerChar(char c)
         {
             return c == '*' || c == '_' || c == '~' || c == '|' || c == '`' || c == '\\'
-                || c == '[' || c == ']' || c == '(' || c == ')';
+                || c == '[' || c == ']' || c == '(' || c == ')' || c == '<' || c == '>';   // T8: \< and \> are literal
         }
 
         private static string MatchMarker(string s, int i)

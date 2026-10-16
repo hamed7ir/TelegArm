@@ -56,6 +56,7 @@
     <Compile Include="EmojiTests.cs" />
     <Compile Include="WsTunnelTests.cs" />
     <Compile Include="ProxyTests.cs" />
+    <Compile Include="ComposerTests.cs" />
   </ItemGroup>
   <!-- The app sources under test. Add a file here when a test needs it (and whatever it depends on). -->
   <ItemGroup>
@@ -72,6 +73,7 @@
     <Compile Include="..\TelegArm\Helpers\ColorMath.cs"><Link>Linked\Helpers\ColorMath.cs</Link></Compile>
     <Compile Include="..\TelegArm\Helpers\ThemeHelper.cs"><Link>Linked\Helpers\ThemeHelper.cs</Link></Compile>
     <Compile Include="..\TelegArm\Helpers\WindowHit.cs"><Link>Linked\Helpers\WindowHit.cs</Link></Compile>
+    <Compile Include="..\TelegArm\Helpers\WindowPlacementMath.cs"><Link>Linked\Helpers\WindowPlacementMath.cs</Link></Compile>
     <Compile Include="..\TelegArm\Helpers\KeyboardInset.cs"><Link>Linked\Helpers\KeyboardInset.cs</Link></Compile>
     <Compile Include="..\TelegArm\Helpers\EmojiRenderer.cs"><Link>Linked\Helpers\EmojiRenderer.cs</Link></Compile>
     <Compile Include="..\TelegArm\Helpers\PerfLog.cs"><Link>Linked\Helpers\PerfLog.cs</Link></Compile>
@@ -82,6 +84,8 @@
     <Compile Include="..\TelegArm\Core\WsTunnel\WsTunnelStats.cs"><Link>Linked\Core\WsTunnel\WsTunnelStats.cs</Link></Compile>
     <Compile Include="..\TelegArm\Core\ProxyUrl.cs"><Link>Linked\Core\ProxyUrl.cs</Link></Compile>
     <Compile Include="..\TelegArm\Core\Socks5.cs"><Link>Linked\Core\Socks5.cs</Link></Compile>
+    <Compile Include="..\TelegArm\Core\ComposerState.cs"><Link>Linked\Core\ComposerState.cs</Link></Compile>
+    <Compile Include="..\TelegArm\Core\MarkdownEntities.cs"><Link>Linked\Core\MarkdownEntities.cs</Link></Compile>
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Fixtures\settings-1.9.0.json"><LogicalName>settings-1.9.0.json</LogicalName></EmbeddedResource>

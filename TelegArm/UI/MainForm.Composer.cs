@@ -59,7 +59,9 @@ namespace TelegArm.UI
 
             try
             {
-                var sent = await _service.SendTextAsync(chat.Peer, text, replyId, entities);
+                bool noPreview = _sendNoLinkPreview;   // T10: this message only
+                _sendNoLinkPreview = false;
+                var sent = await _service.SendTextAsync(chat.Peer, text, replyId, entities, noPreview);
                 if (sent != null)
                 {
                     _shownMessageIds.Add(sent.ID);     // dedupe a possible echo update
@@ -68,10 +70,20 @@ namespace TelegArm.UI
                     bubble.Invalidate();
                     if (!_currentChatMessages.Any(x => x.ID == sent.ID)) _currentChatMessages.Add(sent);
                     UpdateChatListForMessage(chat.PeerId, sent, true);   // update the chat-list row now
+                    // T7: in a slow-mode group the next send is now some minutes off — show the countdown at once
+                    if (chat.PeerInfo is Channel smc && (smc.flags & Channel.Flags.slowmode_enabled) != 0) ResolveAndApplyComposer(chat);
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                if ((ex.Message ?? "").IndexOf("SLOWMODE_WAIT", StringComparison.OrdinalIgnoreCase) >= 0 && ReferenceEquals(chat, _selectedChat))
+                {
+                    // T7: sent too soon — not a failure to retry: the text goes back and the countdown says when
+                    try { _messagePanel.Controls.Remove(bubble); bubble.Dispose(); } catch { }
+                    if (string.IsNullOrEmpty(_messageInput.Text)) _messageInput.Text = text;
+                    ResolveAndApplyComposer(chat);
+                    return;
+                }
                 bubble.Pending = false;
                 bubble.Failed = true;                  // → red failed mark on the bubble
                 bubble.Invalidate();
@@ -84,6 +96,10 @@ namespace TelegArm.UI
         private void WrapComposerSelection(string open, string close) { ComposerFormat.Wrap(_messageInput, open, close); }
 
         private void InsertComposerLink() { ComposerFormat.InsertLink(_messageInput); }
+
+        /// <summary>Redesign T10 — the next message goes without a link preview (the composer menu's "Link preview" item,
+        /// unticked). One message only: reset when it is sent and when the chat changes.</summary>
+        private bool _sendNoLinkPreview;
 
         // ── Step 2.7d (plan R8): the composer's editor window ──────────────────────────────────────────────────────
         private ComposerEditorForm _composerEditor;
@@ -577,12 +593,26 @@ namespace TelegArm.UI
         /// <summary>Begins editing my message: fill the input with its text, show the edit strip.</summary>
         private void StartEdit(Message msg)
         {
+            if (_editTarget == null) _preEditText = _messageInput.Text;   // R5: what was being typed, to put back on cancel
             _replyTarget = null;
             _editTarget = msg;
             _messageInput.Text = msg.message ?? "";
             UpdateReplyStrip();
             _messageInput.Focus();
             try { _messageInput.SelectionStart = _messageInput.Text.Length; } catch { }
+        }
+
+        /// <summary>The text the composer held before an edit filled it with the message's own text.</summary>
+        private string _preEditText;
+
+        /// <summary>Redesign R5 — the USER backs out of a reply or an edit (the strip's ✕, or Esc). An edit replaced what
+        /// was being typed with the message's text; backing out puts the typed text back instead of leaving the old
+        /// message in the box. (After a SEND the composer is cleared by the send path, which calls CancelReply.)</summary>
+        private void CancelReplyByUser()
+        {
+            if (_editTarget != null) _messageInput.Text = _preEditText ?? "";
+            _preEditText = null;
+            CancelReply();
         }
 
         private void CancelReply()

@@ -39,6 +39,14 @@ namespace TelegArm.UI
 
         public List<ChatEntry> SelectedChats { get; private set; } = new List<ChatEntry>();
 
+        /// <summary>Redesign T4 — forward as a copy, without "Forwarded from" (drop_author).</summary>
+        public bool HideSender { get { return _hideSender != null && _hideSender.On; } }
+        /// <summary>Redesign T4 — with <see cref="HideSender"/>, leave media captions out too (drop_media_captions).</summary>
+        public bool DropCaptions { get { return HideSender && _dropCaptions != null && _dropCaptions.On; } }
+
+        private ToggleRow _hideSender, _dropCaptions;
+        private Panel _optsHost;
+
         public ForwardPickerDialog(List<ChatEntry> chats, bool dark, Color accent,
                                    Func<long, Image> cachedAvatar = null, Func<long, IPeerInfo, Task<Image>> loadAvatar = null)
             : base("Forward to…", 380, 580)
@@ -60,8 +68,18 @@ namespace TelegArm.UI
             _list.DrawRow += DrawRow;
             _list.ItemClicked += OnRowClicked;
 
+            // T4: the forward options, in a strip under the list
+            _hideSender = new ToggleRow("Hide sender's name");
+            _dropCaptions = new ToggleRow("Remove captions") { Enabled = false };
+            _hideSender.Changed += (s, e) => { _dropCaptions.Enabled = _hideSender.On; if (!_hideSender.On) _dropCaptions.On = false; };
+            _optsHost = new Panel { Dock = DockStyle.Bottom, BackColor = p.Window };
+            _optsHost.Controls.Add(_hideSender);
+            _optsHost.Controls.Add(_dropCaptions);
+            _optsHost.SizeChanged += (s, e) => LayoutOptions();
+
             _host = new Panel { BackColor = p.Window };
             _host.Controls.Add(_list);
+            _host.Controls.Add(_optsHost);
             _host.Controls.Add(_searchHost);    // added last = docked first: the Top strip
             UseOwnBody(_host);
             LayoutSearch();
@@ -75,6 +93,18 @@ namespace TelegArm.UI
 
             _list.SetItems(_view.Count);
             _built = true;
+        }
+
+        /// <summary>T4: the two option rows, each as tall as it wants at the window's DPI; the strip follows them.</summary>
+        private void LayoutOptions()
+        {
+            if (_optsHost == null || _hideSender == null) return;
+            int w = _optsHost.ClientSize.Width, dpi = WindowDpiValue;
+            if (w <= 0) return;
+            int h1 = _hideSender.HeightFor(w, dpi), h2 = _dropCaptions.HeightFor(w, dpi);
+            _hideSender.SetBounds(0, 0, w, h1);
+            _dropCaptions.SetBounds(0, h1, w, h2);
+            if (_optsHost.Height != h1 + h2) _optsHost.Height = h1 + h2;
         }
 
         /// <summary>The search field sits in a strip of its own: padded, and as tall as the field wants at the window's DPI.</summary>
@@ -92,6 +122,7 @@ namespace TelegArm.UI
         {
             base.OnShown(e);
             LayoutSearch();   // the DPI of the window is only known once it is placed
+            LayoutOptions();
         }
 
         protected override void OnDpiChanged(int oldDpi, int newDpi)
@@ -101,6 +132,7 @@ namespace TelegArm.UI
             _list.RowHeight = Px(RowLogical);
             _list.SetItems(_view.Count);   // the canvas height follows the row height
             LayoutSearch();
+            LayoutOptions();
         }
 
         protected override void ApplyDialogTheme()

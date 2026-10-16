@@ -39,6 +39,11 @@ namespace TelegArm.UI
         private FlowLayoutPanel _stickerFlow, _gifFlow, _stickerPackBar;
         private TextBox _stickerSearch;
         private bool _stickersLoaded, _gifsLoaded;
+        private int _gifsVersion = -1;                  // T6: the service's SavedGifsVersion the shown list was loaded at
+        private Controls.ThemedTextBox _gifSearch;               // T6: GIF search (@gif)
+        private Panel _gifSearchHost;
+        private System.Windows.Forms.Timer _gifSearchTimer;
+        private int _gifQuery;                          // T6: bumps per search, so a slow answer can't replace a newer one
 
         // Step 3.1: what ApplyMetrics re-sizes on a DPI change.
         private Panel _tabBar, _catHost, _packHost;
@@ -94,6 +99,7 @@ namespace TelegArm.UI
             BuildEmoji();
             BuildStickerTab();
             BuildList(ref _gifPanel, ref _gifFlow);
+            BuildGifSearch();
             ShowTab(0);
         }
 
@@ -465,10 +471,21 @@ namespace TelegArm.UI
 
         private async void LoadGifs()
         {
-            if (_gifsLoaded) return;
+            // T6: a search in the box owns the list; a GIF saved since the list loaded makes it stale
+            if (_service == null) return;   // the screenshot rig's picker has no service
+            if (_gifSearch != null && _gifSearch.Text.Trim().Length > 0) return;
+            if (_gifsLoaded && _gifsVersion == _service.SavedGifsVersion) return;
             _gifsLoaded = true;
+            _gifsVersion = _service.SavedGifsVersion;
+            int ticket = ++_gifQuery;
             var gifs = await _service.GetSavedGifsAsync();
-            if (IsDisposed) return;
+            if (IsDisposed || ticket != _gifQuery) return;
+            ShowGifs(gifs);
+        }
+
+        private void ShowGifs(Document[] gifs)
+        {
+            ClearFlow(_gifFlow);
             int n = 0;
             foreach (var doc in gifs)
             {
@@ -476,6 +493,45 @@ namespace TelegArm.UI
                 AddTile(_gifFlow, doc, 96, sticker: false);
                 if (++n >= 60) break;   // cap for performance
             }
+        }
+
+        // ── T6: GIF search ─────────────────────────────────────────────────────────────────────────────────────────
+
+        /// <summary>A search box over the GIF grid: typing asks @gif (debounced), clearing it brings the saved GIFs back.</summary>
+        private void BuildGifSearch()
+        {
+            _gifSearchHost = new Panel { Dock = DockStyle.Top, BackColor = BackColor };
+            _gifPanel.Controls.Add(_gifSearchHost);   // added after the grid: docks first, on top
+            _gifSearch = new Controls.ThemedTextBox(false) { Hint = "Search GIFs", AccessibleName = "Search GIFs" };
+            _gifSearch.Inner.AccessibleName = "Search GIFs";
+            _gifSearchHost.Controls.Add(_gifSearch);
+            _gifSearchHost.SizeChanged += (s, e) => LayoutGifSearch();
+            LayoutGifSearch();
+            _gifSearchTimer = new System.Windows.Forms.Timer { Interval = 500 };
+            _gifSearchTimer.Tick += (s, e) => { _gifSearchTimer.Stop(); RunGifSearch(); };
+            _gifSearch.TextChanged += (s, e) => { _gifSearchTimer.Stop(); _gifSearchTimer.Start(); };
+        }
+
+        private void LayoutGifSearch()
+        {
+            if (_gifSearch == null || _gifSearchHost == null) return;
+            int h = _gifSearch.PreferredFieldHeight;
+            _gifSearch.SetBounds(Px(8), Px(6), Math.Max(1, _gifSearchHost.ClientSize.Width - Px(16)), h);
+            int total = h + Px(12);
+            if (_gifSearchHost.Height != total) _gifSearchHost.Height = total;
+        }
+
+        private async void RunGifSearch()
+        {
+            string q = _gifSearch.Text.Trim();
+            if (_service == null) return;
+            if (q.Length == 0) { _gifsLoaded = false; LoadGifs(); return; }
+            int ticket = ++_gifQuery;
+            Document[] found = null;
+            try { found = await _service.SearchGifsAsync(q); }
+            catch (Exception ex) { System.Diagnostics.Trace.WriteLine("[PICKER] gif search failed: " + ex.Message); }
+            if (IsDisposed || ticket != _gifQuery) return;   // a newer search (or the saved list) owns the grid now
+            ShowGifs(found ?? new Document[0]);
         }
 
         private void AddTile(FlowLayoutPanel flow, Document doc, int size, bool sticker)
