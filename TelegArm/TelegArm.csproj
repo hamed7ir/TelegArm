@@ -102,6 +102,7 @@
     <Compile Include="Core\ApiCredentials.Local.cs" Condition="Exists('$(MSBuildProjectDirectory)\Core\ApiCredentials.Local.cs')" />
     <None Include="Core\ApiCredentials.Local.cs.example" />
     <Compile Include="Core\TelegramService.cs" />
+    <Compile Include="Core\PrivacyRules.cs" />
     <Compile Include="Core\VlcBootstrap.cs" />
     <Compile Include="Core\VlcEnvironment.cs" />
     <Compile Include="Core\WebmAlphaProbe.cs" />
@@ -152,6 +153,8 @@
     <Compile Include="UI\PeopleListForm.cs" />
     <Compile Include="UI\AddContactForm.cs" />
     <Compile Include="UI\ScheduledForm.cs" />
+    <Compile Include="UI\PrivacyExceptionsForm.cs" />
+    <Compile Include="UI\FolderEditForm.cs" />
     <Compile Include="UI\MainForm.Overlays.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
     <Compile Include="UI\MainForm.Updates.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
     <Compile Include="UI\MainForm.ChatList.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>

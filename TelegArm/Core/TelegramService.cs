@@ -1421,22 +1421,27 @@ namespace TelegArm.Core
         /// Global full-text message search. filter and offset_peer are left null —
         /// WTelegramClient serializes those as the API's "empty" constructors.
         /// </summary>
-        public Task<Messages_MessagesBase> SearchMessagesAsync(string query, int limit = 50)
+        public Task<Messages_MessagesBase> SearchMessagesAsync(string query, int limit = 50, int scope = 0)
         {
-            return Client.Messages_SearchGlobal(query, limit: limit);
+            // T19: scope 1 = private chats only, 2 = groups only, 3 = channels only (searchGlobal's own flags)
+            return Client.Messages_SearchGlobal(query, limit: limit, users_only: scope == 1, groups_only: scope == 2, broadcasts_only: scope == 3);
         }
 
         /// <summary>INCHAT-SEARCH: full-text search scoped to ONE peer (messages.search) — the matching messages in
         /// THAT conversation, newest-first. Distinct from SearchMessagesAsync (global SearchGlobal). offset_id=0 for
         /// the newest page; pass the oldest result id already shown to page OLDER matches. The result's .count is the
         /// total match count ("N messages found").</summary>
-        public Task<Messages_MessagesBase> SearchInChatAsync(InputPeer peer, string query, int offsetId = 0, int limit = 40)
+        public Task<Messages_MessagesBase> SearchInChatAsync(InputPeer peer, string query, int offsetId = 0, int limit = 40,
+                                                             MessagesFilter filter = null, InputPeer from = null)
         {
             // The generic Client.Messages_Search<TFilter> needs a CONCRETE filter (there is no "empty" filter type),
             // so call the raw function via Invoke with filter left null — WTC serializes a null MessagesFilter as
             // inputMessagesFilterEmpty (all message kinds), the same convenience SearchGlobal relies on.
             // (top_msg_id is available here for a future forum-TOPIC-scoped search.)
-            return Client.Invoke(new TL.Methods.Messages_Search { peer = peer, q = query, offset_id = offsetId, limit = limit });
+            // T19: a media kind (photos, videos, files, links, voice) and/or a sender (from_id + its flag)
+            var req = new TL.Methods.Messages_Search { peer = peer, q = query ?? "", offset_id = offsetId, limit = limit, filter = filter };
+            if (from != null) { req.from_id = from; req.flags |= TL.Methods.Messages_Search.Flags.has_from_id; }
+            return Client.Invoke(req);
         }
 
         /// <summary>SEARCH: public discovery. Contacts_Search finds PUBLIC channels/groups/users by name/username —
@@ -2284,16 +2289,17 @@ namespace TelegArm.Core
             return PrivacyPrimary.Nobody;
         }
 
-        /// <summary>Sets a key's primary privacy value (account.setPrivacy). v1 sends ONLY the primary rule —
-        /// any existing per-user exception lists are replaced. Returns the server's resulting rules.</summary>
-        public Task<Account_PrivacyRules> SetPrivacyAsync(InputPrivacyKey key, PrivacyPrimary value)
+        /// <summary>Sets a key's primary privacy value (account.setPrivacy) and its exceptions. Redesign T22 — THE EXCEPTIONS
+        /// ARE KEPT: v1 sent only the primary rule, which WIPED the "always / never share with" lists set on another device.
+        /// <paramref name="current"/> = the key's rules as last read (its exceptions are re-sent, with the access hashes its
+        /// users carry); <paramref name="alwaysAllow"/> / <paramref name="neverAllow"/>, when given, replace the two people
+        /// lists. Chat-member lists, close friends, Premium users and bots are always carried over as they were.</summary>
+        public Task<Account_PrivacyRules> SetPrivacyAsync(InputPrivacyKey key, PrivacyPrimary value, Account_PrivacyRules current = null,
+                                                          IEnumerable<User> alwaysAllow = null, IEnumerable<User> neverAllow = null)
         {
-            InputPrivacyRule[] rules;
-            if (value == PrivacyPrimary.Everybody) rules = new InputPrivacyRule[] { new InputPrivacyValueAllowAll() };
-            else if (value == PrivacyPrimary.Contacts) rules = new InputPrivacyRule[] { new InputPrivacyValueAllowContacts() };
-            else rules = new InputPrivacyRule[] { new InputPrivacyValueDisallowAll() };
-            return Client.Account_SetPrivacy(key, rules);
+            return Client.Account_SetPrivacy(key, PrivacyRules.Build((int)value, current, alwaysAllow, neverAllow));
         }
+
 
         // ── Two-step verification / cloud password (account.* + SRP helper) ──
         // ALL crypto goes through WTelegram's SRP helper Client.InputCheckPassword(Account_Password,string):

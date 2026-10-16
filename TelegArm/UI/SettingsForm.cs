@@ -59,6 +59,10 @@ namespace TelegArm.UI
         private readonly List<Tuple<InputPrivacyKey, SegmentedRow>> _privacyRows = new List<Tuple<InputPrivacyKey, SegmentedRow>>();
         private bool _privacyLoaded;
 
+        // T22: the rules last read per key (their exceptions are re-sent on every change) and the "Exceptions" rows
+        private readonly Dictionary<InputPrivacyKey, Account_PrivacyRules> _privacyRules = new Dictionary<InputPrivacyKey, Account_PrivacyRules>();
+        private readonly Dictionary<InputPrivacyKey, ActionRow> _privacyExceptionRows = new Dictionary<InputPrivacyKey, ActionRow>();
+
         private static readonly Tuple<string, InputPrivacyKey>[] PrivacyKeys = new[]
         {
             Tuple.Create("Last Seen & Online", InputPrivacyKey.StatusTimestamp),
@@ -824,6 +828,12 @@ namespace TelegArm.UI
                 seg.SelectedIndexChanged += (snd, ev) => OnPrivacyChanged(key, seg, seg.SelectedIndex);
                 _privacyRows.Add(Tuple.Create(key, seg));
                 rows.Add(seg);
+                // T22: the people this setting makes an exception for
+                string title = pk.Item1;
+                var ex = new ActionRow("Exceptions", "Edit") { Subtitle = "Loading…", Enabled = false };
+                ex.Click += (snd, ev) => EditPrivacyExceptions(key, title, seg);
+                _privacyExceptionRows[key] = ex;
+                rows.Add(ex);
             }
             page.Section("Who can see / contact me", rows.ToArray());
         }
@@ -839,6 +849,8 @@ namespace TelegArm.UI
                 {
                     var res = await _service.GetPrivacyAsync(key);
                     if (IsDisposed) return;
+                    _privacyRules[key] = res;
+                    ShowPrivacyExceptions(key);
                     int v = (int)TelegramService.ReducePrivacy(res?.rules);
                     seg.SetSelected(v, false);
                     seg.Applied = v;
@@ -856,7 +868,10 @@ namespace TelegArm.UI
             seg.Enabled = false;
             try
             {
-                var res = await _service.SetPrivacyAsync(key, (TelegramService.PrivacyPrimary)newIdx);
+                Account_PrivacyRules cur;
+                _privacyRules.TryGetValue(key, out cur);
+                var res = await _service.SetPrivacyAsync(key, (TelegramService.PrivacyPrimary)newIdx, cur);   // T22: exceptions kept
+                if (res != null) { _privacyRules[key] = res; ShowPrivacyExceptions(key); }
                 int confirmed = (int)TelegramService.ReducePrivacy(res?.rules);   // reflect what the server actually set
                 seg.SetSelected(confirmed, false);
                 seg.Applied = confirmed;
@@ -867,6 +882,40 @@ namespace TelegArm.UI
                 ThemedDialog.Show(this, "Privacy", "Couldn't change this setting: " + ex.Message, "OK");
             }
             finally { if (!seg.IsDisposed) { seg.Enabled = true; seg.Invalidate(); } }
+        }
+
+        /// <summary>T22: "Always: 2 · Never: 1" on a key's Exceptions row.</summary>
+        private void ShowPrivacyExceptions(InputPrivacyKey key)
+        {
+            ActionRow row;
+            if (!_privacyExceptionRows.TryGetValue(key, out row)) return;
+            Account_PrivacyRules rules;
+            _privacyRules.TryGetValue(key, out rules);
+            List<User> always, never;
+            PrivacyRules.People(rules, out always, out never);
+            row.Subtitle = always.Count == 0 && never.Count == 0 ? "None" : "Always: " + always.Count + " · Never: " + never.Count;
+            row.Enabled = rules != null;
+        }
+
+        private async void EditPrivacyExceptions(InputPrivacyKey key, string title, SegmentedRow seg)
+        {
+            Account_PrivacyRules cur;
+            if (_service == null || !_privacyRules.TryGetValue(key, out cur) || cur == null) return;
+            List<User> always, never;
+            PrivacyRules.People(cur, out always, out never);
+            List<User> newAlways, newNever;
+            using (var f = new PrivacyExceptionsForm(title, always, never, () => _service.GetContactsAsync()))
+            {
+                if (f.ShowDialog(this) != DialogResult.OK) return;
+                newAlways = f.AlwaysAllow; newNever = f.NeverAllow;
+            }
+            try
+            {
+                var res = await _service.SetPrivacyAsync(key, TelegramService.ReducePrivacy(cur.rules), cur, newAlways, newNever);
+                if (IsDisposed) return;
+                if (res != null) { _privacyRules[key] = res; ShowPrivacyExceptions(key); }
+            }
+            catch (Exception ex) { ThemedDialog.Show(this, "Privacy", "Couldn't save the exceptions: " + ex.Message, "OK"); }
         }
 
         // ── Security / Two-step verification ─────────────────────────────────────────────────────────────────

@@ -63,6 +63,7 @@
     <Compile Include="..\TelegArm\Core\AppSettings.cs"><Link>Linked\Core\AppSettings.cs</Link></Compile>
     <Compile Include="..\TelegArm\Core\ThemeSettings.cs"><Link>Linked\Core\ThemeSettings.cs</Link></Compile>
     <Compile Include="..\TelegArm\Core\StoragePaths.cs"><Link>Linked\Core\StoragePaths.cs</Link></Compile>
+    <Compile Include="..\TelegArm\Core\PrivacyRules.cs"><Link>Linked\Core\PrivacyRules.cs</Link></Compile>
     <Compile Include="..\TelegArm\Helpers\Logger.cs"><Link>Linked\Helpers\Logger.cs</Link></Compile>
     <Compile Include="..\TelegArm\Helpers\Dpi.cs"><Link>Linked\Helpers\Dpi.cs</Link></Compile>
     <Compile Include="..\TelegArm\Helpers\IDpiAware.cs"><Link>Linked\Helpers\IDpiAware.cs</Link></Compile>

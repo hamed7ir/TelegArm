@@ -103,6 +103,30 @@ namespace TelegArm.UI
             if (!string.IsNullOrWhiteSpace(q)) _searchDebounce.Start();
         }
 
+        // ── T19: where the message results come from ─────────────────────────────────────────────────────────────
+        private int _globalScope;   // 0 everywhere, 1 private chats, 2 groups, 3 channels
+        private static readonly string[] GlobalScopeNames = { "All", "Private", "Groups", "Channels" };
+
+        private void AddGlobalScopeChips()
+        {
+            var row = new FlowLayoutPanel { Width = ContentWidth(_chatListPanel), Height = Px(44), WrapContents = false,
+                                            Margin = Padding.Empty, Padding = new Padding(Px(6), Px(4), 0, 0), BackColor = ThemeHelper.PaletteFor(_dark).ListBg };
+            for (int i = 0; i < GlobalScopeNames.Length; i++)
+            {
+                int k = i;
+                var c = new FolderTabItem(GlobalScopeNames[i], 0, _globalScope == i, _dark, _accent, WindowDpiValue);
+                c.Clicked += () =>
+                {
+                    if (_globalScope == k) return;
+                    _globalScope = k;
+                    RenderChatList(_searchBox.Text);   // the local matches again, then the message search in the new scope
+                    DoMessageSearch();
+                };
+                row.Controls.Add(c);
+            }
+            _chatListPanel.Controls.Add(row);
+        }
+
         private async void DoMessageSearch()
         {
             _searchDebounce.Stop();
@@ -127,7 +151,7 @@ namespace TelegArm.UI
 
             try
             {
-                var results = await _service.SearchMessagesAsync(query, 50);
+                var results = await _service.SearchMessagesAsync(query, 50, _globalScope);   // T19: the scope chips
                 // Drop stale responses (query changed meanwhile).
                 if (_searchBox.Text.Trim() != query) return;
                 AppendMessageResults(results);
@@ -152,11 +176,12 @@ namespace TelegArm.UI
         private void AppendMessageResults(Messages_MessagesBase results)
         {
             var msgs = results.Messages.OfType<Message>().Where(m => m.peer_id != null).ToList();
-            if (msgs.Count == 0) return;
+            if (msgs.Count == 0 && _globalScope == 0) return;   // T19: a scope with no hits keeps its chips (to switch back)
 
             _chatListPanel.SuspendLayout();
             int w = ContentWidth(_chatListPanel);
             AddSectionHeader("MESSAGES");
+            AddGlobalScopeChips();
             foreach (var m in msgs)
             {
                 string title;

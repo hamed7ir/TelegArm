@@ -13,6 +13,45 @@ namespace TelegArm.SelfTest
         {
             t.Add(new KeyValuePair<string, Action>("composer (T7): slow mode waits until the server's next send; admins, the creator and a past date don't", SlowMode));
             t.Add(new KeyValuePair<string, Action>("composer (T8): <u>underline</u> and \"> \" quotes parse; the old markers are unchanged", Markdown));
+            t.Add(new KeyValuePair<string, Action>("privacy (T22): a new main setting keeps every exception; edited people lists replace theirs", Privacy));
+        }
+
+        private static string Rules(InputPrivacyRule[] r)
+        {
+            var parts = new List<string>();
+            foreach (var x in r)
+            {
+                string s = x.GetType().Name.Replace("InputPrivacyValue", "");
+                var au = x as InputPrivacyValueAllowUsers; var du = x as InputPrivacyValueDisallowUsers;
+                var dc = x as InputPrivacyValueDisallowChatParticipants;
+                var users = au != null ? au.users : du != null ? du.users : null;
+                if (users != null) { var ids = new List<string>(); foreach (var u in users) ids.Add(((InputUser)u).user_id + ":" + ((InputUser)u).access_hash); s += "[" + string.Join(",", ids.ToArray()) + "]"; }
+                if (dc != null) s += "[" + string.Join(",", Array.ConvertAll(dc.chats, c => c.ToString())) + "]";
+                parts.Add(s);
+            }
+            return string.Join(" ", parts.ToArray());
+        }
+
+        private static void Privacy()
+        {
+            var ada = new User { id = 1, access_hash = 11 };
+            var cur = new Account_PrivacyRules
+            {
+                rules = new PrivacyRule[] { new PrivacyValueAllowUsers { users = new long[] { 1 } }, new PrivacyValueDisallowChatParticipants { chats = new long[] { 5 } },
+                                            new PrivacyValueAllowCloseFriends(), new PrivacyValueAllowContacts() },
+                users = new Dictionary<long, User> { { 1, ada } },
+                chats = new Dictionary<long, ChatBase>(),
+            };
+            // v1 sent only "DisallowAll" here, wiping Ada and the group list
+            Check.Equal("AllowUsers[1:11] DisallowChatParticipants[5] AllowCloseFriends DisallowAll",
+                        Rules(PrivacyRules.Build(2, cur, null, null)), "main setting changed");
+            Check.Equal("DisallowChatParticipants[5] AllowCloseFriends DisallowUsers[2:22] AllowContacts",
+                        Rules(PrivacyRules.Build(1, cur, new User[0], new[] { new User { id = 2, access_hash = 22 } })),
+                        "people lists edited");
+            Check.Equal("AllowAll", Rules(PrivacyRules.Build(0, null, null, null)), "nothing read yet");
+            System.Collections.Generic.List<User> always, never;
+            PrivacyRules.People(cur, out always, out never);
+            Check.Equal("1/0", always.Count + "/" + never.Count, "people of the rules");
         }
 
         private static string Ents(MessageEntity[] e)

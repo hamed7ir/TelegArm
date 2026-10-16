@@ -20,6 +20,25 @@ namespace TelegArm.UI
         private int _inChatOffsetId;             // oldest result id shown → offset for the next (older) page
         private int _inChatTotal;                // total match count ("N messages found")
         private bool _inChatPaging;
+        private int _inChatFilter;               // T19: 0 all, 1 photos, 2 videos, 3 files, 4 links, 5 voice
+        private bool _inChatFromMe;              // T19: only my own messages
+
+        private static readonly string[] InChatFilterNames = { "All", "Photos", "Videos", "Files", "Links", "Voice" };
+
+        private static MessagesFilter InChatFilterOf(int i)
+        {
+            switch (i)
+            {
+                case 1: return new InputMessagesFilterPhotos();
+                case 2: return new InputMessagesFilterVideo();
+                case 3: return new InputMessagesFilterDocument();
+                case 4: return new InputMessagesFilterUrl();
+                case 5: return new InputMessagesFilterVoice();
+                default: return null;
+            }
+        }
+
+        private bool InChatFiltered { get { return _inChatFilter != 0 || _inChatFromMe; } }
 
         /// <summary>Enters in-chat search for the open chat: the left panel becomes the scoped results view.</summary>
         private void EnterInChatSearch()
@@ -27,6 +46,7 @@ namespace TelegArm.UI
             if (_selectedChat == null) return;
             _inChatSearchEntry = _selectedChat;
             _inChatQuery = null; _inChatOffsetId = 0; _inChatTotal = 0;
+            _inChatFilter = 0; _inChatFromMe = false;   // T19
             _searchBox.Text = "";                 // TextChanged (in-chat mode) shows the chip; explicit call covers no-change
             RenderInChatSearchChrome();
             try { _searchBox.Focus(); } catch { }
@@ -74,6 +94,33 @@ namespace TelegArm.UI
             };
             chip.Click += (s, e) => ExitInChatSearch();
             _chatListPanel.Controls.Add(chip);
+            AddInChatFilterChips();
+        }
+
+        /// <summary>T19: what to search for (a media kind) and whose messages (mine) — chips under the scope chip. Picking one
+        /// searches at once, even with the box empty ("all the photos in this chat").</summary>
+        private void AddInChatFilterChips()
+        {
+            var row = new FlowLayoutPanel { Width = ContentWidth(_chatListPanel), Height = Px(44), WrapContents = false, AutoScroll = false,
+                                            Margin = Padding.Empty, Padding = new Padding(Px(6), Px(4), 0, 0), BackColor = ThemeHelper.PaletteFor(_dark).ListBg };
+            for (int i = 0; i < InChatFilterNames.Length; i++)
+            {
+                int k = i;
+                var c = new FolderTabItem(InChatFilterNames[i], 0, _inChatFilter == i, _dark, _accent, WindowDpiValue);
+                c.Clicked += () => { _inChatFilter = k; RerunInChatSearch(); };
+                row.Controls.Add(c);
+            }
+            var me = new FolderTabItem("From me", 0, _inChatFromMe, _dark, _accent, WindowDpiValue);
+            me.Clicked += () => { _inChatFromMe = !_inChatFromMe; RerunInChatSearch(); };
+            row.Controls.Add(me);
+            _chatListPanel.Controls.Add(row);
+        }
+
+        private async void RerunInChatSearch()
+        {
+            if (_inChatSearchEntry == null) return;
+            if (string.IsNullOrWhiteSpace(_searchBox.Text) && !InChatFiltered) { _inChatQuery = null; RenderInChatSearchChrome(); return; }
+            await DoInChatSearch();
         }
 
         /// <summary>Runs the scoped search (Messages_Search on the open peer) → renders results, newest-first.</summary>
@@ -81,12 +128,13 @@ namespace TelegArm.UI
         {
             if (_inChatSearchEntry == null) return;
             var q = _searchBox.Text.Trim();
-            if (q.Length == 0) { _inChatQuery = null; RenderInChatSearchChrome(); return; }
+            if (q.Length == 0 && !InChatFiltered) { _inChatQuery = null; RenderInChatSearchChrome(); return; }
             _inChatQuery = q; _inChatOffsetId = 0;
+            int filterAt = _inChatFilter; bool meAt = _inChatFromMe;
             try
             {
-                var res = await _service.SearchInChatAsync(_inChatSearchEntry.Peer, q, 0, 40);
-                if (_inChatSearchEntry == null || _searchBox.Text.Trim() != q) return;   // exited / query changed
+                var res = await _service.SearchInChatAsync(_inChatSearchEntry.Peer, q, 0, 40, InChatFilterOf(filterAt), meAt ? new InputPeerSelf() : null);
+                if (_inChatSearchEntry == null || _searchBox.Text.Trim() != q || filterAt != _inChatFilter || meAt != _inChatFromMe) return;   // stale
                 RenderInChatResults(res, replace: true);
             }
             catch { /* best-effort; leave the chip up */ }
@@ -151,14 +199,14 @@ namespace TelegArm.UI
         /// <summary>Pages OLDER scoped matches when the results list nears the bottom (Messages_Search offset_id).</summary>
         private async void CheckInChatPaging()
         {
-            if (_inChatPaging || _inChatSearchEntry == null || string.IsNullOrEmpty(_inChatQuery) || _inChatOffsetId == 0) return;
+            if (_inChatPaging || _inChatSearchEntry == null || _inChatQuery == null || _inChatOffsetId == 0) return;
             int pos = -_chatListPanel.AutoScrollPosition.Y, viewport = _chatListPanel.ClientSize.Height, content = _chatListPanel.DisplayRectangle.Height;
             if (!(content > viewport && pos + viewport >= content - Px(200))) return;
             _inChatPaging = true;
             try
             {
                 var q = _inChatQuery; int off = _inChatOffsetId;
-                var res = await _service.SearchInChatAsync(_inChatSearchEntry.Peer, q, off, 40);
+                var res = await _service.SearchInChatAsync(_inChatSearchEntry.Peer, q, off, 40, InChatFilterOf(_inChatFilter), _inChatFromMe ? new InputPeerSelf() : null);
                 if (_inChatSearchEntry == null || _inChatQuery != q) return;   // exited / query changed mid-fetch
                 if (res != null && res.Messages != null && res.Messages.OfType<Message>().Any())
                     RenderInChatResults(res, replace: false);

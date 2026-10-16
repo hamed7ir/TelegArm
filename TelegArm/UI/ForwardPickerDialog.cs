@@ -46,15 +46,30 @@ namespace TelegArm.UI
 
         private ToggleRow _hideSender, _dropCaptions;
         private Panel _optsHost;
+        private readonly string _verb;
+        private readonly bool _forwarding;
 
         public ForwardPickerDialog(List<ChatEntry> chats, bool dark, Color accent,
                                    Func<long, Image> cachedAvatar = null, Func<long, IPeerInfo, Task<Image>> loadAvatar = null)
-            : base("Forward to…", 380, 580)
+            : this(chats, "Forward to…", "Forward", null, true, cachedAvatar, loadAvatar) { }
+
+        /// <summary>Redesign T13 — the same list as a plain chat chooser (a folder's chats): every chat, not only those you
+        /// can post to; <paramref name="preselected"/> ticked and listed first; no forward options; confirm allowed at 0.</summary>
+        public ForwardPickerDialog(List<ChatEntry> chats, string title, string verb, IEnumerable<long> preselected,
+                                   Func<long, Image> cachedAvatar, Func<long, IPeerInfo, Task<Image>> loadAvatar)
+            : this(chats, title, verb, preselected, false, cachedAvatar, loadAvatar) { }
+
+        private ForwardPickerDialog(List<ChatEntry> chats, string title, string verb, IEnumerable<long> preselected, bool forwarding,
+                                    Func<long, Image> cachedAvatar, Func<long, IPeerInfo, Task<Image>> loadAvatar)
+            : base(title, 380, 580)
         {
             _cachedAvatar = cachedAvatar; _loadAvatar = loadAvatar;
+            _verb = verb; _forwarding = forwarding;
             var p = ThemeHelper.Palette;
 
-            _all = (chats ?? new List<ChatEntry>()).Where(CanPost).ToList();   // only chats you can post to
+            if (preselected != null) foreach (var id in preselected) _checked.Add(id);
+            _all = (chats ?? new List<ChatEntry>()).Where(c => !forwarding || CanPost(c))   // forwarding: only chats you can post to
+                                                   .OrderBy(c => _checked.Contains(c.PeerId) ? 0 : 1).ToList();
             _view = _all;
 
             _search = new ThemedTextBox(false) { Hint = "Search", AccessibleName = "Search" };
@@ -68,24 +83,26 @@ namespace TelegArm.UI
             _list.DrawRow += DrawRow;
             _list.ItemClicked += OnRowClicked;
 
-            // T4: the forward options, in a strip under the list
-            _hideSender = new ToggleRow("Hide sender's name");
-            _dropCaptions = new ToggleRow("Remove captions") { Enabled = false };
-            _hideSender.Changed += (s, e) => { _dropCaptions.Enabled = _hideSender.On; if (!_hideSender.On) _dropCaptions.On = false; };
-            _optsHost = new Panel { Dock = DockStyle.Bottom, BackColor = p.Window };
-            _optsHost.Controls.Add(_hideSender);
-            _optsHost.Controls.Add(_dropCaptions);
-            _optsHost.SizeChanged += (s, e) => LayoutOptions();
-
             _host = new Panel { BackColor = p.Window };
             _host.Controls.Add(_list);
-            _host.Controls.Add(_optsHost);
+            if (forwarding)
+            {
+                // T4: the forward options, in a strip under the list
+                _hideSender = new ToggleRow("Hide sender's name");
+                _dropCaptions = new ToggleRow("Remove captions") { Enabled = false };
+                _hideSender.Changed += (s, e) => { _dropCaptions.Enabled = _hideSender.On; if (!_hideSender.On) _dropCaptions.On = false; };
+                _optsHost = new Panel { Dock = DockStyle.Bottom, BackColor = p.Window };
+                _optsHost.Controls.Add(_hideSender);
+                _optsHost.Controls.Add(_dropCaptions);
+                _optsHost.SizeChanged += (s, e) => LayoutOptions();
+                _host.Controls.Add(_optsHost);
+            }
             _host.Controls.Add(_searchHost);    // added last = docked first: the Top strip
             UseOwnBody(_host);
             LayoutSearch();
 
-            _confirm = AddFooterButton("Forward (0)", RoundedButtonKind.Primary, DialogResult.None);   // first added = rightmost
-            _confirm.Enabled = false;
+            _confirm = AddFooterButton(_verb + " (" + _checked.Count + ")", RoundedButtonKind.Primary, DialogResult.None);   // first added = rightmost
+            _confirm.Enabled = !_forwarding || _checked.Count > 0;
             _confirm.Click += (s, e) => { SelectedChats = _all.Where(c => _checked.Contains(c.PeerId)).ToList(); DialogResult = DialogResult.OK; Close(); };
             CancelButton = AddFooterButton("Cancel", RoundedButtonKind.Neutral, DialogResult.Cancel);
             AcceptButton = _confirm;
@@ -161,8 +178,8 @@ namespace TelegArm.UI
             long id = _view[i].PeerId;
             if (!_checked.Remove(id)) _checked.Add(id);
             _list.InvalidateRow(i);
-            _confirm.Text = "Forward (" + _checked.Count + ")";
-            _confirm.Enabled = _checked.Count > 0;
+            _confirm.Text = _verb + " (" + _checked.Count + ")";
+            _confirm.Enabled = !_forwarding || _checked.Count > 0;
         }
 
         private void DrawRow(Graphics g, int index, Rectangle r)

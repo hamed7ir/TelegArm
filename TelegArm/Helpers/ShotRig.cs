@@ -236,6 +236,17 @@ namespace TelegArm.Helpers
                 Shot("p7-addcontact-" + t, () => new AddContactForm());   // T15
                 Shot("p7-inviteopts-" + t, () => new TelegArm.UI.Admin.InviteOptionsForm());   // T21
                 Shot("p7-scheduled-" + t, () => new ScheduledForm(null, new TL.InputPeerSelf(), "Ada"));   // T11 (chrome)
+                // T22: the privacy exceptions editor (two people in "Always allow")
+                Shot("p7-privacyex-" + t, () => new PrivacyExceptionsForm("Last seen", new[] { new TL.User { id = 1001, first_name = "Ada", last_name = "Lovelace" },
+                                                                                          new TL.User { id = 1002, first_name = "Charles" } }, null, null));
+                // T13: a folder being edited (groups + muted left out, one chat always shown) and the plain chat chooser
+                Shot("p7-folderedit-" + t, () => new FolderEditForm(new TL.DialogFilter
+                {
+                    id = 3, title = new TL.TextWithEntities { text = "Work", entities = new TL.MessageEntity[0] },
+                    flags = TL.DialogFilter.Flags.groups | TL.DialogFilter.Flags.exclude_muted,
+                    pinned_peers = new TL.InputPeer[0], include_peers = new TL.InputPeer[] { new TL.InputPeerUser(1, 0) }, exclude_peers = new TL.InputPeer[0],
+                }, 4, DemoChats(), null, null));
+                Shot("p7-folderpick-" + t, () => new ForwardPickerDialog(DemoChats(), "Always show", "Done", new long[] { DemoChats()[2].PeerId }, null, null));
                 WithForm("p7-quiz-" + t, () => new CreatePollForm(ThemeHelper.IsDark, ThemeHelper.Palette.Accent), f =>   // T18
                 {
                     var q = (CheckBox)Field(f, "_quiz"); q.Checked = true;

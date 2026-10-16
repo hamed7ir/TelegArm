@@ -32,7 +32,7 @@ namespace TelegArm.UI
             _folderBar.Controls.Clear();
             _folderBadgeSources.Clear();
 
-            AddFolderTab("All", AllUnread, !_showArchive && _activeFolder == null, () => SetActiveFolder(null));
+            AddFolderTab("All", AllUnread, !_showArchive && _activeFolder == null, () => SetActiveFolder(null), null);
             foreach (var f in _folders)
             {
                 if (f == null) continue;
@@ -40,20 +40,21 @@ namespace TelegArm.UI
                 try { title = (f.Title?.text ?? "").Trim(); } catch { title = ""; }
                 var ff = f;
                 AddFolderTab(string.IsNullOrEmpty(title) ? "Folder" : title, () => FolderUnread(ff),
-                    !_showArchive && ReferenceEquals(f, _activeFolder), () => SetActiveFolder(ff));
+                    !_showArchive && ReferenceEquals(f, _activeFolder), () => SetActiveFolder(ff), ff);
             }
 
             // Archive tab (only when there are archived chats); its unread rides the shared badge now.
             if (_allChats.Any(c => c.Archived))
-                AddFolderTab("Archive", ArchiveUnread, _showArchive, SetArchive);
+                AddFolderTab("Archive", ArchiveUnread, _showArchive, SetArchive, null);
 
             _folderBar.ResumeLayout();
         }
 
-        private void AddFolderTab(string text, Func<int> unread, bool active, Action onClick)
+        private void AddFolderTab(string text, Func<int> unread, bool active, Action onClick, TL.DialogFilterBase folder)
         {
             var it = new FolderTabItem(text, unread(), active, _dark, _accent, WindowDpiValue);
             it.Clicked += onClick;
+            it.MouseUp += (s, e) => { if (e.Button == MouseButtons.Right) ShowFolderMenu(folder, it.PointToScreen(e.Location)); };   // T13
             _folderBar.Controls.Add(it);
             _folderBadgeSources.Add(new KeyValuePair<IFolderBadge, Func<int>>(it, unread));
         }
@@ -336,7 +337,7 @@ namespace TelegArm.UI
             _folderBadgeSources.Clear();
             _folderRail.BackColor = ThemeHelper.PaletteFor(_dark).FolderRailBg;
 
-            AddRailItem("\U0001F4AC", "All", AllUnread, !_showArchive && _activeFolder == null, () => SetActiveFolder(null));
+            AddRailItem("\U0001F4AC", "All", AllUnread, !_showArchive && _activeFolder == null, () => SetActiveFolder(null), null);
             foreach (var f in _folders)
             {
                 if (f == null) continue;
@@ -345,18 +346,19 @@ namespace TelegArm.UI
                 if (string.IsNullOrEmpty(title)) title = "Folder";
                 string icon = !string.IsNullOrEmpty(df?.emoticon) ? df.emoticon : "\U0001F4C1";   // 📁 default
                 var ff = f;
-                AddRailItem(icon, title, () => FolderUnread(ff), !_showArchive && ReferenceEquals(f, _activeFolder), () => SetActiveFolder(ff));
+                AddRailItem(icon, title, () => FolderUnread(ff), !_showArchive && ReferenceEquals(f, _activeFolder), () => SetActiveFolder(ff), ff);
             }
             if (_allChats.Any(c => c.Archived))
-                AddRailItem("\U0001F5C4", "Archive", ArchiveUnread, _showArchive, SetArchive);   // 🗄
+                AddRailItem("\U0001F5C4", "Archive", ArchiveUnread, _showArchive, SetArchive, null);   // 🗄
 
             _folderRail.ResumeLayout();
         }
 
-        private void AddRailItem(string icon, string label, Func<int> unread, bool active, Action onClick)
+        private void AddRailItem(string icon, string label, Func<int> unread, bool active, Action onClick, TL.DialogFilterBase folder)
         {
             var it = new FolderRailItem(icon, label, unread(), active, _dark, _accent, WindowDpiValue) { Width = ContentWidth(_folderRail) };
             it.Clicked += onClick;
+            it.MouseUp += (s, e) => { if (e.Button == MouseButtons.Right) ShowFolderMenu(folder, it.PointToScreen(e.Location)); };   // T13
             _folderRail.Controls.Add(it);
             _folderBadgeSources.Add(new KeyValuePair<IFolderBadge, Func<int>>(it, unread));
         }
@@ -514,6 +516,101 @@ namespace TelegArm.UI
                         TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
                 }
             }
+        }
+
+        // ── T13: make, edit, move and delete folders ───────────────────────────────────────────────────────────
+        /// <summary>Right-click on a folder tab / rail item. All and Archive offer only "New folder"; a shared folder (a
+        /// chatlist) can be moved but not edited or deleted here.</summary>
+        private void ShowFolderMenu(TL.DialogFilterBase folder, Point screenPt)
+        {
+            if (_service == null || _folders == null) return;
+            var menu = new ThemedContextMenuStrip();
+            AddMenuItem(menu, "New folder…", () => EditFolder(null));
+            if (folder != null)
+            {
+                var real = _folders.Where(f => f != null).ToList();
+                int at = real.FindIndex(f => f.ID == folder.ID);
+                if (folder is TL.DialogFilter df) AddMenuItem(menu, "Edit folder…", () => EditFolder(df));
+                if (at > 0) AddMenuItem(menu, _folderRail != null && _folderRail.Visible ? "Move up" : "Move left", () => MoveFolder(folder.ID, -1));
+                if (at >= 0 && at < real.Count - 1) AddMenuItem(menu, _folderRail != null && _folderRail.Visible ? "Move down" : "Move right", () => MoveFolder(folder.ID, 1));
+                if (folder is TL.DialogFilter dd)
+                {
+                    menu.Items.Add(new ToolStripSeparator());
+                    AddMenuItem(menu, "Delete folder", () => DeleteFolder(dd));
+                }
+            }
+            menu.Closed += (s, e) => BeginInvoke((Action)menu.Dispose);
+            menu.ShowAt(screenPt);
+        }
+
+        /// <summary>New (src null) or edit. An edit starts from a FRESH read of that folder, as TogglePinInFolderAsync does:
+        /// the cached copy can be hours old, and writing it back would undo folder changes made on another device.</summary>
+        private async void EditFolder(TL.DialogFilter cached)
+        {
+            TL.DialogFilterBase[] fresh;
+            try { fresh = await _service.GetDialogFiltersFreshAsync(); }
+            catch (Exception ex) { ThemedDialog.Show(this, "Folder", "Couldn't reach Telegram: " + ex.Message, "OK"); return; }
+            if (IsDisposed) return;
+            TL.DialogFilter src = null;
+            if (cached != null)
+            {
+                src = fresh.FirstOrDefault(f => f != null && f.ID == cached.id) as TL.DialogFilter;
+                if (src == null) { ThemedDialog.Show(this, "Folder", "That folder no longer exists, or is now a shared folder.", "OK"); await ReloadFoldersAsync(); return; }
+            }
+            int newId = Math.Max(2, fresh.Where(f => f != null).Select(f => f.ID).DefaultIfEmpty(1).Max() + 1);
+            TL.DialogFilter result;
+            using (var form = new FolderEditForm(src, newId, _allChats, GetCachedAvatar, GetAvatarBoundedAsync))
+            {
+                if (form.ShowDialog(this) != DialogResult.OK || form.Result == null) return;
+                result = form.Result;
+            }
+            try { await _service.UpdateDialogFilterAsync(result.id, result); }
+            catch (Exception ex)
+            {
+                Logger.Diag("[FOLDER] save id=" + result.id + " FAILED — " + ex.Message);
+                ThemedDialog.Show(this, "Folder", "Couldn't save the folder: " + ex.Message, "OK");
+                return;
+            }
+            Logger.Diag("[FOLDER] saved id=" + result.id + (src == null ? " (new)" : ""));
+            await ReloadFoldersAsync();
+        }
+
+        private async void DeleteFolder(TL.DialogFilter folder)
+        {
+            string title = "";
+            try { title = folder.title?.text ?? ""; } catch { }
+            if (ThemedDialog.Show(this, "Delete folder", "Delete the folder \"" + title + "\"? Its chats stay where they are.", "Delete", "Cancel") != 0) return;
+            try { await _service.UpdateDialogFilterAsync(folder.id, null); }
+            catch (Exception ex) { ThemedDialog.Show(this, "Folder", "Couldn't delete the folder: " + ex.Message, "OK"); return; }
+            Logger.Diag("[FOLDER] deleted id=" + folder.id);
+            await ReloadFoldersAsync();
+        }
+
+        /// <summary>Swaps a folder with its neighbour and sends the whole order (messages.updateDialogFiltersOrder). The
+        /// default "All" element (null in WTC) is left out: the app always shows All first.</summary>
+        private async void MoveFolder(int id, int delta)
+        {
+            var order = _folders.Where(f => f != null).Select(f => f.ID).ToList();
+            int i = order.IndexOf(id), j = i + delta;
+            if (i < 0 || j < 0 || j >= order.Count) return;
+            order[i] = order[j]; order[j] = id;
+            try { await _service.Client.Messages_UpdateDialogFiltersOrder(order.ToArray()); }
+            catch (Exception ex) { ThemedDialog.Show(this, "Folder", "Couldn't move the folder: " + ex.Message, "OK"); return; }
+            await ReloadFoldersAsync();
+        }
+
+        /// <summary>After a folder write: the server's list, with the open folder kept open by ID (the objects are new, and
+        /// the bar marks the active tab by reference). A failed read keeps the old list rather than emptying the bar.</summary>
+        private async System.Threading.Tasks.Task ReloadFoldersAsync()
+        {
+            TL.DialogFilterBase[] fresh;
+            try { fresh = await _service.GetDialogFiltersFreshAsync(); }
+            catch (Exception ex) { Logger.Diag("[FOLDER] reload failed — " + ex.Message); return; }
+            if (IsDisposed) return;
+            int? activeId = _activeFolder != null ? _activeFolder.ID : (int?)null;
+            _folders = fresh;
+            if (_showArchive) { RebuildFolders(); return; }
+            SetActiveFolder(activeId == null ? null : fresh.FirstOrDefault(f => f != null && f.ID == activeId.Value));
         }
 
         private void SetActiveFolder(TL.DialogFilterBase folder)
@@ -791,7 +888,7 @@ namespace TelegArm.UI
             return s;
         }
 
-        private static long PeerIdOf(InputPeer p)
+        internal static long PeerIdOf(InputPeer p)
         {
             switch (p)
             {
