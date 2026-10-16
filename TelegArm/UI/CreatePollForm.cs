@@ -11,9 +11,8 @@ namespace TelegArm.UI
 {
     /// <summary>
     /// "Create Poll" composer: a question + 2–10 option fields (add/remove) and the Anonymous /
-    /// Multiple-choice toggles. Sends a regular or anonymous or multiple-choice poll. QUIZ MODE is
-    /// intentionally NOT offered here — its correct_answers↔option wire encoding could not be verified
-    /// in this build environment (see the POLL-BTN batch report); received quizzes still render fully.
+    /// Multiple-choice toggles. Sends a regular or anonymous or multiple-choice poll — or, since T18, a QUIZ: one correct
+    /// answer (picked from the options, sent as its index) and an optional explanation.
     /// </summary>
     public sealed class CreatePollForm : Form, IDpiHost
     {
@@ -34,12 +33,20 @@ namespace TelegArm.UI
         private readonly Panel _optionsPanel;
         private readonly List<TextBox> _optionBoxes = new List<TextBox>();
         private readonly Button _addBtn, _ok, _cancel;
-        private readonly CheckBox _anon, _multi;
+        private readonly CheckBox _anon, _multi, _quiz;   // T18: quiz
+        private readonly Label _correctLabel;
+        private readonly RoundedButton _correct;   // a themed picker: a native ComboBox draws white in dark mode
+        private string _correctText;               // the chosen option's text
+        private readonly TextBox _solution;
 
         public string Question { get; private set; }
         public string[] Options { get; private set; }
         public bool Anonymous { get; private set; }
         public bool Multiple { get; private set; }
+        /// <summary>T18: a quiz — <see cref="CorrectIndex"/> into <see cref="Options"/>, <see cref="Solution"/> optional.</summary>
+        public bool Quiz { get; private set; }
+        public int CorrectIndex { get; private set; } = -1;
+        public string Solution { get; private set; }
 
         /// <param name="dpi">Step 3.3 — the DPI to lay out at: the owner's (Dpi.Of(owner)). 0 = <see cref="Dpi.DefaultDpi"/>.</param>
         public CreatePollForm(bool dark, Color accent, int dpi = 0)
@@ -83,9 +90,25 @@ namespace TelegArm.UI
 
             _anon = MakeCheck("Anonymous voting"); _anon.Checked = true;
             _multi = MakeCheck("Multiple answers");
-            // Multiple-choice + (the deferred) quiz are mutually exclusive in Telegram; with quiz absent,
-            // Multiple stands alone. Kept simple here.
             Controls.Add(_anon); Controls.Add(_multi);
+            // T18: quiz — one correct answer; Telegram does not allow it together with multiple answers
+            _quiz = MakeCheck("Quiz (one correct answer)");
+            Controls.Add(_quiz);
+            _correctLabel = MakeLabel("Correct answer");
+            Controls.Add(_correctLabel);
+            _correct = new RoundedButton { Text = "Pick the correct answer…", Kind = RoundedButtonKind.Secondary };
+            _correct.Click += (s, e) => PickCorrect();
+            Controls.Add(_correct);
+            _solution = MakeField();   // single-line: EM_SETCUEBANNER draws its cue (it does not on a multiline EDIT)
+            _solution.HandleCreated += (s, e) => { try { SendMessage(_solution.Handle, 0x1501 /* EM_SETCUEBANNER */, (IntPtr)1, "Explanation shown after answering (optional)"); } catch { } };
+            Controls.Add(_solution);
+            _quiz.CheckedChanged += (s, e) =>
+            {
+                if (_quiz.Checked) _multi.Checked = false;
+                _multi.Enabled = !_quiz.Checked;
+                _correctLabel.Visible = _correct.Visible = _solution.Visible = _quiz.Checked;
+            };
+            _correctLabel.Visible = _correct.Visible = _solution.Visible = false;
 
             _ok = new RoundedButton { Text = "Create", Kind = RoundedButtonKind.Primary };
             _ok.Click += OnCreate;
@@ -103,7 +126,7 @@ namespace TelegArm.UI
         private void ApplyMetrics()
         {
             Font = FontHelper.UiAt(9.5f, _dpi);   // shared: never dispose (the fields, checks and buttons inherit it)
-            ClientSize = new Size(P(360), P(460));
+            ClientSize = new Size(P(360), P(560));
 
             int x = P(16), w = ClientSize.Width - P(32);
 
@@ -114,8 +137,12 @@ namespace TelegArm.UI
             _addBtn.Bounds = new Rectangle(x, P(306), P(140), P(28));
             _anon.Bounds = new Rectangle(x, P(344), P(300), P(22));
             _multi.Bounds = new Rectangle(x, P(372), P(300), P(22));
-            _ok.Bounds = new Rectangle(ClientSize.Width - P(222), P(410), P(100), P(32));
-            _cancel.Bounds = new Rectangle(ClientSize.Width - P(116), P(410), P(100), P(32));
+            _quiz.Bounds = new Rectangle(x, P(400), P(300), P(22));                      // T18
+            PlaceLabel(_correctLabel, P(430));
+            _correct.Bounds = new Rectangle(x, P(448), w, P(28));
+            _solution.Bounds = new Rectangle(x, P(480), w, P(26));
+            _ok.Bounds = new Rectangle(ClientSize.Width - P(222), P(514), P(100), P(32));
+            _cancel.Bounds = new Rectangle(ClientSize.Width - P(116), P(514), P(100), P(32));
 
             // The option rows (none yet on the first call): scrolled home first — Relayout places them in client
             // coordinates — then each re-sized to the panel and re-placed, with the panel's layout held so its scrollbar
@@ -149,6 +176,29 @@ namespace TelegArm.UI
                 BackColor = _field, ForeColor = _fg, BorderStyle = BorderStyle.FixedSingle
             };
         }
+
+        /// <summary>T18: the options as typed right now, in a themed menu under the picker; the choice is kept by its text
+        /// (OnCreate finds it among the non-empty options that are sent).</summary>
+        private void PickCorrect()
+        {
+            var menu = new ThemedContextMenuStrip();
+            int n = 0;
+            foreach (var tb in _optionBoxes)
+            {
+                string t = (tb.Text ?? "").Trim();
+                if (t.Length == 0) continue;
+                string label = (++n) + ". " + t;
+                var it = new ToolStripMenuItem(label) { Checked = t == _correctText };
+                it.Click += (s, e) => { _correctText = t; _correct.Text = label; };
+                menu.Items.Add(it);
+            }
+            if (n == 0) { menu.Dispose(); ThemedDialog.Show(this, "Create Poll", "Type the options first.", "OK"); return; }
+            menu.Closed += (s, e) => { try { if (!IsDisposed && IsHandleCreated) BeginInvoke((Action)menu.Dispose); else menu.Dispose(); } catch { } };
+            menu.ShowAt(_correct, new Point(0, _correct.Height));
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, string lParam);
 
         private CheckBox MakeCheck(string text)
         {
@@ -236,10 +286,21 @@ namespace TelegArm.UI
             if (q.Length == 0) { ThemedDialog.Show(this, "Create Poll", "Please enter a question.", "OK"); return; }
             if (opts.Count < 2) { ThemedDialog.Show(this, "Create Poll", "Please enter at least two options.", "OK"); return; }
 
+            // T18: the picked option, counted among the NON-EMPTY options (the ones that are sent)
+            int correct = -1;
+            if (_quiz.Checked)
+            {
+                if (_correctText != null) correct = opts.IndexOf(_correctText);
+                if (correct < 0) { ThemedDialog.Show(this, "Create Poll", "Pick the correct answer for the quiz.", "OK"); return; }
+            }
+
             Question = q;
             Options = opts.ToArray();
             Anonymous = _anon.Checked;
-            Multiple = _multi.Checked;
+            Multiple = _multi.Checked && !_quiz.Checked;
+            Quiz = _quiz.Checked;
+            CorrectIndex = correct;
+            Solution = _quiz.Checked ? (_solution.Text ?? "").Trim() : null;
             DialogResult = DialogResult.OK;
             Close();
         }

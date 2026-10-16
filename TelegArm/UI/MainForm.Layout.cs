@@ -831,6 +831,8 @@ namespace TelegArm.UI
                 Enabled = false
             };
             _sendButton.Click += (s, e) => { SendPathLog("button"); if (_voiceState == VoiceState.Ready) SendPendingVoice(); else SendCurrentMessage(); };
+            // T11: right-click (or press-and-hold, which Windows turns into one) → schedule the message
+            _sendButton.MouseUp += (s, e) => { if (e.Button == MouseButtons.Right) ShowSendMenu(); };
 
             _emojiButton = new EmojiGlyphButton { Anchor = AnchorStyles.None, Enabled = false };
             _emojiButton.Click += (s, e) => OpenEmojiPicker();

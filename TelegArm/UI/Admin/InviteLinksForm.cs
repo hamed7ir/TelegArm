@@ -14,8 +14,8 @@ namespace TelegArm.UI.Admin
     /// <summary>
     /// TIER 3 admin: view / create / revoke a group/channel's invite links. Themed chrome, RT-dark-scrollbar
     /// list (ThemedListBox), touch-sized rows + a big "Create invite link" button. Tap a row → Copy / Revoke (revoke
-    /// confirms). Every RPC bounded. Expiry / usage-limit options are deferred (reported) — links are created
-    /// with defaults (no expiry / unlimited), which covers the common case.
+    /// confirms). Every RPC bounded. T21: "Create invite link" first asks when the link expires and how many people it
+    /// may let in (InviteOptionsForm; the defaults are the old never / unlimited).
     ///
     /// Redesign step 2.6b: a <see cref="DialogForm"/> (was a plain Form + ThemedChrome.Apply). The list is the dialog's own
     /// body (<c>UseOwnBody</c>: it scrolls by itself, themed bar and touch pan included); its loading / failed / empty
@@ -115,8 +115,14 @@ namespace TelegArm.UI.Admin
 
         private async void CreateClick(object sender, EventArgs e)
         {
+            DateTime? expire; int? limit;
+            using (var opts = new InviteOptionsForm())   // T21
+            {
+                if (opts.ShowDialog(this) != DialogResult.OK) return;
+                expire = opts.ExpireDate; limit = opts.UsageLimit;
+            }
             ChatInviteExported inv;
-            try { inv = await _service.ExportInviteAsync(_peer, null, null); }
+            try { inv = await _service.ExportInviteAsync(_peer, expire, limit); }
             catch (Exception ex) { ThemedDialog.Show(this, "Invite links", "Couldn't create: " + ex.Message, "OK"); return; }
             if (inv == null) { ThemedDialog.Show(this, "Invite links", "Couldn't reach Telegram — make sure your VPN is on.", "OK"); return; }
             _invites.Insert(0, inv);

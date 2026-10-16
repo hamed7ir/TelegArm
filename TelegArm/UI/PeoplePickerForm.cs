@@ -45,10 +45,16 @@ namespace TelegArm.UI
         private readonly bool _built;   // ApplyDialogTheme is first called from the base constructor, before the controls exist
 
         public User SelectedUser { get; private set; }
+
+        /// <summary>T15: the dialog closed through "Add contact".</summary>
+        public bool AddContactChosen { get; private set; }
         public List<User> SelectedUsers { get; private set; } = new List<User>();
 
+        /// <param name="addContactButton">T15: the footer gets "Add contact" (the Contacts list); the caller opens AddContactForm
+        /// when <see cref="AddContactChosen"/>.</param>
         public PeoplePickerForm(Func<Task<List<User>>> fetch, bool multiSelect, bool dark, Color accent, string title,
-                                Func<long, Image> cachedAvatar = null, Func<long, IPeerInfo, Task<Image>> loadAvatar = null)
+                                Func<long, Image> cachedAvatar = null, Func<long, IPeerInfo, Task<Image>> loadAvatar = null,
+                                bool addContactButton = false)
             : base(title, 380, 580)
         {
             _fetch = fetch; _multi = multiSelect;
@@ -84,6 +90,11 @@ namespace TelegArm.UI
                 AcceptButton = _confirm;
             }
             CancelButton = AddFooterButton("Cancel", RoundedButtonKind.Neutral, DialogResult.Cancel);
+            if (addContactButton)   // T15: the Contacts list offers "Add contact" (the caller opens AddContactForm)
+            {
+                var addC = AddFooterButton("Add contact", RoundedButtonKind.Secondary, DialogResult.None, 120);
+                addC.Click += (s, e) => { AddContactChosen = true; DialogResult = DialogResult.OK; Close(); };
+            }
             FocusOnShow(_search.Inner);
 
             _built = true;

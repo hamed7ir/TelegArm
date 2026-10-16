@@ -83,10 +83,14 @@ namespace TelegArm.UI
                 // T9: who reacted — groups only (a channel's reactions are anonymous)
                 int reacted = ReactionTotal(msg);
                 if (reacted > 0 && _selectedChat.IsGroup)
-                    AddMenuItem(menu, "👥   Who reacted (" + reacted + ")", () =>
-                    {
-                        using (var f = new ReactorsForm(_service, _selectedChat.Peer, msg.ID, reacted)) f.ShowDialog(this);
-                    });
+                    AddMenuItem(menu, "👥   Who reacted (" + reacted + ")", () => ShowReactors(_selectedChat.Peer, msg.ID, reacted));
+                // T16: who has seen MY message — small groups only (the server refuses big ones and old messages)
+                if (IsOut(msg) && _selectedChat.IsGroup && !(_selectedChat.PeerInfo is Channel bch && (bch.flags & Channel.Flags.broadcast) != 0)
+                    && (DateTime.UtcNow - msg.date).TotalDays < 7)
+                    AddMenuItem(menu, "👁   Seen by…", () => ShowSeenBy(_selectedChat.Peer, msg.ID));
+                // T17: translate (Telegram decides whether it's available to this account)
+                if (!string.IsNullOrWhiteSpace(msg.message))
+                    AddMenuItem(menu, "🌐   Translate", () => TranslateMessage(_selectedChat.Peer, msg.ID));
                 if ((msg.flags & Message.Flags.pinned) != 0)
                     AddMenuItem(menu, "📌   Unpin", () => UnpinMessage(msg));
                 else
@@ -120,6 +124,82 @@ namespace TelegArm.UI
 
             menu.Closed += (s, e) => BeginInvoke((Action)menu.Dispose);
             menu.ShowAt(screenPt);
+        }
+
+        // ── T9 / T16 / T17 ─────────────────────────────────────────────────────────────────────────────────────────
+
+        private void ShowReactors(InputPeer peer, int msgId, int total)
+        {
+            Func<string, System.Threading.Tasks.Task<PeopleListForm.Page>> load = async offset =>
+            {
+                var r = await _service.GetReactionsListAsync(peer, msgId, 50, offset);
+                var page = new PeopleListForm.Page { NextOffset = r.next_offset };
+                foreach (var pr in r.reactions)
+                {
+                    var re = pr.reaction as ReactionEmoji;
+                    page.Rows.Add(new PeopleListForm.Row
+                    {
+                        Name = NameIn(pr.peer_id, r.users, r.chats), PeerId = pr.peer_id != null ? pr.peer_id.ID : 0,
+                        Trailing = re != null ? re.emoticon : "\u2B50", TrailingIsEmoji = true,   // a custom/paid reaction: a star
+                    });
+                }
+                return page;
+            };
+            using (var f = new PeopleListForm("Reactions (" + total + ")", load)) f.ShowDialog(this);
+        }
+
+        private void ShowSeenBy(InputPeer peer, int msgId)
+        {
+            Func<string, System.Threading.Tasks.Task<PeopleListForm.Page>> load = async offset =>
+            {
+                var list = await _service.GetReadParticipantsAsync(peer, msgId);
+                var page = new PeopleListForm.Page();
+                foreach (var rp in list.OrderByDescending(x => x.date))
+                    page.Rows.Add(new PeopleListForm.Row
+                    {
+                        Name = NameOf(new PeerUser { user_id = rp.user_id }), PeerId = rp.user_id,
+                        Trailing = SeenTime(rp.date),
+                    });
+                return page;
+            };
+            using (var f = new PeopleListForm("Seen by", load, "No one has seen it yet.")) f.ShowDialog(this);
+        }
+
+        private static string SeenTime(DateTime utc)
+        {
+            var local = utc.ToLocalTime();
+            return local.Date == DateTime.Now.Date ? local.ToString("t") : local.ToString("ddd t");
+        }
+
+        /// <summary>A person's name from a result's own users/chats (a result carries the peers it names).</summary>
+        private static string NameIn(Peer peer, Dictionary<long, User> users, Dictionary<long, ChatBase> chats)
+        {
+            if (peer == null) return "Someone";
+            User u; ChatBase c;
+            if (peer is PeerUser && users != null && users.TryGetValue(peer.ID, out u)) return DisplayName(u);
+            if (chats != null && chats.TryGetValue(peer.ID, out c)) return c.Title;
+            return "Someone";
+        }
+
+        private async void TranslateMessage(InputPeer peer, int msgId)
+        {
+            string lang = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+            if (string.IsNullOrEmpty(lang) || lang == "iv") lang = "en";
+            try
+            {
+                string text = await _service.TranslateMessageAsync(peer, msgId, lang);
+                if (string.IsNullOrEmpty(text)) { ThemedDialog.Show(this, "Translate", "Telegram returned no translation.", "OK"); return; }
+                if (ThemedDialog.Show(this, "Translation", text, "Copy", "Close") == 0) { try { Clipboard.SetText(text); } catch { } }
+            }
+            catch (Exception ex)
+            {
+                string m = ex.Message ?? "";
+                string why = m.IndexOf("PREMIUM", StringComparison.OrdinalIgnoreCase) >= 0 ? "Translation needs Telegram Premium on this account."
+                           : m.IndexOf("QUOTA", StringComparison.OrdinalIgnoreCase) >= 0 ? "The translation limit is reached for now — try again later."
+                           : m.IndexOf("DISABLED", StringComparison.OrdinalIgnoreCase) >= 0 ? "Translation isn't available here."
+                           : "Couldn't translate: " + m;
+                ThemedDialog.Show(this, "Translate", why, "OK");
+            }
         }
 
         /// <summary>T9: how many reactions a message carries (all kinds together).</summary>

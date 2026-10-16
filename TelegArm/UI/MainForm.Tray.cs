@@ -276,6 +276,7 @@ namespace TelegArm.UI
                 _reallyClosing = true;   // Exit: fall through to the real close below
             }
             SaveWindowPlacement();   // R1: a real close
+            CloseReactionGrid();     // T12: an unowned popup must not outlive the form (see the field's note)
             // DRAFTS: best-effort save of the open chat's draft on a REAL close (bounded like presence; never blocks
             // shutdown). The primary save is on chat/account switch — this covers "typed then closed without switching".
             try

@@ -232,7 +232,16 @@ namespace TelegArm.Helpers
                 // Step 3.1: the emoji picker as a popup (no service: the sticker/GIF tabs stay empty).
                 Shot("p3-emoji-" + t, () => new EmojiPicker(null, ThemeHelper.IsDark, ThemeHelper.GetWindowsAccentColor()));
                 // T9: the Reactions dialog's chrome (no service: the list says it couldn't load)
-                WithForm("p7-reactors-" + t, () => new ReactorsForm(null, new TL.InputPeerSelf(), 1, 12), f => { Settle(f); Capture(f, "p7-reactors-" + t); });
+                WithForm("p7-reactors-" + t, () => new PeopleListForm("Reactions (12)", null), f => { Settle(f); Capture(f, "p7-reactors-" + t); });
+                Shot("p7-addcontact-" + t, () => new AddContactForm());   // T15
+                Shot("p7-inviteopts-" + t, () => new TelegArm.UI.Admin.InviteOptionsForm());   // T21
+                Shot("p7-scheduled-" + t, () => new ScheduledForm(null, new TL.InputPeerSelf(), "Ada"));   // T11 (chrome)
+                WithForm("p7-quiz-" + t, () => new CreatePollForm(ThemeHelper.IsDark, ThemeHelper.Palette.Accent), f =>   // T18
+                {
+                    var q = (CheckBox)Field(f, "_quiz"); q.Checked = true;
+                    Settle(f);
+                    Capture(f, "p7-quiz-" + t);
+                });
                 WithForm("p3-gifs-" + t, () => new EmojiPicker(null, ThemeHelper.IsDark, ThemeHelper.GetWindowsAccentColor()), f =>
                 {
                     Invoke(f, "ShowTab", 2);   // T6: the GIF tab with its search box (no service: no tiles)
@@ -425,6 +434,16 @@ namespace TelegArm.Helpers
                 OpenDemoChat(f);
                 LivePump(600);
                 state("opened");
+                // T20: a venue message — its name, address and an "Open in map" link
+                var venueMsg = new TL.Message
+                {
+                    id = 9001, date = DateTime.UtcNow, peer_id = new TL.PeerUser { user_id = 900001 }, message = "",
+                    media = new TL.MessageMediaVenue { title = "Café Babbage", address = "12 Engine Street", geo = new TL.GeoPoint { lat = 51.5007, lon = -0.1246 } },
+                };
+                Invoke(f, "AddMessageBubble", Field(f, "_selectedChat"), venueMsg, null, null);
+                Invoke(f, "ScrollMessagesToBottom");
+                LivePump(500);
+                LiveShot(f, "keys-0b-location");
                 // T2: the "@" and heart buttons, seeded with the demo chat's own message ids (the fetch needs an account)
                 var msgs = ((IEnumerable)Field(f, "_currentChatMessages")).Cast<TL.Message>().Select(m => m.ID).OrderBy(i => i).ToList();
                 SetField(f, "_jumpListChat", Field(f, "_selectedChat"));
@@ -469,6 +488,37 @@ namespace TelegArm.Helpers
                 _log.AppendLine("  mute submenu: " + mute.DropDownItems.Count + " items");
                 menu.Close();
                 menu.Dispose();
+                // T23: a few service actions in words (ServiceText is the one mapping every service line goes through)
+                Func<TL.MessageAction, TL.Peer, bool, string> say = (act, peer, mine) => (string)Invoke(f, "ServiceText",
+                    new TL.MessageService { action = act, peer_id = peer, flags = mine ? TL.MessageService.Flags.out_ : 0 });
+                var dm = new TL.PeerUser { user_id = 900001 };
+                var grp = new TL.PeerChat { chat_id = 77 };
+                _log.AppendLine("  T23 outgoing call: " + say(new TL.MessageActionPhoneCall { duration = 330, flags = TL.MessageActionPhoneCall.Flags.has_duration }, dm, true));
+                _log.AppendLine("  T23 missed video call: " + say(new TL.MessageActionPhoneCall { reason = new TL.PhoneCallDiscardReasonMissed(), flags = TL.MessageActionPhoneCall.Flags.video | TL.MessageActionPhoneCall.Flags.has_reason }, dm, false));
+                _log.AppendLine("  T23 video chat ended: " + say(new TL.MessageActionGroupCall { duration = 4000 }, grp, false));
+                _log.AppendLine("  T23 topic closed: " + say(new TL.MessageActionTopicEdit { closed = true, flags = TL.MessageActionTopicEdit.Flags.has_closed }, grp, false));
+                _log.AppendLine("  T23 payment: " + say(new TL.MessageActionPaymentSent { total_amount = 1250, currency = "USD" }, dm, true));
+                _log.AppendLine("  T23 migrate: " + say(new TL.MessageActionChatMigrateTo { channel_id = 5 }, grp, false));
+
+                // T12: the reaction grid, with the service's reaction list pre-seeded (fetching it needs an account)
+                var svc = Field(f, "_activeService");
+                var seeded = new[] { "\U0001F44D", "\U0001F44E", "\u2764", "\U0001F525", "\U0001F970", "\U0001F44F", "\U0001F601", "\U0001F914",
+                                     "\U0001F92F", "\U0001F631", "\U0001F92C", "\U0001F622", "\U0001F389", "\U0001F929", "\U0001F92E", "\U0001F4A9",
+                                     "\U0001F64F", "\U0001F44C", "\U0001F54A", "\U0001F921", "\U0001F971", "\U0001F974", "\U0001F60D", "\U0001F433" };
+                svc.GetType().GetField("_availableReactions", BindingFlags.NonPublic | BindingFlags.Instance).SetValue(svc, seeded);
+                var anchor = f.PointToScreen(new Point(f.ClientSize.Width / 3, f.ClientSize.Height / 4));
+                Cursor.Position = anchor;
+                var firstMsg = ((IEnumerable)Field(f, "_currentChatMessages")).Cast<TL.Message>().FirstOrDefault();
+                Invoke(f, "ShowReactionGrid", firstMsg);
+                LivePump(800);
+                var grid = new Rectangle(anchor.X - 8, anchor.Y - 8, 420, 180);
+                using (var bmp = new Bitmap(grid.Width, grid.Height))
+                {
+                    using (var g = Graphics.FromImage(bmp)) g.CopyFromScreen(grid.Location, Point.Empty, grid.Size);
+                    bmp.Save(Path.Combine(_dir, "keys-4-reaction-grid.png"), ImageFormat.Png);
+                }
+                // (the grid is left open: the form then closes with it open, the case the Closed guard covers)
+                LivePump(300);
             }
             catch (Exception ex) { Fail("live-keys", ex); }
             finally { if (f != null) { try { f.Close(); } catch { } try { f.Dispose(); } catch { } } }

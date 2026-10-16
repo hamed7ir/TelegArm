@@ -28,6 +28,11 @@ namespace TelegArm.UI
                 it.Click += (s, e) => BeginInvoke((Action)(() => ToggleReaction(msg, e2)));
                 react.DropDownItems.Add(it);
             }
+            // T12: every reaction Telegram offers, as a grid
+            react.DropDownItems.Add(new ToolStripSeparator());
+            var more = new ToolStripMenuItem("More…");
+            more.Click += (s, e) => BeginInvoke((Action)(() => ShowReactionGrid(msg)));
+            react.DropDownItems.Add(more);
             menu.Items.Add(react);
             // Step 3.1: the 11 pt at the MENU's DPI (its open point's). The menu's own Opening ran first and set MenuDpi.
             var themed = menu as ThemedContextMenuStrip;
@@ -64,7 +69,8 @@ namespace TelegArm.UI
         private void ApplyEntities(MessageBubbleControl mb, Message m)
         {
             mb.CustomEmojiResolver = ResolveCustomEmoji;   // before SetEntities so the engine gets it
-            mb.SetEntities(m.entities);
+            MessageEntity[] geoLink;
+            mb.SetEntities(m.entities ?? (LocationText(m, out geoLink) != null ? geoLink : null));   // T20: a location's map link
             // Defer out of the bubble's mouse-click handler so the (modal) confirm can't tangle with the
             // originating click. t.me/tg:// → in-app (no confirm); external → browser (with confirm).
             mb.LinkClicked += url => BeginInvoke((Action)(() => ResolveLinkAsync(url)));
@@ -429,7 +435,8 @@ namespace TelegArm.UI
                 if (dlg.ShowDialog(this) != DialogResult.OK) return;
                 try
                 {
-                    await _service.SendPollAsync(_selectedChat.Peer, dlg.Question, dlg.Options, dlg.Anonymous, dlg.Multiple);
+                    await _service.SendPollAsync(_selectedChat.Peer, dlg.Question, dlg.Options, dlg.Anonymous, dlg.Multiple,
+                                                 dlg.Quiz, dlg.CorrectIndex, dlg.Solution);   // T18
                     System.Diagnostics.Debug.WriteLine("[POLL] created q='" + dlg.Question + "' opts=" + dlg.Options.Length + " anon=" + dlg.Anonymous + " multi=" + dlg.Multiple);
                 }
                 catch (Exception ex) { ThemedDialog.Show(this, "Poll", "Couldn't create the poll:\n" + ex.Message, "OK"); }
@@ -675,7 +682,77 @@ namespace TelegArm.UI
 
             mb?.SetReactions(chips.Count > 0 ? chips : null);
 
-            await _service.SendReactionAsync(_selectedChat.Peer, m.ID, wasChosen ? "" : emoji);
+            try { await _service.SendReactionAsync(_selectedChat.Peer, m.ID, wasChosen ? "" : emoji); }
+            catch (Exception ex)
+            {
+                // T12: a chat can allow fewer reactions than Telegram offers (REACTION_INVALID): put the chips back as the
+                // message has them, and say why. (An async void must never let this escape: it would end the app.)
+                if (mb != null && !mb.IsDisposed) mb.SetReactions(ExtractReactions(m));
+                bool invalid = (ex.Message ?? "").IndexOf("REACTION", StringComparison.OrdinalIgnoreCase) >= 0;
+                ShowToast(invalid ? "That reaction isn't allowed in this chat" : "Couldn't react: " + ex.Message);
+            }
+        }
+
+        // ── T12: the full reaction grid ────────────────────────────────────────────────────────────────────────────
+
+        /// <summary>All of Telegram's (free) reactions in a grid at the pointer; a tap reacts with it. The tiles are the
+        /// colour-emoji images (a copy each, owned by the tile), eight to a row.</summary>
+        /// <summary>The open reaction grid, if any. ⚠ A ToolStripDropDown is a top-level window this form does NOT own: left
+        /// open while the app exits it outlived the form and its teardown during process exit ended the process with
+        /// 0xC000041D (reproduced 3/3 on the rig). So the form closes it itself (CloseReactionGrid: form closing, chat change).</summary>
+        private ToolStripDropDown _reactionGrid;
+
+        private void CloseReactionGrid()
+        {
+            var g = _reactionGrid;
+            _reactionGrid = null;
+            if (g == null) return;
+            try { g.Close(); } catch { }
+            try { g.Dispose(); } catch { }
+        }
+
+        private async void ShowReactionGrid(Message msg)
+        {
+            CloseReactionGrid();
+            string[] all;
+            try { all = await _service.GetAvailableReactionsAsync(); }
+            catch (Exception ex) { ShowToast("Couldn't load the reactions: " + ex.Message); return; }
+            if (IsDisposed || all.Length == 0) return;
+            int dpi = WindowDpiValue, tile = Dpi.Px(40, dpi), img = Dpi.Px(28, dpi);
+            var pal = ThemeHelper.Palette;
+            var flow = new FlowLayoutPanel
+            {
+                BackColor = pal.Card, Padding = new Padding(Dpi.Px(4, dpi)), Margin = Padding.Empty,
+                Width = 8 * tile + 2 * Dpi.Px(4, dpi), Height = ((all.Length + 7) / 8) * tile + 2 * Dpi.Px(4, dpi),
+            };
+            var drop = new ToolStripDropDown { Padding = Padding.Empty, BackColor = pal.Card, DropShadowEnabled = true };
+            _reactionGrid = drop;
+            foreach (var em in all)
+            {
+                string e2 = em;
+                var src = EmojiRenderer.Get(em);
+                var lbl = new Label
+                {
+                    Size = new Size(tile, tile), Margin = Padding.Empty, Cursor = Cursors.Hand, BackColor = pal.Card,
+                    Image = src != null ? new Bitmap(src, new Size(img, img)) : null, ImageAlign = ContentAlignment.MiddleCenter,
+                    Text = src == null ? em : "", TextAlign = ContentAlignment.MiddleCenter, AccessibleName = em,
+                };
+                lbl.MouseEnter += (s, e) => lbl.BackColor = pal.AccentSoft;
+                lbl.MouseLeave += (s, e) => lbl.BackColor = pal.Card;
+                lbl.Click += (s, e) => { drop.Close(); BeginInvoke((Action)(() => ToggleReaction(msg, e2))); };
+                lbl.Disposed += (s, e) => { var im = lbl.Image; lbl.Image = null; if (im != null) im.Dispose(); };
+                flow.Controls.Add(lbl);
+            }
+            var host = new ToolStripControlHost(flow) { Padding = Padding.Empty, Margin = Padding.Empty, AutoSize = false, Size = flow.Size };
+            drop.Items.Add(host);
+            // ⚠ It may close BECAUSE this window is being destroyed: BeginInvoke would then throw inside a window callback,
+            //   which Windows treats as fatal (0xC000041D, seen on the rig). Dispose directly when there is no handle to post to.
+            drop.Closed += (s, e) =>
+            {
+                if (ReferenceEquals(_reactionGrid, drop)) _reactionGrid = null;
+                try { if (!IsDisposed && IsHandleCreated) BeginInvoke((Action)drop.Dispose); else drop.Dispose(); } catch { }
+            };
+            drop.Show(Cursor.Position);
         }
 
         /// <summary>QUICKWINS-1 PART 2: others' reaction changes arrive live (we render + send, but used to DROP this

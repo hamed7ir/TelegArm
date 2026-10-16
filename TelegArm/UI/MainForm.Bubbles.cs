@@ -549,9 +549,50 @@ namespace TelegArm.UI
                 return lb;
             }
 
+            // T20: a location → its place (a venue's name and address) and an "Open in map" link (ApplyEntities adds it)
+            MessageEntity[] geoLink;
+            string geoText = LocationText(m, out geoLink);
+            if (geoText != null)
+            {
+                var gb = CreateBubble(geoText, sender, IsOut(m), m.date, m.ID);
+                SetReply(gb, m);
+                return gb;
+            }
+
             var tb = CreateBubble(GetDisplayText(m), sender, IsOut(m), m.date, m.ID);
             SetReply(tb, m);
             return tb;
+        }
+
+        /// <summary>Redesign T20 — the text of a location bubble and its one link: OpenStreetMap at the point (the browser,
+        /// after the usual external-link confirm; no map is drawn in the app). Null when the message is not a location.
+        /// The offsets are UTF-16, like every entity here (the pin emoji is two code units).</summary>
+        internal static string LocationText(Message m, out MessageEntity[] entities)
+        {
+            entities = null;
+            if (m == null || !string.IsNullOrEmpty(m.message)) return null;   // a caption keeps the ordinary path
+            GeoPoint gp = null;
+            string head;
+            var venue = m.media as MessageMediaVenue;
+            if (venue != null)
+            {
+                gp = venue.geo;
+                head = "\U0001F4CD " + (venue.title ?? "Venue") + (string.IsNullOrEmpty(venue.address) ? "" : "\n" + venue.address);
+            }
+            else
+            {
+                var geo = m.media as MessageMediaGeo;   // MessageMediaGeoLive derives from it
+                if (geo == null) return null;
+                gp = geo.geo;
+                head = m.media is MessageMediaGeoLive ? "\U0001F4CD Live location" : "\U0001F4CD Location";
+            }
+            if (gp == null) return head;
+            const string link = "Open in map";
+            string text = head + "\n" + link;
+            string url = string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                "https://www.openstreetmap.org/?mlat={0:0.######}&mlon={1:0.######}#map=16/{0:0.######}/{1:0.######}", gp.lat, gp.lon);
+            entities = new MessageEntity[] { new MessageEntityTextUrl { offset = text.Length - link.Length, length = link.Length, url = url } };
+            return text;
         }
 
         /// <summary>Centered system line for a service event, or null when the action is skipped.</summary>
@@ -586,6 +627,21 @@ namespace TelegArm.UI
             if (info is User u) return DisplayName(u);
             if (info is ChatBase cb) return cb.Title;
             return null;
+        }
+
+        /// <summary>T23: "45 s", "5 min", "1 h 20 min".</summary>
+        private static string FormatSeconds(int s)
+        {
+            if (s < 60) return s + " s";
+            if (s < 3600) return (s / 60) + " min";
+            return (s / 3600) + " h" + (s % 3600 >= 60 ? " " + (s % 3600 / 60) + " min" : "");
+        }
+
+        /// <summary>T23: an amount in the currency's smallest unit (Telegram's convention) for display: "12.50 USD".</summary>
+        private static string FormatAmount(long amount, string currency)
+        {
+            if (string.Equals(currency, "XTR", StringComparison.OrdinalIgnoreCase)) return amount + " Stars";
+            return (amount / 100m).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture) + " " + (currency ?? "");
         }
 
         /// <summary>Maps a MessageService action to human-readable text (null = skip). PEER-PRESENTATION:
@@ -638,6 +694,67 @@ namespace TelegArm.UI
                     return ttl.period > 0 ? "Auto-delete timer set to " + FormatTtl(ttl.period) : "Auto-delete disabled";
                 case MessageActionCustomAction ca: return string.IsNullOrEmpty(ca.message) ? null : ca.message;
                 case MessageActionHistoryClear _: return null;   // deliberately hidden
+
+                // ── T23: the actions that used to read "Group updated" (or vanish in a private chat) ──
+                case MessageActionPhoneCall pc:
+                {
+                    bool video = (pc.flags & MessageActionPhoneCall.Flags.video) != 0;
+                    bool mine = (svc.flags & MessageService.Flags.out_) != 0;
+                    string kind = video ? "video call" : "call";
+                    if (pc.reason is PhoneCallDiscardReasonMissed) return mine ? "Cancelled " + kind : "Missed " + kind;
+                    if (pc.reason is PhoneCallDiscardReasonBusy) return mine ? "Cancelled " + kind : "Declined " + kind;
+                    string dur = pc.duration > 0 ? " (" + FormatSeconds(pc.duration) + ")" : "";
+                    return (mine ? "Outgoing " : "Incoming ") + kind + dur;
+                }
+                case MessageActionGroupCall gc:
+                    if (gc.duration > 0) return (bc ? "Live stream" : "Video chat") + " ended (" + FormatSeconds(gc.duration) + ")";
+                    return bc ? "Live stream started" : who != null ? who + " started a video chat" : "Video chat started";
+                case MessageActionInviteToGroupCall ig:
+                    string invited = ig.users != null && ig.users.Length > 0 ? string.Join(", ", ig.users.Select(NameOfUserId)) : "members";
+                    return (who != null ? who + " invited " : "Invited ") + invited + " to the video chat";
+                case MessageActionGroupCallScheduled gs:
+                    return (bc ? "Live stream" : "Video chat") + " scheduled for " + gs.schedule_date.ToLocalTime().ToString("ddd d MMM, t");
+                case MessageActionTopicCreate tc:
+                    return (who != null ? who + " created the topic " : "Topic created: ") + "«" + tc.title + "»";
+                case MessageActionTopicEdit te:
+                    if ((te.flags & MessageActionTopicEdit.Flags.has_closed) != 0)
+                        return (who != null ? who + (te.closed ? " closed" : " reopened") : (te.closed ? "Closed" : "Reopened")) + " the topic";
+                    if (!string.IsNullOrEmpty(te.title)) return (who != null ? who + " renamed the topic to " : "Topic renamed to ") + "«" + te.title + "»";
+                    return who != null ? who + " edited the topic" : "Topic edited";
+                case MessageActionChatMigrateTo _:
+                case MessageActionChannelMigrateFrom _:
+                    return "The group was upgraded to a supergroup";
+                case MessageActionScreenshotTaken _:
+                    return who != null ? who + " took a screenshot" : "A screenshot was taken";
+                case MessageActionGameScore gsc:
+                    return (who != null ? who + " scored " : "Scored ") + gsc.score;
+                case MessageActionPaymentSent ps:
+                    return "Payment sent: " + FormatAmount(ps.total_amount, ps.currency);
+                case MessageActionBotAllowed _:
+                    return "You allowed this bot to message you";
+                case MessageActionChatJoinedByRequest _:
+                    return who != null ? who + " was accepted into the group" : "A join request was accepted";
+                case MessageActionSetChatTheme th:
+                {
+                    // 4.4.9: the theme is a ChatThemeBase — an emoticon theme (ChatTheme) or a gift's (checked on the DLL)
+                    var emo = (th.theme as ChatTheme)?.emoticon;
+                    if (th.theme == null || (th.theme is ChatTheme && string.IsNullOrEmpty(emo)))
+                        return who != null ? who + " turned off the chat theme" : "Chat theme turned off";
+                    string themeText = string.IsNullOrEmpty(emo) ? "" : " to " + emo;
+                    return who != null ? who + " changed the chat theme" + themeText : "Chat theme changed" + themeText;
+                }
+                case MessageActionSetChatWallPaper _:
+                    return who != null ? who + " set a new wallpaper for this chat" : "New wallpaper for this chat";
+                case MessageActionGiftPremium _:
+                case MessageActionGiftCode _:
+                case MessageActionStarGift _:
+                    return who != null ? who + " sent a gift" : "A gift was sent";
+                case MessageActionBoostApply ba:
+                    return (who != null ? who : "A member") + " boosted the group" + (ba.boosts > 1 ? " " + ba.boosts + " times" : "");
+                case MessageActionRequestedPeer _:
+                    return who != null ? who + " shared a chat" : "A chat was shared";
+                case MessageActionSuggestProfilePhoto _:
+                    return who != null ? who + " suggested a profile photo" : "A profile photo was suggested";
                 default:
                     // 1.3: unhandled action types render a peer-correct generic instead of vanishing.
                     return bc ? "Channel updated" : svc.peer_id is PeerUser ? null : "Group updated";

@@ -31,6 +31,7 @@ namespace TelegArm.UI
             MarkMentionsReactionsRead(entry);   // MENTION-REACTION: opening = seen → clear @ badge + heart glyph
             CancelReply();                 // a pending reply belongs to the chat we're leaving
             _sendNoLinkPreview = false;    // T10: so does "no link preview" for the next message
+            CloseReactionGrid();           // T12: a grid opened for the old chat's message
             CancelTyping();                // stop any "typing…" we were showing in the chat we're leaving (QUICKWINS-1)
             if (_selectionMode) ExitSelectionMode();   // selection belongs to the old chat too
             if (_voiceState != VoiceState.None) AbortVoice();

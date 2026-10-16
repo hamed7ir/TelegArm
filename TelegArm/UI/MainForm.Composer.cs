@@ -90,6 +90,76 @@ namespace TelegArm.UI
             }
         }
 
+        // ── T11: scheduled send ────────────────────────────────────────────────────────────────────────────────────
+
+        /// <summary>The send button's menu: schedule the typed message (an hour from now, tonight, tomorrow morning, or a
+        /// time of your choosing). Offered only where a plain send would go: compose state, text typed, not editing.</summary>
+        private void ShowSendMenu()
+        {
+            if (_selectedChat == null || _thread != null || _editTarget != null || _footerKind != ComposerKind.Compose) return;
+            if (string.IsNullOrWhiteSpace(_messageInput.Text)) return;
+            var menu = new ThemedContextMenuStrip();
+            var sched = new ToolStripMenuItem("🕒   Schedule message");
+            var now = DateTime.Now;
+            AddScheduleChoice(sched, "In 1 hour", now.AddHours(1));
+            if (now.Hour < 20) AddScheduleChoice(sched, "Today at 21:00", now.Date.AddHours(21));
+            AddScheduleChoice(sched, "Tomorrow at 9:00", now.Date.AddDays(1).AddHours(9));
+            var custom = new ToolStripMenuItem("Choose a time…");
+            custom.Click += (s, e) => BeginInvoke((Action)ScheduleAtCustomTime);
+            sched.DropDownItems.Add(custom);
+            menu.Items.Add(sched);
+            menu.Closed += (s, e) => { try { if (!IsDisposed && IsHandleCreated) BeginInvoke((Action)menu.Dispose); } catch { } };
+            menu.ShowAt(_sendButton.PointToScreen(new Point(0, 0)));
+        }
+
+        private void AddScheduleChoice(ToolStripMenuItem parent, string label, DateTime whenLocal)
+        {
+            var it = new ToolStripMenuItem(label);
+            it.Click += (s, e) => BeginInvoke((Action)(() => ScheduleCurrentMessage(whenLocal)));
+            parent.DropDownItems.Add(it);
+        }
+
+        private void ScheduleAtCustomTime()
+        {
+            string fmt = "yyyy-MM-dd HH:mm";
+            string typed = InputDialog.Ask(this, "Schedule message", "Date and time (" + fmt + ")", DateTime.Now.AddHours(1).ToString(fmt, System.Globalization.CultureInfo.InvariantCulture));
+            if (typed == null) return;
+            DateTime when;
+            if (!DateTime.TryParseExact(typed.Trim(), fmt, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeLocal, out when))
+            { ThemedDialog.Show(this, "Schedule message", "Write the time as " + fmt + ", for example " + DateTime.Now.AddDays(1).Date.AddHours(9).ToString(fmt, System.Globalization.CultureInfo.InvariantCulture) + ".", "OK"); return; }
+            ScheduleCurrentMessage(when);
+        }
+
+        /// <summary>T11 — the typed message goes to the chat's scheduled list for <paramref name="whenLocal"/> (Telegram
+        /// takes up to a year ahead). The composer empties as on a send; on failure the text comes back.</summary>
+        private async void ScheduleCurrentMessage(DateTime whenLocal)
+        {
+            if (_selectedChat == null || _thread != null || _editTarget != null || _footerKind != ComposerKind.Compose) return;
+            if (whenLocal < DateTime.Now.AddMinutes(1)) { ThemedDialog.Show(this, "Schedule message", "Pick a time in the future.", "OK"); return; }
+            if (whenLocal > DateTime.Now.AddDays(365)) { ThemedDialog.Show(this, "Schedule message", "Telegram schedules up to a year ahead.", "OK"); return; }
+            var raw = _messageInput.Text.Trim();
+            if (raw.Length == 0) return;
+            var chat = _selectedChat;
+            TL.MessageEntity[] entities;
+            string text = MarkdownEntities.Parse(raw, out entities);
+            if (text.Length == 0) return;
+            int replyId = _replyTarget != null ? _replyTarget.ID : 0;
+            _messageInput.Text = "";
+            CancelReply();
+            ClearDraftAfterSend(chat);
+            try
+            {
+                await _service.ScheduleTextAsync(chat.Peer, text, replyId, entities, whenLocal.ToUniversalTime());
+                if (LogOn) Logger.Diag("[SCHEDULE] peer=" + chat.PeerId + " at " + whenLocal.ToString("u"));
+                ShowToast("Scheduled for " + whenLocal.ToString("ddd t", System.Globalization.CultureInfo.CurrentCulture));
+            }
+            catch (Exception ex)
+            {
+                if (ReferenceEquals(chat, _selectedChat) && string.IsNullOrEmpty(_messageInput.Text)) _messageInput.Text = raw;
+                ThemedDialog.Show(this, "Schedule message", "Couldn't schedule it: " + ex.Message, "OK");
+            }
+        }
+
         // ── SEND-ENTITIES: composer formatting helpers — wrap the selection in markdown; MarkdownEntities.Parse
         //    turns it into MessageEntity[] on send. Uses only public SelectionStart/SelectionLength/Text (no internals).
         // Step 2.7d: the bodies moved to ComposerFormat (UI/ComposerEditorForm.cs), shared with the editor window.

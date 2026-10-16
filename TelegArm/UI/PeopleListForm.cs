@@ -2,38 +2,49 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using TelegArm.Core;
 using TelegArm.Helpers;
 using TelegArm.UI.Controls;
-using TL;
 
 namespace TelegArm.UI
 {
     /// <summary>
-    /// Redesign T9 — "who reacted": every reaction on a group message with the person who left it, newest first
-    /// (messages.getMessageReactionsList), paged as the list reaches its end. Opened from the message menu.
-    /// A DialogForm like the Forward picker: themed chrome, a ThemedListBox, rows drawn here.
+    /// Redesign T9/T16 — a paged list of people, each with something on the right: who reacted (the reaction) and who
+    /// has seen a message (when). The caller supplies the pages; this draws them in the Forward picker's row style
+    /// (DialogForm + ThemedListBox) and asks for the next page when the list reaches its end.
     /// </summary>
-    public sealed class ReactorsForm : DialogForm
+    public sealed class PeopleListForm : DialogForm
     {
         private const int RowLogical = 48;
 
-        private sealed class Row { public string Reaction; public string Name; public long PeerId; }
+        public sealed class Row
+        {
+            public string Name;
+            public long PeerId;
+            public string Trailing;        // the reaction (an emoji) or a time
+            public bool TrailingIsEmoji;
+        }
 
-        private readonly TelegramService _service;
-        private readonly InputPeer _peer;
-        private readonly int _msgId;
+        public sealed class Page
+        {
+            public readonly List<Row> Rows = new List<Row>();
+            public string NextOffset;      // null/empty = this was the last page
+        }
+
+        private readonly Func<string, Task<Page>> _load;
+        private readonly string _empty;
         private readonly ThemedListBox _list;
         private readonly List<Row> _rows = new List<Row>();
+        private readonly Label _status;
         private string _nextOffset = "";
         private bool _loading, _done;
-        private readonly Label _status;
 
-        public ReactorsForm(TelegramService service, InputPeer peer, int msgId, int total)
-            : base("Reactions" + (total > 0 ? " (" + total + ")" : ""), 340, 480)
+        public PeopleListForm(string title, Func<string, Task<Page>> load, string empty = "No one to show.")
+            : base(title, 340, 480)
         {
-            _service = service; _peer = peer; _msgId = msgId;
+            _load = load; _empty = empty;
             var p = ThemeHelper.Palette;
             var host = new Panel { BackColor = p.Window };
             _list = new ThemedListBox(p.Dark, p.Accent) { Dock = DockStyle.Fill, RowHeight = Px(RowLogical), CanvasBackColor = p.Window };
@@ -47,53 +58,28 @@ namespace TelegArm.UI
             Shown += (s, e) => { var _ = LoadPage(); };
         }
 
-        private async System.Threading.Tasks.Task LoadPage()
+        private async Task LoadPage()
         {
-            if (_loading || _done) return;
+            if (_loading || _done || _load == null) return;
             _loading = true;
             try
             {
-                var r = await _service.GetReactionsListAsync(_peer, _msgId, 50, _nextOffset);
+                var page = await _load(_nextOffset);
                 if (IsDisposed) return;
-                foreach (var pr in r.reactions)
-                    _rows.Add(new Row { Reaction = ReactionText(pr.reaction), Name = NameOf(pr.peer_id, r), PeerId = pr.peer_id != null ? pr.peer_id.ID : 0 });
-                _nextOffset = r.next_offset;
+                if (page != null) _rows.AddRange(page.Rows);
+                _nextOffset = page != null ? page.NextOffset : null;
                 _done = string.IsNullOrEmpty(_nextOffset);
                 _list.SetItems(_rows.Count);
                 _status.Visible = _rows.Count == 0;
-                if (_rows.Count == 0) _status.Text = "No one to show.";
+                if (_rows.Count == 0) _status.Text = _empty;
             }
             catch (Exception ex)
             {
                 _done = true;
-                if (!IsDisposed) { _status.Visible = true; _status.Text = "Couldn't load the reactions."; }
-                Logger.Diag("[REACTIONS] list failed: " + ex.Message);
+                if (!IsDisposed) { _status.Visible = true; _status.Text = "Couldn't load the list."; }
+                Logger.Diag("[PEOPLELIST] " + Text + " failed: " + ex.Message);
             }
             finally { _loading = false; }
-        }
-
-        private static string ReactionText(Reaction r)
-        {
-            var e = r as ReactionEmoji;
-            if (e != null) return e.emoticon;
-            return "⭐";   // a custom emoji or a paid reaction: a star stands in
-        }
-
-        private static string NameOf(Peer peer, Messages_MessageReactionsList r)
-        {
-            if (peer == null) return "Someone";
-            IPeerInfo info = null;
-            User pu; ChatBase pc;
-            if (peer is PeerUser && r.users != null && r.users.TryGetValue(peer.ID, out pu)) info = pu;
-            else if (r.chats != null && r.chats.TryGetValue(peer.ID, out pc)) info = pc;
-            var u = info as User;
-            if (u != null)
-            {
-                string n = ((u.first_name ?? "") + " " + (u.last_name ?? "")).Trim();
-                return n.Length > 0 ? n : (u.username ?? "User");
-            }
-            var c = info as ChatBase;
-            return c != null ? c.Title : "Someone";
         }
 
         private void DrawRow(Graphics g, int index, Rectangle r)
@@ -111,15 +97,17 @@ namespace TelegArm.UI
             string initial = string.IsNullOrEmpty(row.Name) ? "?" : DrawHelper.Initial(row.Name);
             DrawHelper.DrawInitial(g, initial, FontHelper.ForAt(initial, 12f, dpi, FontStyle.Bold), avatarRect, Color.White);
 
-            int tx = ax + d + Px(12), tw = r.Right - tx - Px(48), th = Px(22);
+            int trailW = row.TrailingIsEmoji ? Px(22) : Px(90);
+            int tx = ax + d + Px(12), tw = r.Right - tx - trailW - Px(24), th = Px(22);
             TextRenderer.DrawText(g, row.Name ?? "", TextRoles.Font(TextRole.Section, dpi), new Rectangle(tx, r.Top + (r.Height - th) / 2, tw, th),
                 p.Text, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
 
-            var em = EmojiRenderer.Get(row.Reaction);   // the renderer's own image: drawn, never kept or disposed
-            int es = Px(22);
-            var er = new Rectangle(r.Right - Px(14) - es, r.Top + (r.Height - es) / 2, es, es);
-            if (em != null) { g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.DrawImage(em, er); }
-            else TextRenderer.DrawText(g, row.Reaction ?? "", FontHelper.UiAt(12f, dpi), er, p.Text, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            if (string.IsNullOrEmpty(row.Trailing)) return;
+            var tr = new Rectangle(r.Right - Px(14) - trailW, r.Top + (r.Height - Px(22)) / 2, trailW, Px(22));
+            var em = row.TrailingIsEmoji ? EmojiRenderer.Get(row.Trailing) : null;   // the renderer's own image: never kept
+            if (em != null) { g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.DrawImage(em, tr); }
+            else TextRenderer.DrawText(g, row.Trailing, FontHelper.UiAt(9.5f, dpi), tr, p.TextDim,
+                TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
         }
 
         protected override void OnDpiChanged(int oldDpi, int newDpi)

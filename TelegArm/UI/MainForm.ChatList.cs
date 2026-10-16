@@ -669,6 +669,25 @@ namespace TelegArm.UI
                 menu.Items.Add(mute);
             }
 
+            // T11: the open chat's scheduled messages (header ⋮ only: it acts on the chat you are writing in)
+            if (surface == ChatMenuSurface.ChatHeader && ReferenceEquals(entry, _selectedChat) && _thread == null && _footerKind == ComposerKind.Compose)
+                AddMenuItem(menu, "🕒   Scheduled messages", () =>
+                {
+                    using (var f = new ScheduledForm(_service, entry.Peer, entry.Title)) f.ShowDialog(this);
+                });
+
+            // T14: the auto-delete timer, where we may change it
+            if (CanSetAutoDelete(entry, c))
+            {
+                var ttl = new ToolStripMenuItem("⏱   Auto-delete");
+                foreach (var o in AutoDeleteChoices)
+                {
+                    int period = o.Item2;
+                    ttl.DropDownItems.Add(o.Item1, null, (s2, e2) => BeginInvoke((Action)(() => SetAutoDelete(entry, period))));
+                }
+                menu.Items.Add(ttl);
+            }
+
             if (entry.UnreadCount > 0)
                 AddMenuItem(menu, "✓   Mark as read", () => MarkChatRead(entry));
             else
@@ -741,6 +760,39 @@ namespace TelegArm.UI
             FindChatItem(entry.PeerId)?.Invalidate();   // repaint badge color + mute glyph
             if (entry == _selectedChat) ResolveAndApplyComposer(entry);   // refresh the footer Mute/Unmute label
             ArmMuteExpiry();                            // T1: a timed mute ends by itself
+        }
+
+        // ── T14: auto-delete ──────────────────────────────────────────────────────────────────────────────────────
+
+        private static readonly Tuple<string, int>[] AutoDeleteChoices =
+        {
+            Tuple.Create("Off", 0),
+            Tuple.Create("After 1 day", 86400),
+            Tuple.Create("After 1 week", 7 * 86400),
+            Tuple.Create("After 1 month", 31 * 86400),
+        };
+
+        /// <summary>A private chat (not a bot, not Saved Messages), or a group/channel we created or administer with the right
+        /// to change its info — the cases where messages.setHistoryTTL is ours to call.</summary>
+        private static bool CanSetAutoDelete(ChatEntry entry, ChatMenuContext c)
+        {
+            if (c.IsUser) return !c.IsSelf && !c.IsBot;
+            var bc = entry.PeerInfo as Chat;
+            if (bc != null) return (bc.flags & Chat.Flags.creator) != 0 || bc.admin_rights != null;
+            var ch = entry.PeerInfo as Channel;
+            if (ch != null) return (ch.flags & Channel.Flags.creator) != 0
+                                   || (ch.admin_rights != null && (ch.admin_rights.flags & ChatAdminRights.Flags.change_info) != 0);
+            return false;
+        }
+
+        private async void SetAutoDelete(ChatEntry entry, int period)
+        {
+            try
+            {
+                await _service.SetHistoryTtlAsync(entry.Peer, period);
+                ShowToast(period == 0 ? "Auto-delete is off" : "Messages will auto-delete " + AutoDeleteChoices.First(x => x.Item2 == period).Item1.ToLowerInvariant());
+            }
+            catch (Exception ex) { ThemedDialog.Show(this, "Auto-delete", "Couldn't change it: " + ex.Message, "OK"); }
         }
 
         private async void MarkChatRead(ChatEntry entry)

@@ -149,9 +149,9 @@
     <Compile Include="UI\MainForm.Session.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
     <Compile Include="UI\MainForm.Shortcuts.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
     <Compile Include="UI\MuteMenu.cs" />
-    <Compile Include="UI\ReactorsForm.cs">
-      <SubType>Form</SubType>
-    </Compile>
+    <Compile Include="UI\PeopleListForm.cs" />
+    <Compile Include="UI\AddContactForm.cs" />
+    <Compile Include="UI\ScheduledForm.cs" />
     <Compile Include="UI\MainForm.Overlays.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
     <Compile Include="UI\MainForm.Updates.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
     <Compile Include="UI\MainForm.ChatList.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
@@ -189,6 +189,7 @@
     <Compile Include="UI\Admin\RightsChecklistForm.cs" />
     <Compile Include="UI\Admin\DefaultPermsForm.cs" />
     <Compile Include="UI\Admin\InviteLinksForm.cs" />
+    <Compile Include="UI\Admin\InviteOptionsForm.cs" />
     <Compile Include="UI\Admin\ChannelExtrasForm.cs" />
     <Compile Include="UI\Admin\ManageChatForm.cs" />
     <Compile Include="UI\CreateChatForm.cs" />

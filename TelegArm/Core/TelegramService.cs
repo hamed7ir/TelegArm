@@ -1859,6 +1859,69 @@ namespace TelegArm.Core
         /// <summary>MENTION-REACTION: marks unread @mentions/replies in a peer as read (clears unread_mentions_count).</summary>
         public Task ReadMentionsAsync(InputPeer peer) => Client.Messages_ReadMentions(peer);
 
+        // ── T11: scheduled messages ──
+        /// <summary>Redesign T11 — sends <paramref name="text"/> at <paramref name="whenUtc"/> instead of now (WTC's helper
+        /// takes schedule_date itself). It lands in the chat's scheduled list, not its history.</summary>
+        public Task<Message> ScheduleTextAsync(InputPeer peer, string text, int replyToMsgId, MessageEntity[] entities, DateTime whenUtc)
+            => Client.SendMessageAsync(peer, text, reply_to_msg_id: replyToMsgId, entities: entities, schedule_date: whenUtc);
+
+        /// <summary>Redesign T11 — the chat's scheduled messages, soonest first.</summary>
+        public async Task<List<Message>> GetScheduledAsync(InputPeer peer)
+        {
+            var r = await Client.Messages_GetScheduledHistory(peer, 0);
+            return r.Messages.OfType<Message>().OrderBy(m => m.date).ToList();
+        }
+
+        public Task SendScheduledNowAsync(InputPeer peer, int id) => Client.Messages_SendScheduledMessages(peer, new[] { id });
+        public Task DeleteScheduledAsync(InputPeer peer, int id) => Client.Messages_DeleteScheduledMessages(peer, new[] { id });
+
+        private string[] _availableReactions;
+
+        /// <summary>Redesign T12 — every reaction Telegram offers (messages.getAvailableReactions), less the inactive and the
+        /// Premium-only ones; fetched once per session. A chat may still allow fewer (the server then refuses the send).</summary>
+        public async Task<string[]> GetAvailableReactionsAsync()
+        {
+            if (_availableReactions != null) return _availableReactions;
+            var r = await Client.Messages_GetAvailableReactions(0);
+            var list = r != null && r.reactions != null
+                ? r.reactions.Where(x => (x.flags & (AvailableReaction.Flags.inactive | AvailableReaction.Flags.premium)) == 0).Select(x => x.reaction).ToArray()
+                : null;
+            if (list != null && list.Length > 0) _availableReactions = list;
+            return list ?? new string[0];
+        }
+
+        /// <summary>Redesign T14 — the chat's auto-delete timer in seconds (0 = off): messages.setHistoryTTL. The server posts
+        /// the "set messages to auto-delete" service line itself.</summary>
+        public Task SetHistoryTtlAsync(InputPeer peer, int periodSeconds) => Client.Messages_SetHistoryTTL(peer, periodSeconds);
+
+        /// <summary>Redesign T15 — adds a contact by phone (contacts.importContacts). Returns the Telegram user, or null
+        /// when the number has no Telegram account. The contacts cache is dropped so the list shows the new one.</summary>
+        public async Task<User> ImportContactAsync(string phone, string first, string last)
+        {
+            var r = await Client.Contacts_ImportContacts(new InputContact[]
+            {
+                new InputPhoneContact { client_id = DateTime.UtcNow.Ticks, phone = phone, first_name = first ?? "", last_name = last ?? "" }
+            });
+            _contactsCache = null;
+            if (r.imported == null || r.imported.Length == 0) return null;
+            User u;
+            return r.users != null && r.users.TryGetValue(r.imported[0].user_id, out u) ? u : null;
+        }
+
+        /// <summary>Redesign T16 — who has read one of MY messages in a small group, and when (the server answers only for
+        /// groups up to its size limit and messages under its age limit; otherwise an error).</summary>
+        public Task<ReadParticipantDate[]> GetReadParticipantsAsync(InputPeer peer, int msgId)
+            => Client.Messages_GetMessageReadParticipants(peer, msgId);
+
+        /// <summary>Redesign T17 — a message translated into <paramref name="toLang"/> (two-letter code). Telegram may refuse
+        /// (translation off, Premium-only, quota): the caller explains the error.</summary>
+        public async Task<string> TranslateMessageAsync(InputPeer peer, int msgId, string toLang)
+        {
+            var r = await Client.Messages_TranslateText(toLang, peer, new[] { msgId }, null, null);
+            var tr = r as Messages_TranslateResult;   // the only kind in 4.4.9 (checked on the DLL)
+            return tr != null && tr.result != null && tr.result.Length > 0 ? tr.result[0].text : null;
+        }
+
         /// <summary>Redesign T9 — who reacted to a message (groups), a page at a time; pass the previous page's next_offset.</summary>
         public Task<Messages_MessageReactionsList> GetReactionsListAsync(InputPeer peer, int msgId, int limit, string offset)
             => Client.Messages_GetMessageReactionsList(peer, msgId, limit, null, string.IsNullOrEmpty(offset) ? null : offset);
@@ -2454,10 +2517,11 @@ namespace TelegArm.Core
         private static readonly Random _rng = new Random();
         private static long RandomId() { var b = new byte[8]; _rng.NextBytes(b); return BitConverter.ToInt64(b, 0); }
 
-        /// <summary>Creates and sends a poll (regular / anonymous / multiple-choice). Quiz creation is NOT
-        /// offered here — its correct_answers↔option wire encoding is unverified in this build environment
-        /// (see batch report); received quizzes still render via PollResults flags.</summary>
-        public Task<Message> SendPollAsync(InputPeer peer, string question, string[] options, bool anonymous, bool multiple)
+        /// <summary>Creates and sends a poll (regular / anonymous / multiple-choice), or a QUIZ (T18): one correct answer,
+        /// given by its INDEX — in WTC 4.4.9 InputMediaPoll.correct_answers is int[] (checked on the DLL), which settles the
+        /// "unverified encoding" that kept quizzes out before — with an optional explanation (solution).</summary>
+        public Task<Message> SendPollAsync(InputPeer peer, string question, string[] options, bool anonymous, bool multiple,
+                                           bool quiz = false, int correctIndex = -1, string solution = null)
         {
             var answers = new PollAnswer[options.Length];
             for (int i = 0; i < options.Length; i++)
@@ -2472,8 +2536,16 @@ namespace TelegArm.Core
                 answers = answers
             };
             if (!anonymous) poll.flags |= Poll.Flags.public_voters;
-            if (multiple) poll.flags |= Poll.Flags.multiple_choice;
-            return Client.SendMessageAsync(peer, "", new InputMediaPoll { poll = poll });
+            var media = new InputMediaPoll { poll = poll };
+            if (quiz && correctIndex >= 0 && correctIndex < options.Length)
+            {
+                poll.flags |= Poll.Flags.quiz;   // a quiz is never multiple-choice
+                media.flags |= InputMediaPoll.Flags.has_correct_answers;
+                media.correct_answers = new[] { correctIndex };
+                if (!string.IsNullOrWhiteSpace(solution)) { media.flags |= InputMediaPoll.Flags.has_solution; media.solution = solution.Trim(); }
+            }
+            else if (multiple) poll.flags |= Poll.Flags.multiple_choice;
+            return Client.SendMessageAsync(peer, "", media);
         }
 
         /// <summary>Stickers suggested for an emoji (Telegram's "type an emoji to find stickers").</summary>

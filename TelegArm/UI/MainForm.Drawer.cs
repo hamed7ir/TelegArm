@@ -272,13 +272,33 @@ namespace TelegArm.UI
 
         private async void OpenContacts()
         {
-            using (var f = new PeoplePickerForm(() => _service.GetContactsAsync(), false, _dark, _accent, "Contacts", GetCachedAvatar, GetAvatarBoundedAsync))
+            using (var f = new PeoplePickerForm(() => _service.GetContactsAsync(), false, _dark, _accent, "Contacts", GetCachedAvatar, GetAvatarBoundedAsync,
+                                                addContactButton: true))   // T15
             {
-                if (f.ShowDialog(this) != DialogResult.OK || f.SelectedUser == null) return;
+                if (f.ShowDialog(this) != DialogResult.OK) return;
+                if (f.AddContactChosen) { AddContactByPhone(); return; }
+                if (f.SelectedUser == null) return;
                 var u = f.SelectedUser;
                 System.Diagnostics.Debug.WriteLine("[PEOPLE] contacts → open chat with " + u.id);
                 await OpenChat(new ChatEntry { Peer = u.ToInputPeer(), PeerId = u.id, Title = DisplayName(u), IsGroup = false }, 0);
             }
+        }
+
+        /// <summary>Redesign T15 — a contact from a phone number; on success its chat opens.</summary>
+        private async void AddContactByPhone()
+        {
+            string phone, first, last;
+            using (var f = new AddContactForm())
+            {
+                if (f.ShowDialog(this) != DialogResult.OK) return;
+                phone = f.PhoneValue; first = f.FirstNameValue; last = f.LastNameValue;
+            }
+            User u;
+            try { u = await _service.ImportContactAsync(phone, first, last); }
+            catch (Exception ex) { ThemedDialog.Show(this, "Add contact", "Couldn't add the contact: " + ex.Message, "OK"); return; }
+            if (u == null) { ThemedDialog.Show(this, "Add contact", "That number isn't on Telegram (or its owner hides it).", "OK"); return; }
+            if (LogOn) Logger.Diag("[PEOPLE] contact added user=" + u.id);
+            await OpenChat(new ChatEntry { Peer = u.ToInputPeer(), PeerId = u.id, Title = DisplayName(u), IsGroup = false, PeerInfo = u }, 0);
         }
 
         private async void NewGroup()
