@@ -159,7 +159,13 @@ namespace TelegArm.Helpers
             ticks = _ticks; totalMs = _totalMs; worstGapMs = _worstGapMs;
         }
 
-        public static void ResetStats() { _ticks = 0; _totalMs = 0f; _worstGapMs = 0f; }
+        public static void ResetStats() { _ticks = 0; _totalMs = 0f; _worstGapMs = 0f; _lateStarts = 0; }
+
+        private static int _lateStarts;
+        /// <summary>Tweens since <see cref="ResetStats"/> that landed at once because their first tick came too late (the
+        /// UI thread was busy): on a slow device this says an animation was skipped, not that it failed.</summary>
+        public static int LateStarts { get { return _lateStarts; } }
+        internal static void NoteLateStart() { _lateStarts++; }
 
         /// <summary>The gaps between the ticks since <see cref="ResetStats"/>, in order (the first 48), in milliseconds.</summary>
         public static string GapsText()
@@ -332,7 +338,7 @@ namespace TelegArm.Helpers
             {
                 _started = true;
                 double waited = (System.Diagnostics.Stopwatch.GetTimestamp() - _born) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
-                if (waited > MaxWaitMs) { Finish(); return false; }
+                if (waited > MaxWaitMs) { Anim.NoteLateStart(); Finish(); return false; }
             }
             float t = _elapsed / _ms;
             if (t >= 1f) { Finish(); return false; }
