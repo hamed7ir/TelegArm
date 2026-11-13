@@ -88,6 +88,7 @@ namespace TelegArm.UI.Controls
         // and the X positions + selection model of (width, rtl). Measure/Position return the cached layout when
         // called with the same key — eliminating the ~100%-redundant per-paint remeasure (PERF-fix1).
         private string _measureKey;       // (maxWidth | font) of the cached MeasureCore
+        private string _tokKey;           // the font (and DPI) the words' widths were measured for: a new WIDTH re-wraps without measuring them again
         private int _measuredMaxLine;     // cached MeasureCore return (content width)
         private string _positionKey;      // (width | rtl) of the cached PositionCore
         private Bitmap _bmp;              // cached opaque text render (PERF-fix2) — blitted instead of re-rendering
@@ -300,14 +301,22 @@ namespace TelegArm.UI.Controls
             var flags = TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix;
             int slant = (int)(_lineH * 0.2f);
 
-            foreach (var t in _toks)
+            // A word's width depends on the font, never on the wrap width: measured once per font (and DPI). A live resize
+            // asks for a new width on every step; measuring every word of every bubble again for it was most of what made
+            // the content trail the window edge (owner 2026-11-13). InvalidateLayout drops it (a custom emoji arrived).
+            string tokKey = baseFont.FontFamily.Name + "|" + baseFont.Size.ToString("0.0") + "|" + baseFont.Unit + "|" + LayoutDpi + "|" + _lineH;
+            if (tokKey != _tokKey)
             {
-                if (t.Newline) { t.W = 0; continue; }
-                if (t.DocId != 0) t.Image = _resolver != null ? _resolver(t.DocId) : null;
-                if (t.Image != null) { t.W = _emojiSz + L(1); continue; }
-                if (string.IsNullOrEmpty(t.Text)) { t.W = 0; continue; }
-                t.W = TextRenderer.MeasureText(g, t.Text, FontFor(t.Style), new Size(int.MaxValue, _lineH), flags).Width;
-                if ((t.Style & InlineStyle.Italic) != 0 && !t.Space) t.W += slant;   // reserve the slant overhang
+                foreach (var t in _toks)
+                {
+                    if (t.Newline) { t.W = 0; continue; }
+                    if (t.DocId != 0) t.Image = _resolver != null ? _resolver(t.DocId) : null;
+                    if (t.Image != null) { t.W = _emojiSz + L(1); continue; }
+                    if (string.IsNullOrEmpty(t.Text)) { t.W = 0; continue; }
+                    t.W = TextRenderer.MeasureText(g, t.Text, FontFor(t.Style), new Size(int.MaxValue, _lineH), flags).Width;
+                    if ((t.Style & InlineStyle.Italic) != 0 && !t.Space) t.W += slant;   // reserve the slant overhang
+                }
+                _tokKey = tokKey;
             }
 
             _lines.Clear();
@@ -759,6 +768,7 @@ namespace TelegArm.UI.Controls
         public void InvalidateLayout()
         {
             _measureKey = null;
+            _tokKey = null;
             _positionKey = null;
             if (_bmp != null) { _bmp.Dispose(); _bmp = null; }
             _bmpKey = null;

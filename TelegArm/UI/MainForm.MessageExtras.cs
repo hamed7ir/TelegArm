@@ -447,7 +447,8 @@ namespace TelegArm.UI
         {
             var chips = ExtractReactions(m);
             if (chips != null) mb.SetReactions(chips);
-            mb.ReactionToggled += (s, emoji) => ToggleReaction(m, emoji);
+            // the message the bubble answers to NOW: an album that lost its first item answers to its next one
+            mb.ReactionToggled += (s, emoji) => ToggleReaction(_currentChatMessages.FirstOrDefault(x => x.ID == mb.MessageId) ?? m, emoji);
             ApplyComments(mb, m);   // COMMENTS-INDICATOR: discussion-comments footer (called wherever a Message bubble is enriched)
             ApplyChannelMeta(mb, m);   // CHANNEL-META-EXTRAS: view count + post_author + group admin role
         }
@@ -752,6 +753,7 @@ namespace TelegArm.UI
                 if (ReferenceEquals(_reactionGrid, drop)) _reactionGrid = null;
                 try { if (!IsDisposed && IsHandleCreated) BeginInvoke((Action)drop.Dispose); else drop.Dispose(); } catch { }
             };
+            Anim.FadeIn(drop, Anim.MenuMs);
             ShowOnMessage(drop, msg);
         }
 

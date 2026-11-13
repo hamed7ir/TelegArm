@@ -29,7 +29,7 @@ namespace TelegArm.UI.Controls
     {
         private RoundedButtonKind _kind = RoundedButtonKind.Primary;
         private int _radius = 8;
-        private bool _hover, _down;
+        private readonly Fade _hover, _down;   // 0..1: the hover and press colours fade (Helpers.Anim)
 
         public RoundedButtonKind Kind { get { return _kind; } set { _kind = value; Invalidate(); } }
         public int Radius { get { return _radius; } set { _radius = value; Invalidate(); } }
@@ -47,6 +47,8 @@ namespace TelegArm.UI.Controls
             FlatStyle = FlatStyle.Flat;
             FlatAppearance.BorderSize = 0;
             Cursor = Cursors.Hand;
+            _hover = new Fade(this, AnimKind.Hover, Anim.HoverInMs, Anim.HoverOutMs);
+            _down = new Fade(this, AnimKind.Hover, Anim.PressInMs, Anim.PressOutMs);
             ThemeHelper.ThemeChanged += OnThemeChanged;
         }
 
@@ -58,10 +60,10 @@ namespace TelegArm.UI.Controls
             base.Dispose(disposing);
         }
 
-        protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }
-        protected override void OnMouseLeave(EventArgs e) { _hover = false; _down = false; Invalidate(); base.OnMouseLeave(e); }
-        protected override void OnMouseDown(MouseEventArgs e) { _down = true; Invalidate(); base.OnMouseDown(e); }
-        protected override void OnMouseUp(MouseEventArgs e) { _down = false; Invalidate(); base.OnMouseUp(e); }
+        protected override void OnMouseEnter(EventArgs e) { _hover.Set(true); Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { _hover.Set(false); _down.Set(false); Invalidate(); base.OnMouseLeave(e); }
+        protected override void OnMouseDown(MouseEventArgs e) { _down.Set(true); Invalidate(); base.OnMouseDown(e); }
+        protected override void OnMouseUp(MouseEventArgs e) { _down.Set(false); Invalidate(); base.OnMouseUp(e); }
         protected override void OnEnabledChanged(EventArgs e) { Invalidate(); base.OnEnabledChanged(e); }
         protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
         protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
@@ -104,10 +106,24 @@ namespace TelegArm.UI.Controls
                 text = pal.RoundedBtnDisabledText;
                 border = Color.Empty;
             }
-            else if (_down) fill = Blend(fill, Color.Black, 0.16f);
-            else if (_hover) fill = _kind == RoundedButtonKind.Secondary ? Blend(pbg, accent, 0.12f)
-                                  : _modern && _kind == RoundedButtonKind.Neutral ? Blend(fill, pal.Text, 0.07f)   // a white card cannot lighten
-                                                                         : Blend(fill, Color.White, dark ? 0.10f : 0.06f);
+            else
+            {
+                // The same three colours as before (rest, hover, pressed: pressed wins), now mixed by how far each has come.
+                float ht = _hover.T, dt = _down.T;
+                Color rest = fill;
+                if (ht > 0f)
+                {
+                    Color over = _kind == RoundedButtonKind.Secondary ? Blend(pbg, accent, 0.12f)
+                               : _modern && _kind == RoundedButtonKind.Neutral ? Blend(rest, pal.Text, 0.07f)   // a white card cannot lighten
+                                                                               : Blend(rest, Color.White, dark ? 0.10f : 0.06f);
+                    fill = ht >= 1f ? over : ColorMath.Mix(rest, over, ht);
+                }
+                if (dt > 0f)
+                {
+                    Color pressed = Blend(rest, Color.Black, 0.16f);
+                    fill = dt >= 1f ? pressed : ColorMath.Mix(fill, pressed, dt);
+                }
+            }
 
             int radius = Dpi.Px(_radius, dpi);
             var r = new Rectangle(0, 0, Math.Max(1, Width - 1), Math.Max(1, Height - 1));

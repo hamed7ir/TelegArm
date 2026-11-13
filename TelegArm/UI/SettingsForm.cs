@@ -317,6 +317,27 @@ namespace TelegArm.UI
             UpdateScaleLimit();
             page.Section("Size", _scaleRow, _scalePreview);
 
+            // Owner 2026-11-13: the small animations, each with its own switch (one that misbehaves on a device goes off
+            // alone). Applied at once: every animation asks Anim.Enabled when it starts.
+            var anim = new ToggleRow("Animations", s.Animations) { Subtitle = "Switches, hover, the menu and popups move a little" };
+            // Windows' own "Animation effects" setting stops them too, unless this is on (it says which way Windows is now).
+            Func<string> winNote = () => Anim.SystemAnimationsOn ? "Windows has them on right now"
+                                                                 : "Windows has them off right now: nothing moves until this is on";
+            var animAlways = new ToggleRow("Also when Windows has animations off", s.AnimateDespiteSystem) { Subtitle = winNote() };
+            var animToggles = new ToggleRow("Switches slide", s.AnimateToggles);
+            var animHover = new ToggleRow("Buttons and rows fade on hover", s.AnimateHover);
+            var animDrawer = new ToggleRow("The menu slides in", s.AnimateDrawer);
+            var animPopups = new ToggleRow("Popups and menus fade in", s.AnimatePopups);
+            Action animParts = () => { animAlways.Enabled = animToggles.Enabled = animHover.Enabled = animDrawer.Enabled = animPopups.Enabled = anim.On; };
+            animAlways.Changed += (snd, ev) => { s.AnimateDespiteSystem = animAlways.On; s.Save(); animAlways.Subtitle = winNote(); };
+            anim.Changed += (snd, ev) => { s.Animations = anim.On; s.Save(); animParts(); };
+            animToggles.Changed += (snd, ev) => { s.AnimateToggles = animToggles.On; s.Save(); };
+            animHover.Changed += (snd, ev) => { s.AnimateHover = animHover.On; s.Save(); };
+            animDrawer.Changed += (snd, ev) => { s.AnimateDrawer = animDrawer.On; s.Save(); };
+            animPopups.Changed += (snd, ev) => { s.AnimatePopups = animPopups.On; s.Save(); };
+            animParts();
+            page.Section("Animations", anim, animAlways, animToggles, animHover, animDrawer, animPopups);
+
             // Step 5.7: start over, or carry a look to another PC.
             var reset = new ActionRow("Reset appearance", "Reset") { Subtitle = "Accent, theme colours, chat backgrounds and bubbles" };
             reset.Click += (snd, ev) => ResetAppearance(s);
@@ -1602,12 +1623,14 @@ namespace TelegArm.UI
             private readonly string[] _names;
             private int _selected;
             private int _hover = -1;
+            private readonly FadeSet _hoverT;   // the hover pill fades from page to page (Helpers.Anim)
             public event Action<int> PageSelected;
             private const int RowH = 40, PadX = 16, TopPad = 8;
 
             public SettingsRail(string[] names)
             {
                 _names = names;
+                _hoverT = new FadeSet(this, AnimKind.Hover, names.Length, Anim.HoverInMs, Anim.HoverOutMs);
                 SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
                 TabStop = true;
                 AccessibleRole = AccessibleRole.PageTabList;
@@ -1627,8 +1650,8 @@ namespace TelegArm.UI
                 return y < Dpi.Px(TopPad, dpi) || i < 0 || i >= _names.Length ? -1 : i;
             }
 
-            protected override void OnMouseMove(MouseEventArgs e) { base.OnMouseMove(e); int r = RowAt(e.Y); if (r != _hover) { _hover = r; Invalidate(); } }
-            protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); _hover = -1; Invalidate(); }
+            protected override void OnMouseMove(MouseEventArgs e) { base.OnMouseMove(e); int r = RowAt(e.Y); if (r != _hover) { _hover = r; _hoverT.Active = r; } }
+            protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); _hover = -1; _hoverT.Active = -1; }
             protected override void OnMouseDown(MouseEventArgs e)
             {
                 base.OnMouseDown(e);
@@ -1673,12 +1696,13 @@ namespace TelegArm.UI
                 {
                     var r = new Rectangle(0, top + i * rowH, Width - 1, rowH);
                     bool sel = i == _selected;
-                    if (sel || i == _hover)
+                    float ht = sel ? 0f : _hoverT[i];
+                    if (sel || ht > 0f)
                     {
                         var inner = Rectangle.Inflate(r, -Dpi.Px(6, dpi), -Dpi.Px(2, dpi));
                         g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
                         using (var path = DrawHelper.RoundedRect(inner, Dpi.Px(6, dpi)))
-                        using (var b = new SolidBrush(sel ? p.AccentSoft : p.Hover)) g.FillPath(b, path);
+                        using (var b = new SolidBrush(sel ? p.AccentSoft : ColorMath.WithAlpha(p.Hover, (int)Math.Round(p.Hover.A * ht)))) g.FillPath(b, path);
                         if (sel) using (var b = new SolidBrush(p.Accent)) g.FillRectangle(b, inner.X, inner.Y + Dpi.Px(8, dpi), Dpi.Px(3, dpi), inner.Height - Dpi.Px(16, dpi));
                     }
                     var font = FontHelper.UiAt(10.5f, dpi, sel ? FontStyle.Bold : FontStyle.Regular);

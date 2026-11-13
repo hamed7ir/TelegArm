@@ -435,6 +435,59 @@ namespace TelegArm.UI.Controls
             return null;
         }
 
+        /// <summary>The album item (a tile or a row) under a point of this control, or 0 when the point is on none (the
+        /// caption, the margins): the message menu acts on that item, and on the whole group elsewhere.</summary>
+        public int AlbumMessageIdAt(Point clientPt)
+        {
+            if (_album == null) return 0;
+            foreach (var kv in _albumTileRects) if (kv.Value.Contains(clientPt)) return kv.Key;
+            return 0;
+        }
+
+        /// <summary>How many items this album holds (0 when the bubble is not an album).</summary>
+        public int AlbumCount { get { return _album != null ? _album.Count : 0; } }
+
+        /// <summary>Every item's message id, in the album's order (empty when the bubble is not an album).</summary>
+        public int[] AlbumMessageIds
+        {
+            get
+            {
+                if (_album == null) return new int[0];
+                var ids = new int[_album.Count];
+                for (int i = 0; i < ids.Length; i++) ids[i] = _album[i].MessageId;
+                return ids;
+            }
+        }
+
+        /// <summary>The item whose message carries the album's caption (0 = none known): the caption goes with that item.</summary>
+        public int AlbumCaptionMessageId { get; set; }
+
+        /// <summary>Takes one item out of the album (its message was deleted): its tile or row goes and the bubble re-measures.
+        /// When it was the item the bubble answers to (MessageId) the next one takes over; when it carried the caption the
+        /// caption goes too. False when the album does not hold it. The caller removes a bubble left with no items.</summary>
+        public bool RemoveAlbumItem(int messageId)
+        {
+            if (_album == null) return false;
+            var t = FindAlbumTile(messageId);
+            if (t == null) return false;
+            if (t.Handle != null) { t.Handle.Changed -= OnAlbumAudioProgress; t.Handle = null; }   // unsubscribe only, never cancel
+            _album.Remove(t);
+            _albumTileRects.Clear();   // rebuilt by the next paint
+            if (_album.Count == 0) return true;   // nothing left to measure: the caller takes the bubble out
+            if (MessageId == messageId) MessageId = _album[0].MessageId;
+            bool rows = false;
+            foreach (var x in _album) if (x.IsAudio || x.IsFile) rows = true;
+            _albumRows = rows;
+            if (AlbumCaptionMessageId == messageId)
+            {
+                AlbumCaptionMessageId = 0;
+                if (!string.IsNullOrEmpty(_text)) { SetCaption("", null); return true; }   // SetCaption measures and repaints
+            }
+            Measure();
+            if (!IsDisposed) Invalidate();
+            return true;
+        }
+
         /// <summary>All message ids in this album (so a jump to any item lands here).</summary>
         public bool ContainsMessageId(int id)
         {
@@ -1703,9 +1756,14 @@ namespace TelegArm.UI.Controls
             return IsPoll;   // a poll bubble swallows stray taps inside it
         }
 
+        /// <summary>The width the height was last measured for (0 = never): a live resize re-measures only the bubbles near
+        /// the view, and reads here which of the others still owe a measure when the drag ends.</summary>
+        public int MeasuredAtWidth { get; private set; }
+
         /// <summary>Recomputes Height for the current Width. Call after Width changes.</summary>
         public void Measure()
         {
+            MeasuredAtWidth = Width;
             int reactH = HasReactions ? ReactionH : 0;
             int kbH = KeyboardHeight();
             int commentsH = HasComments ? CommentH : 0;   // COMMENTS-INDICATOR: bottom-most footer strip

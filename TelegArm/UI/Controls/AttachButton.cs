@@ -19,12 +19,13 @@ namespace TelegArm.UI.Controls
     {
         private const int Side = 40;   // logical px
 
-        private bool _hover;
+        private readonly Fade _hover;   // 0..1: the hover disc fades (Helpers.Anim)
         private int _dpi;                                          // the DPI this button is laid out at; 0 = not parented yet
         private int CurDpi { get { return _dpi > 0 ? _dpi : Dpi.Of(this); } }
 
         public AttachButton()
         {
+            _hover = new Fade(this, AnimKind.Hover, Anim.HoverInMs, Anim.HoverOutMs);
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
                      | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             Size = new Size(Dpi.Px(Side, CurDpi), Dpi.Px(Side, CurDpi));
@@ -55,8 +56,8 @@ namespace TelegArm.UI.Controls
             Invalidate();
         }
 
-        protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }
-        protected override void OnMouseLeave(EventArgs e) { _hover = false; Invalidate(); base.OnMouseLeave(e); }
+        protected override void OnMouseEnter(EventArgs e) { _hover.Set(true); Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { _hover.Set(false); Invalidate(); base.OnMouseLeave(e); }
 
         protected override void OnPaint(PaintEventArgs e)
         {
@@ -74,9 +75,9 @@ namespace TelegArm.UI.Controls
             Color glyph = ThemeHelper.Palette.AccentGlyph;
             if (!Enabled)
                 glyph = ThemeHelper.Palette.GlyphButtonDisabled;
-            else if (_hover)
+            else if (_hover.T > 0f)
             {
-                using (var hb = new SolidBrush(ColorMath.WithAlpha(glyph, ThemeHelper.Palette.Dark ? 45 : 30)))
+                using (var hb = new SolidBrush(ColorMath.WithAlpha(glyph, (int)Math.Round((ThemeHelper.Palette.Dark ? 45 : 30) * _hover.T))))
                     g.FillEllipse(hb, P(2), P(2), Width - P(4), Height - P(4));
             }
 

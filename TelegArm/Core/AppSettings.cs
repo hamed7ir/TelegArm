@@ -110,6 +110,30 @@ namespace TelegArm.Core
         /// test — the RELEASE default gets decided by the RT A/B numbers.</summary>
         public bool CompositedScroll { get; set; } = true;
 
+        /// <summary>Owner 2026-11-13 ("cant we add animations to make it feel smooth?"): the master switch of the small
+        /// animations (Helpers.Anim). ON by default: the owner asked for them. Applied at once (every animation asks when it
+        /// starts). Windows' own "Show animations" turns them off too. Off = every state change is instant, as before.</summary>
+        public bool Animations { get; set; } = true;
+
+        /// <summary>Animate even when Windows' own "Animation effects" setting is off. OFF by default: that setting is how a
+        /// person tells every app they do not want motion. (The dev box has it off, found 2026-11-13: nothing moved there
+        /// until this was added.)</summary>
+        public bool AnimateDespiteSystem { get; set; } = false;
+
+        /// <summary>On/off switches slide (needs <see cref="Animations"/>). Each kind has its own switch so that one which
+        /// misbehaves on a device (the Surface RT has not seen them yet) can be turned off alone.</summary>
+        public bool AnimateToggles { get; set; } = true;
+
+        /// <summary>Hover and press colours fade on buttons, rows and menus (needs <see cref="Animations"/>).</summary>
+        public bool AnimateHover { get; set; } = true;
+
+        /// <summary>The hamburger menu slides in and out (needs <see cref="Animations"/>).</summary>
+        public bool AnimateDrawer { get; set; } = true;
+
+        /// <summary>Popups and menus fade in: the emoji picker, the downloads list, the reaction grid, context menus (needs
+        /// <see cref="Animations"/>). The only animation that changes a window style (a layered window while it fades).</summary>
+        public bool AnimatePopups { get; set; } = true;
+
         /// <summary>FOLDER-SIDEBAR: folder navigation style. false = horizontal TAB bar above the chat list
         /// (default, today's exact layout); true = a vertical icon RAIL left of the chat list (Telegram-Desktop
         /// style). Read ONCE at construction (BuildLeftPanel) — restart to apply, like CompositedScroll, so the

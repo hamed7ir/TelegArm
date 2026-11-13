@@ -127,7 +127,10 @@ namespace TelegArm.UI
             {
                 if (Dpi.Busy || _dpiRelayoutPending) return;   // step 3.4: the deferred DPI relayout does it once, at the final width
                 int w = ContentWidth(_chatListPanel);
-                foreach (Control c in _chatListPanel.Controls) c.Width = w;
+                // one flow layout for the pass, not one per row (hundreds of rows, in one column, on every resize step)
+                _chatListPanel.SuspendLayout();
+                try { foreach (Control c in _chatListPanel.Controls) c.Width = w; }
+                finally { _chatListPanel.ResumeLayout(true); }
             };
 
             // STORIES-BUILD-1: create the story-tray control once (mounted into whichever layout mode runs below).
@@ -709,13 +712,7 @@ namespace TelegArm.UI
                 // Plan E3: bubbles depend on the WIDTH only. The growing composer changes the panel's HEIGHT on every
                 // wrapped line; re-measuring every bubble for that was the cost the plan flagged (Tegra 3).
                 if (w == _bubbleLayoutWidth) return;
-                _bubbleLayoutWidth = w;
-                foreach (Control c in _messagePanel.Controls)
-                {
-                    c.Width = w;
-                    (c as MessageBubbleControl)?.Measure();
-                    (c as SponsoredCardControl)?.Measure();   // step 3.2: the card measures from its width too
-                }
+                RelayoutBubbles(w, InSizeMove, false);   // during a drag: only the bubbles near the view (the rest when it ends)
             };
             // Redesign 2.7b: the empty state. With no chat open, a centred service pill says what to do, as in Telegram.
             _messagePanel.Paint += PaintChatBackdrop;   // step 5.4: before the empty state, which draws over it
@@ -1091,6 +1088,74 @@ namespace TelegArm.UI
             SetRowPx(_rightLayout, 1, active ? 48 : 0);
             if (_messagePanel != null)
                 _messagePanel.AutoScrollPosition = new Point(0, scrollY);
+        }
+
+        // ── a live resize (owner 2026-11-13: "resizing windows should become smooth") ────────────────────────────────
+        // Measured on the dev box, a chat of 208 bubbles: every step of a drag re-wrapped EVERY bubble's text and ran the
+        // panel's flow layout after each one: 400 ms a step, so the content trailed the window edge by seconds. Now the
+        // flow layout runs once per pass, and during a drag only the bubbles in or near the view are re-wrapped; the rest
+        // keep the height of the width they had until the drag ends, when one pass over those puts every bubble exactly
+        // where a plain layout does. The reading position is kept all the way: at the bottom of a chat the bottom stays
+        // the bottom, anywhere else the first bubble in view stays where it is (it used to drift as bubbles re-wrapped).
+
+        private bool _bubblesStale;   // a drag left bubbles outside the view with the height of an older width
+        private bool _dragPinned;     // the chat was at its bottom when the drag began
+
+        protected override void OnSizeMoveBegin()
+        {
+            base.OnSizeMoveBegin();
+            _dragPinned = _messagePanel != null && AtBottom(AtBottomThreshold);
+        }
+
+        protected override void OnSizeMoveEnd()
+        {
+            base.OnSizeMoveEnd();
+            if (!_bubblesStale || _messagePanel == null || Dpi.Busy || _dpiRelayoutPending) return;
+            RelayoutBubbles(ContentWidth(_messagePanel), false, true);
+        }
+
+        /// <summary>Gives every control of the message panel the width <paramref name="w"/> and re-measures the bubbles for
+        /// it, with one flow layout at the end, keeping the reading position.</summary>
+        /// <param name="nearViewOnly">A drag step: re-measure only the bubbles within one screen of the view.</param>
+        /// <param name="staleOnly">The end of a drag: re-measure only the bubbles a step left at another width.</param>
+        private void RelayoutBubbles(int w, bool nearViewOnly, bool staleOnly)
+        {
+            var panel = _messagePanel;
+            bool pinned = nearViewOnly || staleOnly ? _dragPinned : AtBottom(AtBottomThreshold);
+            Control anchor = null;
+            int anchorTop = 0;
+            if (!pinned)
+                foreach (Control c in panel.Controls)   // in flow order: the first one still in view
+                    if (c.Visible && c.Bottom > 0) { anchor = c; anchorTop = c.Top; break; }
+            int reach = panel.ClientSize.Height / 2;   // "near" = the view and half a screen above and below it
+            int viewBottom = panel.ClientSize.Height;
+            bool stale = false;
+            panel.SuspendLayout();
+            try
+            {
+                foreach (Control c in panel.Controls)
+                {
+                    // A drag step leaves what is far from the view ALONE, width and height (a bubble stays whole, as it was
+                    // measured). Measured: just giving 200 far bubbles their new width cost 80 ms a step. While the window
+                    // narrows they are wider than the panel, which only widens its (never shown) sideways scroll range
+                    // until the drag ends.
+                    if (nearViewOnly && (c.Bottom < -reach || c.Top > viewBottom + reach))   // as it stands before this pass
+                    {
+                        if (c.Width != w) stale = true;
+                        continue;
+                    }
+                    c.Width = w;
+                    var b = c as MessageBubbleControl;
+                    if (b != null) { if (!staleOnly || b.MeasuredAtWidth != w) b.Measure(); }
+                    else (c as SponsoredCardControl)?.Measure();   // step 3.2: the card measures from its width too
+                }
+            }
+            finally { panel.ResumeLayout(true); }
+            _bubbleLayoutWidth = w;
+            _bubblesStale = stale;
+            if (pinned) panel.AutoScrollPosition = new Point(0, panel.VerticalScroll.Maximum);
+            else if (anchor != null && !anchor.IsDisposed && anchor.Top != anchorTop)
+                panel.AutoScrollPosition = new Point(0, -panel.AutoScrollPosition.Y + (anchor.Top - anchorTop));
         }
 
         private static int ContentWidth(FlowLayoutPanel p)

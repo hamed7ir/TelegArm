@@ -52,6 +52,24 @@ namespace TelegArm.UI.Controls
             set { if (_selected != value) { _selected = value; Invalidate(); } }
         }
 
+        // Owner 2026-11-13 (animations): the row under the MOUSE gets a faint tint that fades in and out. Made on the first
+        // mouse-over (most rows never get one). A finger has no hover: its tint would stay under the last tap.
+        private Fade _hover;
+
+        protected override void OnMouseEnter(EventArgs e)
+        {
+            base.OnMouseEnter(e);
+            if (TouchKeyboard.LastInputWasTouch()) return;
+            if (_hover == null) _hover = new Fade(this, AnimKind.Hover, Anim.HoverInMs, Anim.HoverOutMs);
+            _hover.Set(true);
+        }
+
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            base.OnMouseLeave(e);
+            if (_hover != null) _hover.Set(false);
+        }
+
         /// <summary>Right-click / touch-and-hold on the row (screen point) — for the chat menu.</summary>
         public event EventHandler<Point> ContextMenuRequested;
 
@@ -120,13 +138,17 @@ namespace TelegArm.UI.Controls
             Color bg = ThemeHelper.PaletteFor(IsDark).ListBg;
             Color nameColor = ThemeHelper.PaletteFor(IsDark).ListName;
             Color subColor = ThemeHelper.PaletteFor(IsDark).ListSub;
+            float hov = _hover != null && !_selected ? _hover.T : 0f;   // 0 for nearly every row: nothing below runs for it
             if (_selected)
                 bg = ThemeHelper.PaletteFor(IsDark).AccentSoft;   // step 5.1: the selection follows the accent (was ListSelected)
+            else if (hov > 0f)
+                bg = ColorMath.Mix(bg, nameColor, 0.06f * hov);    // the list colour leaned a little toward its ink
             if (WindowBackdrop.Enabled)
             {
                 // step 5.9 (owner: the main window too): the list over the window backdrop; the selection is an accent tint
                 WindowBackdrop.Paint(g, this, ClientRectangle, ThemeHelper.PaletteFor(IsDark).ListBg);
                 if (_selected) using (var sb = new SolidBrush(ColorMath.WithAlpha(ThemeHelper.PaletteFor(IsDark).Accent, 46))) g.FillRectangle(sb, ClientRectangle);
+                else if (hov > 0f) using (var hb = new SolidBrush(ColorMath.WithAlpha(nameColor, (int)Math.Round(18 * hov)))) g.FillRectangle(hb, ClientRectangle);
             }
             else g.Clear(bg);
 

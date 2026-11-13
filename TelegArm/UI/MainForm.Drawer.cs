@@ -17,12 +17,13 @@ namespace TelegArm.UI
         // ── Hamburger menu ───────────────────────────────────────────────────
 
         private DrawerMenu _drawer;
+        private Tween _drawerSlide;                  // the open slide, so a close in the middle of it can take over
         private DrawerOutsideCloser _drawerCloser;   // HAMBURGER-SCRIM-FIX: closes the card-width drawer on an outside tap
 
         /// <summary>Opens the Telegram-style left drawer (account header + full menu + Night Mode toggle).</summary>
         private void ShowDrawer()
         {
-            if (_drawer != null) { CloseDrawer(); return; }
+            if (_drawer != null) { CloseDrawer(true); return; }
 
             // HAMBURGER-FIX: the drawer used to snapshot the WHOLE window (DrawToBitmap) each open for a dimmed
             // backdrop — a synchronous full-UI render that was the DOMINANT open-lag (esp. on RT ARM32). The
@@ -81,7 +82,7 @@ namespace TelegArm.UI
             {
                 Bounds = new Rectangle(0, 0, Px(DrawerMenu.CardW), Content.ClientSize.Height)   // 2.7a: under the title bar
             };
-            _drawer.CloseRequested += () => BeginInvoke((Action)CloseDrawer);
+            _drawer.CloseRequested += () => BeginInvoke((Action)(() => CloseDrawer(true)));
             Content.Controls.Add(_drawer);
             _drawer.BringToFront();
             _drawer.Focus();
@@ -94,6 +95,22 @@ namespace TelegArm.UI
             // Decode the other-account avatars OFF the UI thread and swap them into the open drawer (letters →
             // photos). Never blocks the open; guarded so a closed/replaced drawer can't get a stale image.
             LoadDrawerAvatarsAsync(_drawer, pendingAv);
+            SlideDrawerIn(_drawer);
+        }
+
+        /// <summary>Owner 2026-11-13 (animations): the drawer slides in from the left edge. It is drawn ONCE into a bitmap
+        /// at its resting place and that bitmap is what moves (a full owner-draw of the menu per frame is too much for the
+        /// Tegra 3); the real painting takes over when it has landed. Animations off: nothing here runs.</summary>
+        private void SlideDrawerIn(DrawerMenu d)
+        {
+            if (d == null || d.IsDisposed || !Anim.Enabled(AnimKind.Drawer)) return;
+            int w = d.Width;
+            if (w <= 0) return;
+            d.BeginSlide();
+            d.Left = -w;
+            _drawerSlide = Anim.Run(d, AnimKind.Drawer, Anim.DrawerInMs,
+                t => { if (!d.IsDisposed) d.Left = -w + (int)Math.Round(w * Anim.EaseOut(t)); },
+                () => { if (!d.IsDisposed) { d.Left = 0; d.EndSlide(); } });
         }
 
         /// <summary>HAMBURGER-FIX: off-thread account-avatar loader for the drawer. Each avatar is decoded on a
@@ -125,14 +142,38 @@ namespace TelegArm.UI
             });
         }
 
-        private void CloseDrawer()
+        private void CloseDrawer() { CloseDrawer(false); }
+
+        /// <param name="slide">A plain close (Esc, a tap outside, the hamburger again): it slides away. False = gone at
+        /// once: an action follows (a dialog, an account switch) or the window is changing under it (a DPI change, a
+        /// logout, closing).</param>
+        private void CloseDrawer(bool slide)
         {
             // Drop the outside-tap filter first (always, even if the drawer ref is already gone) so it never lingers.
             if (_drawerCloser != null) { try { Application.RemoveMessageFilter(_drawerCloser); } catch { } _drawerCloser = null; }
             var d = _drawer;
             if (d == null) return;
             _drawer = null;
-            try { Controls.Remove(d); d.Dispose(); } catch { }
+            var opening = _drawerSlide;
+            _drawerSlide = null;
+            if (opening != null) opening.Cancel();
+            if (slide && !d.IsDisposed && Anim.Enabled(AnimKind.Drawer))
+            {
+                // It is CLOSED from here on (the field is null, the filter is gone): it only looks open while it leaves.
+                int from = d.Left, dist = d.Width + from;
+                d.Leaving = true;
+                d.BeginSlide();
+                Anim.Run(d, AnimKind.Drawer, Anim.DrawerOutMs,
+                    t => { if (!d.IsDisposed) d.Left = from - (int)Math.Round(dist * t * t); },
+                    () => DisposeDrawer(d));
+                return;
+            }
+            DisposeDrawer(d);
+        }
+
+        private void DisposeDrawer(DrawerMenu d)
+        {
+            try { if (!d.IsDisposed) { Content.Controls.Remove(d); d.Dispose(); } } catch { }
         }
 
         /// <summary>HAMBURGER-SCRIM-FIX: pre-dispatch outside-tap detector for the (now card-width) drawer. Sees
@@ -158,7 +199,7 @@ namespace TelegArm.UI
                         if (d != null && !_f.IsDisposed && m.HWnd != d.Handle
                             && (_f._hamburger == null || m.HWnd != _f._hamburger.Handle))
                         {
-                            try { _f.BeginInvoke((Action)_f.CloseDrawer); } catch { }
+                            try { _f.BeginInvoke((Action)(() => _f.CloseDrawer(true))); } catch { }
                         }
                         break;
                 }
@@ -388,6 +429,11 @@ namespace TelegArm.UI
             private readonly Action _headerAction;
             private readonly Rectangle[] _rects;
             private int _hover = -2;           // -2 none, -1 header, >=0 row index
+            private readonly FadeSet _hoverT;  // the highlight fades from row to row: [0] the header, [i + 1] row i
+            private Bitmap _slideFrame;        // the whole drawer drawn once: what a slide moves (BeginSlide)
+
+            /// <summary>Set while the drawer slides away: it is closed already and no longer answers the pointer.</summary>
+            public bool Leaving { get; set; }
             private Rectangle _headerRect;
             private int _scrollY, _contentH;   // rows scroll under the fixed header (many accounts overflow the screen)
             private bool _pressed, _moved; private int _pressY, _pressScroll;
@@ -401,19 +447,27 @@ namespace TelegArm.UI
                 _snap = snap; _dark = dark; _accent = accent; _name = name; _letter = letter;
                 _avatar = avatar; _avatarKey = avatarKey; _rows = rows; _headerAction = headerAction;
                 _rects = new Rectangle[rows.Count];
+                _hoverT = new FadeSet(this, AnimKind.Hover, rows.Count + 1, Anim.HoverInMs, Anim.HoverOutMs, InvalidateHover);
                 SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
                          | ControlStyles.OptimizedDoubleBuffer | ControlStyles.Selectable, true);
                 TabStop = false;
                 Layout2();
             }
 
-            protected override void OnSizeChanged(EventArgs e) { base.OnSizeChanged(e); Layout2(); Invalidate(); }
+            protected override void OnSizeChanged(EventArgs e)
+            {
+                base.OnSizeChanged(e);
+                if (_slideFrame != null && _slideFrame.Size != Size) EndSlide(false);   // resized mid-slide (a DPI change): paint live again
+                Layout2();
+                Invalidate();
+            }
 
             void IDpiAware.OnDpiChanged(int oldDpi, int newDpi)
             {
                 if (oldDpi > 0) _scrollY = _scrollY * newDpi / oldDpi;   // keep the same rows in view (Layout2 clamps)
                 _dpi = newDpi;
                 _hover = -2;
+                _hoverT.Reset(_rows.Count + 1);
                 Width = CardPx;   // SET from the logical value (OnSizeChanged re-lays out when it differs)
                 Layout2();
                 Invalidate();
@@ -439,13 +493,14 @@ namespace TelegArm.UI
 
             protected override bool ProcessCmdKey(ref System.Windows.Forms.Message msg, Keys keyData)
             {
-                if (keyData == Keys.Escape) { CloseRequested?.Invoke(); return true; }
+                if (keyData == Keys.Escape) { if (!Leaving) CloseRequested?.Invoke(); return true; }   // (a leaving drawer is closed already)
                 return base.ProcessCmdKey(ref msg, keyData);
             }
 
             protected override void OnMouseMove(MouseEventArgs e)
             {
                 base.OnMouseMove(e);
+                if (Leaving) return;
                 if (_pressed)   // touch/mouse drag-scroll over the rows
                 {
                     if (Math.Abs(e.Y - _pressY) > _slop) _moved = true;
@@ -453,12 +508,57 @@ namespace TelegArm.UI
                     return;
                 }
                 int h = HitTest(e.Location);
-                if (h != _hover) { _hover = h; Cursor = h != -2 ? Cursors.Hand : Cursors.Default; Invalidate(new Rectangle(0, 0, CardPx, Height)); }
+                if (h != _hover) { _hover = h; Cursor = h != -2 ? Cursors.Hand : Cursors.Default; _hoverT.Active = h == -2 ? -1 : h + 1; }
+            }
+
+            /// <summary>The highlight leaves with the pointer (it used to stay on the last row until the wheel moved).</summary>
+            protected override void OnMouseLeave(EventArgs e)
+            {
+                base.OnMouseLeave(e);
+                if (_hover != -2) { _hover = -2; _hoverT.Active = -1; }
+            }
+
+            private void InvalidateHover(int i)
+            {
+                if (i == 0) { Invalidate(_headerRect); return; }
+                if (i - 1 >= _rects.Length) return;
+                var r = _rects[i - 1];
+                Invalidate(new Rectangle(r.X, r.Y - _scrollY, r.Width, r.Height));
+            }
+
+            /// <summary>Draws the whole drawer once into a bitmap; until <see cref="EndSlide"/> every paint is that bitmap, so
+            /// a slide costs one blit per frame. Call it with the drawer at its resting place (the window backdrop under it
+            /// is sampled there).</summary>
+            public void BeginSlide()
+            {
+                // A close in the middle of the open slide keeps the frame it has: that one was drawn at the resting place,
+                // and the drawer is somewhere else now (the wallpaper slice under it would be the wrong one).
+                if (_slideFrame != null && _slideFrame.Size == Size) return;
+                EndSlide(false);
+                if (Width <= 0 || Height <= 0 || IsDisposed) return;
+                try
+                {
+                    var bmp = new Bitmap(Width, Height, System.Drawing.Imaging.PixelFormat.Format32bppRgb);   // no alpha: GDI text (TextRenderer) clears an alpha channel under it
+                    try { using (var g = Graphics.FromImage(bmp)) PaintAll(g); }
+                    catch { bmp.Dispose(); throw; }
+                    _slideFrame = bmp;
+                }
+                catch (Exception ex) { _slideFrame = null; Logger.Diag("[ANIM] drawer frame: " + ex.GetType().Name + ": " + ex.Message); }
+            }
+
+            public void EndSlide(bool repaint = true)
+            {
+                var b = _slideFrame;
+                _slideFrame = null;
+                if (b == null) return;
+                try { b.Dispose(); } catch { }
+                if (repaint && !IsDisposed) Invalidate();
             }
 
             protected override void OnMouseDown(MouseEventArgs e)
             {
                 base.OnMouseDown(e);
+                if (Leaving) return;
                 if (e.X > CardPx) { CloseRequested?.Invoke(); return; }
                 // Finger slop is PHYSICAL: the monitor's raw DPI, never the interface scale (6 at 96, as before).
                 var host = TopLevelControl as AppForm;
@@ -471,7 +571,7 @@ namespace TelegArm.UI
                 base.OnMouseUp(e);
                 bool wasPressed = _pressed, moved = _moved;
                 _pressed = false; _moved = false;
-                if (!wasPressed || moved || e.X > CardPx) return;   // a drag-scroll, not a tap
+                if (Leaving || !wasPressed || moved || e.X > CardPx) return;   // a drag-scroll, not a tap
                 int h = HitTest(e.Location);
                 if (h == -1) { _headerAction?.Invoke(); return; }
                 if (h >= 0 && !_rows[h].Separator) _rows[h].Action?.Invoke();
@@ -481,7 +581,7 @@ namespace TelegArm.UI
             {
                 base.OnMouseWheel(e);
                 int ns = ClampScroll(_scrollY - Math.Sign(e.Delta) * P(RowH));
-                if (ns != _scrollY) { _scrollY = ns; _hover = -2; Invalidate(); }
+                if (ns != _scrollY) { _scrollY = ns; _hover = -2; _hoverT.Reset(_rows.Count + 1); Invalidate(); }
             }
 
             private int HitTest(Point p)
@@ -496,7 +596,16 @@ namespace TelegArm.UI
 
             protected override void OnPaint(PaintEventArgs e)
             {
-                var g = e.Graphics;
+                var frame = _slideFrame;   // sliding: the one frame drawn at BeginSlide
+                if (frame != null)
+                {
+                    try { e.Graphics.DrawImageUnscaled(frame, 0, 0); return; } catch { }
+                }
+                PaintAll(e.Graphics);
+            }
+
+            private void PaintAll(Graphics g)
+            {
                 int dpi = _dpi, cardW = CardPx, headerH = P(HeaderH);
                 // HAMBURGER-SCRIM-FIX: no backdrop. The drawer is card-width now, so there's no outside region to
                 // dim — the opaque card fill below IS the whole control. (Old full-window snapshot/scrim removed.)
@@ -516,8 +625,9 @@ namespace TelegArm.UI
                     using (var b = new SolidBrush(DrawHelper.AvatarColor(_avatarKey))) g.FillEllipse(b, avr);
                     DrawHelper.DrawInitial(g, _letter, FontCache.Get("Segoe UI", 18f, FontStyle.Bold, dpi), avr, Color.White);   // ink-centred (owner report 2026-10-14)
                 }
-                if (_hover == -1)
-                    using (var hb = new SolidBrush(ColorMath.WithAlpha(_accent, _dark ? 22 : 18))) g.FillRectangle(hb, _headerRect);
+                float hh = _hoverT[0];
+                if (hh > 0f)
+                    using (var hb = new SolidBrush(ColorMath.WithAlpha(_accent, (int)Math.Round((_dark ? 22 : 18) * hh)))) g.FillRectangle(hb, _headerRect);
                 TextRenderer.DrawText(g, _name, FontHelper.UiAt(11.5f, dpi), new Rectangle(P(86), P(30), P(CardW - 96), P(24)),
                     ThemeHelper.PaletteFor(_dark).DrawerHeaderText, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);   // NoPrefix: "&" is text ("Theme & accent" read "Theme _accent")
                 TextRenderer.DrawText(g, "View profile", FontHelper.UiAt(8.5f, dpi), new Rectangle(P(86), P(54), P(CardW - 96), P(18)),
@@ -537,9 +647,13 @@ namespace TelegArm.UI
                             g.DrawLine(p, P(16), r.Y + r.Height / 2, cardW - P(16), r.Y + r.Height / 2);
                         continue;
                     }
-                    if (_hover == i)
-                        using (var hb = new SolidBrush(ThemeHelper.PaletteFor(_dark).DrawerHeaderFill))
+                    float rh = _hoverT[i + 1];
+                    if (rh > 0f)
+                    {
+                        Color hf = ThemeHelper.PaletteFor(_dark).DrawerHeaderFill;
+                        using (var hb = new SolidBrush(rh >= 1f ? hf : ColorMath.WithAlpha(hf, (int)Math.Round(hf.A * rh))))
                             g.FillRectangle(hb, r);
+                    }
 
                     if (row.IsAccount)
                     {
@@ -617,6 +731,7 @@ namespace TelegArm.UI
                 if (disposing)
                 {
                     if (_snap != null) { try { _snap.Dispose(); } catch { } }
+                    EndSlide(false);
                     foreach (var row in _rows) if (row.Avatar != null) { try { row.Avatar.Dispose(); } catch { } }
                 }
                 base.Dispose(disposing);

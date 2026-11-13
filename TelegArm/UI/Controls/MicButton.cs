@@ -21,7 +21,7 @@ namespace TelegArm.UI.Controls
     {
         private const int Side = 40;   // logical px
 
-        private bool _hover;
+        private readonly Fade _hover;   // 0..1: the hover disc fades (Helpers.Anim)
         private int _dpi;                                          // the DPI this button is laid out at; 0 = not parented yet
         private int CurDpi { get { return _dpi > 0 ? _dpi : Dpi.Of(this); } }
 
@@ -30,6 +30,7 @@ namespace TelegArm.UI.Controls
 
         public MicButton()
         {
+            _hover = new Fade(this, AnimKind.Hover, Anim.HoverInMs, Anim.HoverOutMs);
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
                      | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             Size = new Size(Dpi.Px(Side, CurDpi), Dpi.Px(Side, CurDpi));
@@ -60,8 +61,8 @@ namespace TelegArm.UI.Controls
             Invalidate();
         }
 
-        protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }
-        protected override void OnMouseLeave(EventArgs e) { _hover = false; Invalidate(); base.OnMouseLeave(e); }
+        protected override void OnMouseEnter(EventArgs e) { _hover.Set(true); Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { _hover.Set(false); Invalidate(); base.OnMouseLeave(e); }
 
         protected override void OnPaint(PaintEventArgs e)
         {
@@ -90,8 +91,9 @@ namespace TelegArm.UI.Controls
             if (Mode == MicMode.Discard)
             {
                 // Red X — tap to discard the recorded clip.
-                if (_hover)
-                    using (var hb = new SolidBrush(ColorMath.WithAlpha(red, ThemeHelper.Palette.Dark ? 45 : 30)))
+                float dh = _hover.T;
+                if (dh > 0f)
+                    using (var hb = new SolidBrush(ColorMath.WithAlpha(red, (int)Math.Round((ThemeHelper.Palette.Dark ? 45 : 30) * dh))))
                         g.FillEllipse(hb, P(2), P(2), Width - P(4), Height - P(4));
                 using (var pen = new Pen(red, 2.2f * k) { StartCap = LineCap.Round, EndCap = LineCap.Round })
                 {
@@ -103,8 +105,9 @@ namespace TelegArm.UI.Controls
 
             Color glyph = Enabled ? ThemeHelper.Palette.AccentGlyph
                                   : ThemeHelper.Palette.MicGlyphDisabled;
-            if (Enabled && _hover)
-                using (var hb = new SolidBrush(ColorMath.WithAlpha(glyph, ThemeHelper.Palette.Dark ? 45 : 30)))
+            float ht = Enabled ? _hover.T : 0f;
+            if (ht > 0f)
+                using (var hb = new SolidBrush(ColorMath.WithAlpha(glyph, (int)Math.Round((ThemeHelper.Palette.Dark ? 45 : 30) * ht))))
                     g.FillEllipse(hb, P(2), P(2), Width - P(4), Height - P(4));
 
             using (var b = new SolidBrush(glyph))

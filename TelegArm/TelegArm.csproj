@@ -243,6 +243,7 @@
     <Compile Include="Helpers\Dpi.cs" />
     <Compile Include="Helpers\DpiCaches.cs" />
     <Compile Include="Helpers\Platform.cs" />
+    <Compile Include="Helpers\Anim.cs" />
     <Compile Include="Helpers\IDpiAware.cs" />
     <Compile Include="Helpers\DpiScaler.cs" />
     <Compile Include="Helpers\FontCache.cs" />

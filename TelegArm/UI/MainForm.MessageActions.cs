@@ -16,6 +16,9 @@ namespace TelegArm.UI
     {
         // ── Message actions (context menu: copy / reply / delete) ────────────────
 
+        /// <summary>The message menu on the screen now (null when none): what the shot rig reads to check its items.</summary>
+        private ThemedContextMenuStrip _messageMenu;
+
         /// <summary>Builds + shows the per-message context menu (right-click / touch-hold).</summary>
         private void OnBubbleContextMenu(object sender, Point screenPt)
         {
@@ -24,9 +27,27 @@ namespace TelegArm.UI
             Message msg = bubble.MessageId > 0
                 ? _currentChatMessages.FirstOrDefault(x => x.ID == bubble.MessageId)
                 : null;
+            // A GROUP (album), as Telegram Desktop: on one of its items (a photo, a file row) the menu acts on THAT item; on
+            // the rest of the bubble (the caption, the margins) on the whole group. It always acted on the first item before -
+            // Save, Reply or Delete on the third file hit the first (owner 2026-11-13).
+            Message textMsg = null;
+            int[] groupIds = null;
+            if (bubble.IsAlbum)
+            {
+                int capId = bubble.AlbumCaptionMessageId;
+                textMsg = capId != 0 ? _currentChatMessages.FirstOrDefault(x => x.ID == capId) : null;
+                int itemId = bubble.AlbumMessageIdAt(bubble.PointToClient(screenPt));
+                var item = itemId != 0 ? _currentChatMessages.FirstOrDefault(x => x.ID == itemId) : null;
+                if (item != null) msg = item;
+                else
+                {
+                    msg = textMsg ?? msg;
+                    if (bubble.AlbumCount > 1) groupIds = bubble.AlbumMessageIds;
+                }
+            }
             // Retry only applies to a failed optimistic media send (we kept its source).
             var failed = bubble.Failed && _failedSends.ContainsKey(bubble) ? bubble : null;
-            ShowMessageMenu(bubble, msg, screenPt, failed);
+            ShowMessageMenu(bubble, msg, screenPt, failed, textMsg, groupIds);
         }
 
         private void OnVoiceContextMenu(object sender, Point screenPt)
@@ -39,10 +60,15 @@ namespace TelegArm.UI
             ShowMessageMenu(vb, msg, screenPt, null);
         }
 
-        /// <summary>Builds + shows the themed per-message menu shared by message and voice bubbles.</summary>
-        private void ShowMessageMenu(Control ctl, Message msg, Point screenPt, MessageBubbleControl failedBubble)
+        /// <summary>Builds + shows the themed per-message menu shared by message and voice bubbles. For an album:
+        /// <paramref name="textMsg"/> is the item that carries the caption (the text actions use it when <paramref name="msg"/>
+        /// has no text of its own), and <paramref name="groupIds"/> is set when the menu is for the WHOLE group.</summary>
+        private void ShowMessageMenu(Control ctl, Message msg, Point screenPt, MessageBubbleControl failedBubble,
+                                     Message textMsg = null, int[] groupIds = null)
         {
             if (_selectedChat == null) return;
+            // the message the text actions (copy, translate, edit) are about
+            Message tm = msg != null && !string.IsNullOrEmpty(msg.message) ? msg : (textMsg ?? msg);
 
             var menu = new ThemedContextMenuStrip();
             if (failedBubble != null)
@@ -70,7 +96,7 @@ namespace TelegArm.UI
                 });
             else
             {
-                string copyText = msg?.message ?? "";
+                string copyText = tm?.message ?? "";
                 if (!string.IsNullOrEmpty(copyText))
                     AddMenuItem(menu, "⧉   Copy text", () => { try { Clipboard.SetText(copyText); } catch { } });
             }
@@ -89,20 +115,24 @@ namespace TelegArm.UI
                     && (DateTime.UtcNow - msg.date).TotalDays < 7)
                     AddMenuItem(menu, "👁   Seen by…", () => ShowSeenBy(_selectedChat.Peer, msg.ID));
                 // T17: translate (Telegram decides whether it's available to this account)
-                if (!string.IsNullOrWhiteSpace(msg.message))
-                    AddMenuItem(menu, "🌐   Translate", () => TranslateMessage(_selectedChat.Peer, msg.ID));
+                if (!string.IsNullOrWhiteSpace(tm.message))
+                    AddMenuItem(menu, "🌐   Translate", () => TranslateMessage(_selectedChat.Peer, tm.ID));
                 if ((msg.flags & Message.Flags.pinned) != 0)
                     AddMenuItem(menu, "📌   Unpin", () => UnpinMessage(msg));
                 else
                     AddMenuItem(menu, "📌   Pin", () => PinMessage(msg));
-                if (IsOut(msg) && !string.IsNullOrEmpty(msg.message))
-                    AddMenuItem(menu, "✎   Edit", () => StartEdit(msg));
+                if (IsOut(tm) && !string.IsNullOrEmpty(tm.message))
+                    AddMenuItem(menu, "✎   Edit", () => StartEdit(tm));
                 // In selection mode, Forward acts on the whole selection (not just this bubble).
                 if (_selectionMode && _selectedMessageIds.Count > 0)
                     AddMenuItem(menu, "⮕   Forward (" + _selectedMessageIds.Count + ")", () => ForwardSelected());
+                else if (groupIds != null)
+                    AddMenuItem(menu, "⮕   Forward (" + groupIds.Length + ")", () => ForwardMessages(groupIds));
                 else
-                    AddMenuItem(menu, "⮕   Forward", () => ForwardMessage(msg));
-                AddMenuItem(menu, "☑   Select", () => EnterSelectionMode(msg.ID));
+                    AddMenuItem(menu, "⮕   Forward", () => ForwardMessages(new[] { msg.ID }));
+                // selection is per bubble: an album is selected as one (its own id), whichever item was clicked
+                int selectId = ctl is MessageBubbleControl ab && ab.IsAlbum ? ab.MessageId : msg.ID;
+                AddMenuItem(menu, "☑   Select", () => EnterSelectionMode(selectId));
                 // T3: a link to the message (channels and supergroups only: the only chats with message links)
                 var linkChannel = InputChannelOf(msg);
                 if (linkChannel != null)
@@ -110,19 +140,27 @@ namespace TelegArm.UI
                 // T3: report someone else's message (Telegram's own option list)
                 if (!IsOut(msg) && !(_selectedChat.PeerInfo is User su && (su.flags & User.Flags.self) != 0))
                     AddMenuItem(menu, "⚑   Report", () => ReportMessage(_selectedChat.Peer, msg.ID, "", null));
-                if (MediaClassifier.FromMessage(msg) != null)   // any media (photo/video/audio/voice/file/gif/sticker)
+                if (groupIds != null)   // the whole group: every item into the save folder
+                    AddMenuItem(menu, "💾   Save (" + groupIds.Length + ")", () => { var _ = SaveGroupAsync(groupIds); });
+                else if (MediaClassifier.FromMessage(msg) != null)   // any media (photo/video/audio/voice/file/gif/sticker)
                 {
                     AddMenuItem(menu, "💾   Save", () => { var _ = SaveMediaAsync(msg); });
                     AddMenuItem(menu, "📁   Reveal in folder", () => RevealMedia(msg));
                 }
                 var gifDoc = GifDocumentOf(msg);   // T6: keep it in the GIF panel
                 if (gifDoc != null) AddMenuItem(menu, "🎞   Save to GIFs", () => SaveGif(gifDoc));
-                AddMenuItem(menu, "✖   Delete", () => DeleteMessage(ctl, msg));
+                if (groupIds != null) AddMenuItem(menu, "✖   Delete (" + groupIds.Length + ")", () => DeleteMessages(groupIds));
+                else AddMenuItem(menu, "✖   Delete", () => DeleteMessages(new[] { msg.ID }));
             }
 
             if (menu.Items.Count == 0) { menu.Dispose(); return; }
 
-            menu.Closed += (s, e) => BeginInvoke((Action)menu.Dispose);
+            menu.Closed += (s, e) =>
+            {
+                if (ReferenceEquals(_messageMenu, menu)) _messageMenu = null;
+                BeginInvoke((Action)menu.Dispose);
+            };
+            _messageMenu = menu;
             menu.ShowAt(screenPt);
         }
 
@@ -488,27 +526,72 @@ namespace TelegArm.UI
             UpdatePinnedBar();
         }
 
-        private async void DeleteMessage(Control bubble, Message msg)
+        /// <summary>Deletes one message, or a whole group's (the menu on an album's caption), after asking; then takes exactly
+        /// those out of the view (an album loses only the deleted items: <see cref="RemoveMessagesFromView"/>).</summary>
+        private async void DeleteMessages(int[] ids)
         {
+            if (ids == null || ids.Length == 0 || _selectedChat == null) return;
             // 0 = for everyone (revoke), 1 = for me only, 2 = cancel.
-            int choice = ThemedDialog.Show(this, "Delete message",
-                "Delete this message?", "For everyone", "Just for me", "Cancel");
+            int choice = ThemedDialog.Show(this, ids.Length == 1 ? "Delete message" : "Delete messages",
+                ids.Length == 1 ? "Delete this message?" : "Delete these " + ids.Length + " messages?", "For everyone", "Just for me", "Cancel");
             if (choice != 0 && choice != 1) return;
             bool revoke = choice == 0;
+            var chat = _selectedChat;
 
             try
             {
-                await _service.DeleteMessagesAsync(_selectedChat.Peer, new[] { msg.ID }, revoke);
-                _messagePanel.Controls.Remove(bubble);
-                bubble.Dispose();
-                _currentChatMessages.RemoveAll(x => x.ID == msg.ID);
-                _shownMessageIds.Remove(msg.ID);
-                if (_replyTarget != null && _replyTarget.ID == msg.ID) CancelReply();
+                await _service.DeleteMessagesAsync(chat.Peer, ids, revoke);
+                if (!ReferenceEquals(chat, _selectedChat)) return;   // another chat is open by now: its view was built without them
+                RemoveMessagesFromView(new HashSet<int>(ids));
             }
             catch (Exception ex)
             {
                 ThemedDialog.Show(this, "Delete failed", "Couldn't delete: " + ex.Message, "OK");
             }
+        }
+
+        /// <summary>Takes deleted messages out of the OPEN chat's view (our own delete, or one from elsewhere). A bubble goes
+        /// with its message; an ALBUM loses only the deleted items - a tile or a row each - and goes when none is left. One
+        /// deleted photo used to take the whole group off the screen, or (when it was not the first item) nothing at all.
+        /// Returns how many messages were taken out.</summary>
+        private int RemoveMessagesFromView(HashSet<int> ids)
+        {
+            int removed = 0;
+            foreach (var c in _messagePanel.Controls.Cast<Control>().ToArray())
+            {
+                var album = c as MessageBubbleControl;
+                if (album != null && album.IsAlbum)
+                {
+                    int before = removed, key = album.MessageId;
+                    foreach (int id in album.AlbumMessageIds)
+                        if (ids.Contains(id) && album.RemoveAlbumItem(id)) removed++;
+                    if (removed == before) continue;   // untouched
+                    if (album.AlbumCount > 0)          // it still has items
+                    {
+                        if (album.MessageId != key)
+                        {
+                            // it answers to its next item now (its first one went): a selection that held the old id follows
+                            // it, and the reactions under it are that item's (they were the deleted one's)
+                            if (_selectedMessageIds.Remove(key)) _selectedMessageIds.Add(album.MessageId);
+                            var first = _currentChatMessages.FirstOrDefault(x => x.ID == album.MessageId);
+                            if (first != null) album.SetReactions(ExtractReactions(first));
+                        }
+                        continue;
+                    }
+                }
+                else
+                {
+                    int id = BubbleMsgId(c);
+                    if (id == 0 || !ids.Contains(id)) continue;
+                    removed++;
+                }
+                _messagePanel.Controls.Remove(c);
+                c.Dispose();   // MessageBubbleControl.Dispose → _rich.Dispose → text bitmap freed; VoiceBubble cancels its download
+            }
+            _currentChatMessages.RemoveAll(x => ids.Contains(x.ID));
+            foreach (var id in ids) _shownMessageIds.Remove(id);
+            if (_replyTarget != null && ids.Contains(_replyTarget.ID)) CancelReply();
+            return removed;
         }
 
         /// <summary>Re-uploads a previously failed media send, reusing the same (failed) bubble.</summary>
@@ -554,10 +637,11 @@ namespace TelegArm.UI
             }
         }
 
-        /// <summary>Forwards a message to a chat picked from a themed dialog.</summary>
-        private async void ForwardMessage(Message msg)
+        /// <summary>Forwards one message, or a whole group's items together (the menu on an album's caption), to a chat
+        /// picked from a themed dialog.</summary>
+        private async void ForwardMessages(int[] ids)
         {
-            if (_selectedChat == null) return;
+            if (_selectedChat == null || ids == null || ids.Length == 0) return;
 
             List<ChatEntry> targets;
             bool hide, drop;   // T4: the picker's forward options
@@ -566,7 +650,7 @@ namespace TelegArm.UI
                 if (picker.ShowDialog(this) != DialogResult.OK || picker.SelectedChats.Count == 0) return;
                 targets = picker.SelectedChats; hide = picker.HideSender; drop = picker.DropCaptions;   // T4
             }
-            int ok = await ForwardToTargets(_selectedChat.Peer, new[] { msg.ID }, targets, hide, drop);
+            int ok = await ForwardToTargets(_selectedChat.Peer, ids, targets, hide, drop);
             ThemedDialog.Show(this, ok > 0 ? "Forwarded" : "Forward failed", ForwardResultText(ok, targets.Count), "OK");
         }
 
@@ -661,7 +745,16 @@ namespace TelegArm.UI
                 targets = picker.SelectedChats; hide = picker.HideSender; drop = picker.DropCaptions;   // T4
             }
 
-            var ids = _selectedMessageIds.OrderBy(x => x).ToArray();   // chronological order
+            // chronological order; a selected ALBUM goes whole (its bubble is selected by its first item's id, and only that
+            // item used to be forwarded)
+            var all = new HashSet<int>(_selectedMessageIds);
+            foreach (Control c in _messagePanel.Controls)
+            {
+                var ab = c as MessageBubbleControl;
+                if (ab != null && ab.IsAlbum && _selectedMessageIds.Contains(ab.MessageId))
+                    foreach (int id in ab.AlbumMessageIds) all.Add(id);
+            }
+            var ids = all.OrderBy(x => x).ToArray();
             int ok = await ForwardToTargets(_selectedChat.Peer, ids, targets, hide, drop);
             if (ok > 0) ExitSelectionMode();
             ThemedDialog.Show(this, ok > 0 ? "Forwarded" : "Forward failed",

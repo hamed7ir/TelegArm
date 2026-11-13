@@ -34,6 +34,11 @@ namespace TelegArm.UI
 
         private Point? _openAt;   // the screen point ShowAt opens at; consumed by the opening, cleared on Closed
 
+        /// <summary>Owner 2026-11-13 (animations): a menu fades in as it opens. The TRAY menu sets this: it is shown through
+        /// a SetForegroundWindow dance that must not meet a window still at zero opacity.</summary>
+        public bool NoFade { get; set; }
+        private bool _fadeArmed;
+
         static ThemedContextMenuStrip()
         {
             // One renderer for ALL menus + their sub-menus (ManagerRenderMode is the default).
@@ -50,8 +55,36 @@ namespace TelegArm.UI
             // Just before the menu shows: touch-size the rows + give each known action an emoji icon (moving any
             // text-emoji prefix into the icon slot). Centralized here → EVERY themed menu in the app is enhanced.
             // Step 3.1: at the DPI of WHERE it opens (a popup's own monitor), not of the window that owns it.
-            Opening += (s, e) => { Point at = OpenPoint(); _openAt = null; PrepareFor(at); };
+            Opening += (s, e) => { Point at = OpenPoint(); _openAt = null; PrepareFor(at); ArmFade(); };
+            Opened += (s, e) => StartFade();
             Closed += (s, e) => _openAt = null;
+        }
+
+        /// <summary>Before it shows: start from nothing (the window is then created layered). Animations off: fully opaque
+        /// and not layered, exactly as before there were any (also puts back a menu an earlier fade left layered, or a
+        /// cancelled opening left at nothing).</summary>
+        private void ArmFade()
+        {
+            _fadeArmed = !NoFade && Anim.Enabled(AnimKind.Popups);
+            try
+            {
+                if (_fadeArmed) Opacity = 0d;
+                else if (Opacity < 1d) Opacity = 1d;
+            }
+            catch { _fadeArmed = false; }
+        }
+
+        /// <summary>It is on the screen: rise. Ends just under 1 so the layered style stays (taking it off a live window is a
+        /// visible flip). A fade that cannot run lands at once, so a menu is never left invisible.</summary>
+        private void StartFade()
+        {
+            if (!_fadeArmed) return;
+            _fadeArmed = false;
+            Anim.Run(this, AnimKind.Popups, Anim.MenuMs, t =>
+            {
+                if (IsDisposed) return;
+                try { Opacity = t >= 1f ? 0.996d : 0.996d * Anim.EaseOut(t); } catch { }
+            });
         }
 
         /// <summary>Step 3.1 — <see cref="Dpi.Of"/> on the menu (or a control hosted in it) answers the menu's DPI.</summary>

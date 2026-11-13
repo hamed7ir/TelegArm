@@ -19,7 +19,7 @@ namespace TelegArm.UI.Controls
         public enum Glyph { Menu, Close, Back, Minimize, Maximize, Restore, Search, More, Plus, Check }
 
         private Glyph _glyph;
-        private bool _hover, _down;
+        private readonly Fade _hover, _down;   // 0..1: the hover and press colours fade (Helpers.Anim)
 
         public Color BarColor { get; set; } = ThemeHelper.Palette.GlyphButtonBar;
         public Color GlyphColor { get; set; } = Color.Empty;
@@ -41,6 +41,8 @@ namespace TelegArm.UI.Controls
             AccessibleName = NameOf(glyph);
             Cursor = Cursors.Hand;
             TabStop = false;
+            _hover = new Fade(this, AnimKind.Hover, Anim.HoverInMs, Anim.HoverOutMs);
+            _down = new Fade(this, AnimKind.Hover, Anim.PressInMs, Anim.PressOutMs);
         }
 
         private static string NameOf(Glyph g)
@@ -62,19 +64,31 @@ namespace TelegArm.UI.Controls
 
         void IDpiAware.OnDpiChanged(int oldDpi, int newDpi) { Invalidate(); }
 
-        protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }
-        protected override void OnMouseLeave(EventArgs e) { _hover = _down = false; Invalidate(); base.OnMouseLeave(e); }
-        protected override void OnMouseDown(MouseEventArgs e) { if (e.Button == MouseButtons.Left) { _down = true; Invalidate(); } base.OnMouseDown(e); }
-        protected override void OnMouseUp(MouseEventArgs e) { _down = false; Invalidate(); base.OnMouseUp(e); }
+        protected override void OnMouseEnter(EventArgs e) { _hover.Set(true); Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { _hover.Set(false); _down.Set(false); Invalidate(); base.OnMouseLeave(e); }
+        protected override void OnMouseDown(MouseEventArgs e) { if (e.Button == MouseButtons.Left) { _down.Set(true); Invalidate(); } base.OnMouseDown(e); }
+        protected override void OnMouseUp(MouseEventArgs e) { _down.Set(false); Invalidate(); base.OnMouseUp(e); }
 
         protected override void OnPaint(PaintEventArgs e)
         {
             var g = e.Graphics;
             Color bg = BarColor;
             Color fg = GlyphColor.IsEmpty ? ColorMath.OnColor(BarColor) : GlyphColor;
-            if (DangerHover && (_hover || _down)) { bg = _down ? ColorMath.Mix(ThemeHelper.Palette.Danger, Color.Black, 0.15f) : ThemeHelper.Palette.Danger; fg = Color.White; }
-            else if (_down) bg = ColorMath.Mix(BarColor, fg, 0.28f);
-            else if (_hover) bg = ColorMath.Mix(BarColor, fg, 0.16f);
+            // The same colours as before at rest, hovered and pressed (pressed wins), mixed by how far each has come.
+            float ht = _hover.T, dt = _down.T;
+            if (DangerHover && (ht > 0f || dt > 0f))
+            {
+                Color danger = ThemeHelper.Palette.Danger;
+                float any = Math.Max(ht, dt);
+                bg = ColorMath.Mix(ColorMath.Mix(BarColor, danger, any), ColorMath.Mix(danger, Color.Black, 0.15f), dt);
+                fg = ColorMath.Mix(fg, Color.White, any);
+            }
+            else
+            {
+                Color ink = fg;
+                if (ht > 0f) bg = ColorMath.Mix(BarColor, ColorMath.Mix(BarColor, ink, 0.16f), ht);
+                if (dt > 0f) bg = ColorMath.Mix(bg, ColorMath.Mix(BarColor, ink, 0.28f), dt);
+            }
             using (var b = new SolidBrush(bg)) g.FillRectangle(b, ClientRectangle);
 
             int dpi = Dpi.Of(this);

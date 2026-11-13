@@ -408,6 +408,21 @@ namespace TelegArm.UI
         /// the bottom if the view was at the bottom, so a card popping in on the newest message stays visible).</summary>
         private void RebuildBubble(int messageId, Message msg)
         {
+            // A GROUP is one bubble for several messages. An edit of one of them (its caption) changes the caption in place:
+            // rebuilding from that one message left only IT on the screen (the first item), or changed nothing (any other
+            // item: the bubble answers to its first). Review 2026-11-13.
+            foreach (var album in _messagePanel.Controls.OfType<MessageBubbleControl>())
+            {
+                if (!album.IsAlbum || !album.ContainsMessageId(messageId)) continue;
+                bool hasText = !string.IsNullOrEmpty(msg.message);
+                if (album.AlbumCaptionMessageId == messageId || (album.AlbumCaptionMessageId == 0 && hasText))
+                {
+                    album.AlbumCaptionMessageId = hasText ? messageId : 0;
+                    album.SetCaption(msg.message ?? "", msg.entities);   // measures and repaints; the link handlers are already wired
+                }
+                if (album.MessageId == messageId) album.SetReactions(ExtractReactions(msg));
+                return;
+            }
             for (int i = 0; i < _messagePanel.Controls.Count; i++)
             {
                 if (_messagePanel.Controls[i] is MessageBubbleControl old && old.MessageId == messageId)
@@ -451,6 +466,7 @@ namespace TelegArm.UI
             picker.Picked += InsertEmoji;
             picker.DocumentPicked += SendDocument;
             picker.Location = new Point(p.X - picker.Width + _emojiButton.Width, p.Y - picker.Height - Dpi.Px(4, dpi)); // above the button (logical gap at the popup's DPI)
+            Anim.FadeIn(picker, Anim.PopupMs);
             try { picker.Show(this); picker.Activate(); }
             catch (ObjectDisposedException) { Logger.Diag("[EMOJI] the picker closed while it opened"); }   // RT trip 2026-10-16
         }

@@ -428,7 +428,8 @@ namespace TelegArm.UI.Controls
     public sealed class ToggleRow : SettingRow
     {
         private const int TrackW = 46, TrackH = 24, KnobInset = 3, Gap = 12;
-        private bool _on;
+        private bool _on;                 // the truth: On, Changed and accessibility never wait for the knob
+        private readonly Fade _pos;       // where the knob is drawn, 0 (off) .. 1 (on)
 
         /// <summary>Raised when <see cref="On"/> changes, by the user or by code.</summary>
         public event EventHandler Changed;
@@ -436,6 +437,7 @@ namespace TelegArm.UI.Controls
         public ToggleRow(string caption, bool on = false) : base(caption, true)
         {
             _on = on;
+            _pos = new Fade(this, AnimKind.Toggles, Anim.ToggleMs, Anim.ToggleMs, null, on);
             AccessibleRole = AccessibleRole.CheckButton;
             Refit();
         }
@@ -447,6 +449,7 @@ namespace TelegArm.UI.Controls
             {
                 if (_on == value) return;
                 _on = value;
+                _pos.Set(value);   // slides when it is on the screen and animations are on; else it is there at once
                 Invalidate();
                 var h = Changed;
                 if (h != null) h(this, EventArgs.Empty);
@@ -497,15 +500,16 @@ namespace TelegArm.UI.Controls
 
             // Off track: the backdrop leaned toward the text ink, so it is a quiet grey on a light card and a lighter
             // well on a dark one (DF's two literals, derived from tokens instead).
-            Color track = _on ? p.Accent : ColorMath.Mix(back, p.Text, p.Dark ? 0.22f : 0.20f);
-            Color knob = _on ? p.OnAccent : Color.White;
+            float t = Anim.EaseInOut(_pos.T);   // exactly 0 or 1 at rest: the same pixels as before
+            Color track = ColorMath.Mix(ColorMath.Mix(back, p.Text, p.Dark ? 0.22f : 0.20f), p.Accent, t);
+            Color knob = ColorMath.Mix(Color.White, p.OnAccent, t);
             if (!Enabled) { track = ColorMath.Mix(track, back, 0.55f); knob = ColorMath.Mix(knob, back, 0.35f); }
 
             using (var b = new SolidBrush(track))
             using (var path = DrawHelper.RoundedRect(tr, tr.Height / 2))
                 g.FillPath(b, path);
             int inset = Dpi.Px(KnobInset, dpi), d = tr.Height - 2 * inset;
-            int kx = _on ? tr.Right - d - inset : tr.X + inset;
+            int kx = Anim.Lerp(tr.X + inset, tr.Right - d - inset, t);
             using (var kb = new SolidBrush(knob))
                 g.FillEllipse(kb, new Rectangle(kx, tr.Y + inset, d, d));
 

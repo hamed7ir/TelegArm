@@ -91,6 +91,7 @@ namespace TelegArm.UI
                 Dpi.ForPopup(new Point(Math.Max(wa.Left, Math.Min(at.X - 1, wa.Right - 1)), Math.Max(wa.Top, Math.Min(at.Y, wa.Bottom - 1)))));
             p.Location = new Point(Math.Max(wa.Left, Math.Min(at.X - p.Width, wa.Right - p.Width)),
                                    Math.Max(wa.Top, Math.Min(at.Y, wa.Bottom - p.Height)));
+            Anim.FadeIn(p, Anim.PopupMs);
             try { p.Show(this); }   // borderless popup; closes on Deactivate/Esc (rows unsubscribe on close)
             catch (ObjectDisposedException) { Logger.Diag("[DL] the downloads panel closed while it opened"); }   // RT trip 2026-10-16
         }
@@ -116,14 +117,49 @@ namespace TelegArm.UI
             if (string.IsNullOrEmpty(full) || !File.Exists(full)) { ThemedDialog.Show(this, "Save", "Couldn't download this item — try again.", "OK"); return; }
             try
             {
-                string folder = MediaCache.EnsureFolder(AppSettings.Instance.DefaultSaveFolder);
-                string target = DedupPath(folder, SaveFileName(mi, full));
-                File.Copy(full, target, false);   // COPY (the cache keeps its copy); never overwrite (de-duped)
-                _lastSavedPaths[mi.Id] = target;
-                System.Diagnostics.Debug.WriteLine("[SAVE] saved to " + target);
+                string target = CopyToSaveFolder(mi, full);
                 ThemedDialog.Show(this, "Saved", "Saved to:\n" + target, "OK");
             }
             catch (Exception ex) { ThemedDialog.Show(this, "Save", "Save failed: " + ex.Message, "OK"); }
+        }
+
+        /// <summary>Copies a downloaded item into the save folder under its own name (never over an existing file); the copy's path.</summary>
+        private string CopyToSaveFolder(MediaItem mi, string full)
+        {
+            string folder = MediaCache.EnsureFolder(AppSettings.Instance.DefaultSaveFolder);
+            string target = DedupPath(folder, SaveFileName(mi, full));
+            File.Copy(full, target, false);   // COPY (the cache keeps its copy); never overwrite (de-duped)
+            _lastSavedPaths[mi.Id] = target;
+            System.Diagnostics.Debug.WriteLine("[SAVE] saved to " + target);
+            return target;
+        }
+
+        /// <summary>"Save (N)" on a whole group: every item, one after the other, then one message saying where they went.</summary>
+        private async System.Threading.Tasks.Task SaveGroupAsync(int[] ids)
+        {
+            int saved = 0;
+            string folder = null, lastError = null;
+            // The messages and the chat as they are NOW: the downloads take a while, and another chat opened meanwhile
+            // would answer none of these ids (and lend its peer to the downloads still to start). Review 2026-11-13.
+            var chat = _selectedChat;
+            var msgs = ids.Select(id => _currentChatMessages.FirstOrDefault(x => x.ID == id)).Where(x => x != null).ToList();
+            foreach (var msg in msgs)
+            {
+                if (!ReferenceEquals(chat, _selectedChat)) { lastError = "stopped: another chat was opened"; break; }
+                var mi = MediaClassifier.FromMessage(msg);
+                if (mi == null) continue;
+                try
+                {
+                    string full = await EnsureFullMediaAsync(msg, mi);
+                    if (string.IsNullOrEmpty(full) || !File.Exists(full)) { lastError = "one item couldn't be downloaded"; continue; }
+                    folder = Path.GetDirectoryName(CopyToSaveFolder(mi, full));
+                    saved++;
+                }
+                catch (Exception ex) { lastError = ex.Message; }
+            }
+            if (IsDisposed) return;
+            if (saved == 0) ThemedDialog.Show(this, "Save", "Nothing was saved" + (lastError != null ? ": " + lastError : "."), "OK");
+            else ThemedDialog.Show(this, "Saved", "Saved " + saved + " of " + ids.Length + " to:\n" + folder + (lastError != null ? "\n\n(" + lastError + ")" : ""), "OK");
         }
 
         private static string SaveFileName(MediaItem mi, string fullPath)
@@ -454,7 +490,7 @@ namespace TelegArm.UI
                     ConfigureAlbumAudio(album, m);   // → renders this item as an audio ROW (if it's audio)
                     ConfigureAlbumFile(album, m);    // → or as a file ROW (if it's a plain file)
                     // The caption lives on exactly ONE grouped item — may be a LATER one. First non-empty wins.
-                    if (!album.AlbumHasCaption && !string.IsNullOrEmpty(m.message)) album.SetCaption(m.message, m.entities);
+                    if (!album.AlbumHasCaption && !string.IsNullOrEmpty(m.message)) { album.SetCaption(m.message, m.entities); album.AlbumCaptionMessageId = m.ID; }
                     return 1;
                 }
                 return 2;
@@ -471,7 +507,7 @@ namespace TelegArm.UI
             ApplyReactions(bubble, m);
             ApplyEntities(bubble, m);   // wires the caption's link/mention router + custom-emoji resolver
             SetReply(bubble, m);        // edited / forward / reply on the album
-            if (!string.IsNullOrEmpty(m.message)) bubble.SetCaption(m.message, m.entities);   // caption on the first item
+            if (!string.IsNullOrEmpty(m.message)) { bubble.SetCaption(m.message, m.entities); bubble.AlbumCaptionMessageId = m.ID; }   // caption on the first item
             StartAlbumTileLoad(bubble, m);
             ConfigureAlbumAudio(bubble, m);   // → renders the first item as an audio ROW (if it's audio)
             ConfigureAlbumFile(bubble, m);    // → or as a file ROW (if it's a plain file)

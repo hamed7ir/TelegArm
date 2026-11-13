@@ -29,12 +29,14 @@ namespace TelegArm.UI.Controls
     {
         private const int Side = 40;   // logical px — identical to MicButton
 
-        private bool _hover, _pressed;
+        private readonly Fade _hover, _pressed;   // 0..1: the hover and press colours fade (Helpers.Anim)
         private int _dpi;                                          // the DPI this button is laid out at; 0 = not parented yet
         private int CurDpi { get { return _dpi > 0 ? _dpi : Dpi.Of(this); } }
 
         public SendButton()
         {
+            _hover = new Fade(this, AnimKind.Hover, Anim.HoverInMs, Anim.HoverOutMs);
+            _pressed = new Fade(this, AnimKind.Hover, Anim.PressInMs, Anim.PressOutMs);
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
                      | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             Size = new Size(Dpi.Px(Side, CurDpi), Dpi.Px(Side, CurDpi));   // identical to MicButton
@@ -80,10 +82,10 @@ namespace TelegArm.UI.Controls
             Invalidate();
         }
 
-        protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }
-        protected override void OnMouseLeave(EventArgs e) { _hover = false; _pressed = false; Invalidate(); base.OnMouseLeave(e); }
-        protected override void OnMouseDown(MouseEventArgs e) { _pressed = true; Invalidate(); base.OnMouseDown(e); }
-        protected override void OnMouseUp(MouseEventArgs e) { _pressed = false; Invalidate(); base.OnMouseUp(e); }
+        protected override void OnMouseEnter(EventArgs e) { _hover.Set(true); Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { _hover.Set(false); _pressed.Set(false); Invalidate(); base.OnMouseLeave(e); }
+        protected override void OnMouseDown(MouseEventArgs e) { _pressed.Set(true); Invalidate(); base.OnMouseDown(e); }
+        protected override void OnMouseUp(MouseEventArgs e) { _pressed.Set(false); Invalidate(); base.OnMouseUp(e); }
         protected override void OnEnabledChanged(EventArgs e) { Invalidate(); base.OnEnabledChanged(e); }
 
         /// <summary>Step 5.9: the composer bar's colour as before — or the window backdrop when it is on.</summary>
@@ -122,7 +124,7 @@ namespace TelegArm.UI.Controls
             }
 
             // Pressed darkens, hover lightens — the same two-state feedback the other composer buttons give.
-            Color fill = _pressed ? Darken(accent, 0.82f) : _hover ? Lighten(accent, 0.12f) : accent;
+            Color fill = ColorMath.Mix(ColorMath.Mix(accent, Lighten(accent, 0.12f), _hover.T), Darken(accent, 0.82f), _pressed.T);
             using (var b = new SolidBrush(fill)) g.FillEllipse(b, disc);
             DrawPlane(g, disc, ThemeHelper.Palette.OnAccent, k);   // step 5.1: dark ink on a light accent (was white)
         }

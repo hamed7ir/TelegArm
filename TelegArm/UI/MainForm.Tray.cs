@@ -117,7 +117,7 @@ namespace TelegArm.UI
             _trayIconNormal = TryLoadIcon("trayicon.ico");           // distinct from official Telegram; deployed beside the exe
             _trayIconUnread = TryLoadIcon("trayicon-unread.ico");    // shown while any chat has unread
 
-            _trayMenu = new ThemedContextMenuStrip();
+            _trayMenu = new ThemedContextMenuStrip { NoFade = true };   // shown through the SetForegroundWindow dance below: no fade
             AddMenuItem(_trayMenu, "Open TelegArm", RestoreFromTray);
             _trayMenu.Items.Add(new ToolStripSeparator());
             AddMenuItem(_trayMenu, "Exit", ExitApp);

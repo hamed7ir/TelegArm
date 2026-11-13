@@ -65,6 +65,7 @@ namespace TelegArm.Helpers
             _log.AppendLine();
             string live = null;
             try { live = Environment.GetEnvironmentVariable("TELEGARM_LIVE"); } catch { }
+            Anim.Suppressed = true;   // every animation lands at once: a screenshot must never catch a popup half faded
             if (live == "1") return RunLive(dir);
             if (live == "placement") return RunLivePlacement(dir);
             if (live == "keys") return RunLiveKeys(dir);
@@ -75,6 +76,8 @@ namespace TelegArm.Helpers
             if (live == "calltest") return RunLiveCallTest(dir);
             if (live == "backdrop") return RunLiveBackdrop(dir);
             if (live == "teaser") return RunLiveTeaser(dir);
+            if (live == "anim") return RunLiveAnim(dir);
+            if (live == "resize") return RunLiveResize(dir);
 
             foreach (var mode in new[] { ThemeMode.Light, ThemeMode.Dark })
             {
@@ -1185,6 +1188,506 @@ namespace TelegArm.Helpers
             }
         }
 
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+        /// <summary>TELEGARM_LIVE=resize (owner 2026-11-13: "resizing windows should become smooth"): a chat of 200 more
+        /// messages, the window dragged narrower and wider in steps as a live resize (WM_ENTERSIZEMOVE .. WM_EXITSIZEMOVE),
+        /// every step timed: the synchronous part (layout and measure) and the paints after it. Then the end state is
+        /// compared with a full re-measure at the same width (a resize must end exactly where a plain layout would), and
+        /// the reading position must have been kept: the bottom stays the bottom, a message in the middle stays in view.</summary>
+        private static int RunLiveResize(string dir)
+        {
+            ThemeHelper.InitMode(ThemeMode.Light);
+            MainForm.DemoNoSession = true;
+            if (Environment.GetEnvironmentVariable("TELEGARM_COMPOSITED") == "0") AppSettings.Instance.CompositedScroll = false;   // A/B, in memory
+            MainForm f = null;
+            try
+            {
+                f = new MainForm(new TelegramService());
+                var wa = Screen.PrimaryScreen.WorkingArea;
+                f.StartPosition = FormStartPosition.Manual;
+                int dpi = f.WindowDpiValue;
+                f.Bounds = new Rectangle(wa.Left + 40, wa.Top + 40, Math.Min(wa.Width - 80, 1100 * dpi / 96), Math.Min(wa.Height - 80, 720 * dpi / 96));
+                f.TopMost = true;
+                f.Show();
+                LivePump(1200);
+                SeedChatList(f);
+                OpenDemoChat(f);
+                LivePump(400);
+                var chatMsgs = (IList)Field(f, "_currentChatMessages");
+                var panel = (ScrollableControl)Field(f, "_messagePanel");
+                var rnd = new Random(7);
+                string[] words = "the window gets narrower and every bubble has to wrap its text again which is the cost of a live resize on a slow tablet so this chat is long".Split(' ');
+                int extra = 200;   // TELEGARM_RESIZE_N=50: a chat as it is first loaded
+                try { int v; if (int.TryParse(Environment.GetEnvironmentVariable("TELEGARM_RESIZE_N"), out v) && v > 0) extra = v; } catch { }
+                panel.SuspendLayout();
+                for (int i = 0; i < extra; i++)
+                {
+                    int n = 2 + rnd.Next(i % 9 == 0 ? 90 : 26);
+                    var sb = new StringBuilder();
+                    for (int k = 0; k < n; k++) sb.Append(words[rnd.Next(words.Length)]).Append(' ');
+                    string text = i % 11 == 5 ? "\u0633\u0644\u0627\u0645\u060C \u0627\u06CC\u0646 \u06CC\u06A9 \u067E\u06CC\u0627\u0645 \u0641\u0627\u0631\u0633\u06CC \u0627\u0633\u062A \u06A9\u0647 \u0628\u0627\u06CC\u062F \u062F\u0631 \u0686\u0646\u062F \u062E\u0637 \u0634\u06A9\u0633\u062A\u0647 \u0634\u0648\u062F \u0648\u0642\u062A\u06CC \u067E\u0646\u062C\u0631\u0647 \u0628\u0627\u0631\u06CC\u06A9 \u0645\u06CC\u200C\u0634\u0648\u062F"
+                                              : sb.ToString().Trim();
+                    var m = new TL.Message
+                    {
+                        id = 20000 + i, date = DateTime.UtcNow.AddMinutes(-400 + i), peer_id = new TL.PeerUser { user_id = AdaId }, message = text,
+                        flags = i % 3 == 0 ? TL.Message.Flags.out_ : 0,
+                    };
+                    chatMsgs.Add(m);
+                    Invoke(f, "AddMessageBubble", Field(f, "_selectedChat"), m, null, null);
+                }
+                panel.ResumeLayout(true);
+                Invoke(f, "ScrollMessagesToBottom");
+                LivePump(800);
+                int count = panel.Controls.Count;
+                _log.AppendLine("  " + count + " bubbles in the chat, window " + f.Width + "x" + f.Height + " at " + dpi + " dpi");
+
+                Func<List<double>, string> stat = v => v.Count == 0 ? "-" : v.Average().ToString("0.0") + " ms avg, " + v.Max().ToString("0.0") + " ms worst";
+                Func<int> bottomGap = () => panel.DisplayRectangle.Height + panel.AutoScrollPosition.Y - panel.ClientSize.Height;   // 0 = at the very bottom
+                // one drag: 25 steps narrower, 15 wider. Each step: the synchronous part (WM_SIZE: layout and measure), then
+                // the paints it caused.
+                int midGap = 0, midStale = 0, midReadingTop = 0;
+                Control watched = null;   // the message being read (the middle-of-the-chat drag sets it)
+                Func<int, string> drag = stepPx =>
+                {
+                    var sync = new List<double>(); var paint = new List<double>();
+                    int w0 = f.Width;
+                    var sw = new System.Diagnostics.Stopwatch();
+                    SendMessage(f.Handle, 0x0231, IntPtr.Zero, IntPtr.Zero);   // WM_ENTERSIZEMOVE
+                    for (int pass = 0; pass < 2; pass++)
+                        for (int i = 0; i < (pass == 0 ? 25 : 15); i++)   // 25 steps narrower, 15 wider: it ends at ANOTHER width than it began
+                        {
+                            int w = pass == 0 ? w0 - (i + 1) * stepPx : w0 - 25 * stepPx + (i + 1) * stepPx;
+                            sw.Restart();
+                            f.Width = w;
+                            sync.Add(sw.Elapsed.TotalMilliseconds);
+                            sw.Restart();
+                            Application.DoEvents();
+                            paint.Add(sw.Elapsed.TotalMilliseconds);
+                            if (pass == 0 && i == 24)   // the narrowest point, still dragging
+                            {
+                                midGap = bottomGap();
+                                midStale = panel.Controls.OfType<UI.Controls.MessageBubbleControl>().Count(b => b.MeasuredAtWidth != b.Width);
+                                midReadingTop = watched != null ? watched.Top : 0;
+                                LiveShot(f, "resize-narrowest-" + (watched == null ? "bottom" : "middle"));
+                            }
+                        }
+                    sw.Restart();
+                    SendMessage(f.Handle, 0x0232, IntPtr.Zero, IntPtr.Zero);   // WM_EXITSIZEMOVE
+                    double exit = sw.Elapsed.TotalMilliseconds;
+                    sw.Restart();
+                    LivePump(700);   // anything deferred to the end of the drag
+                    return "layout " + stat(sync) + "; paint " + stat(paint) + "; per step " + (sync.Average() + paint.Average()).ToString("0.0") + " ms; the end of the drag " + exit.ToString("0.0") + " ms";
+                };
+                Func<List<Rectangle>> boundsNow = () => panel.Controls.Cast<Control>().Select(c => c.Bounds).ToList();
+
+                // TELEGARM_PROF=1: where a drag step spends its time. A second thread stops this one every few ms and reads its
+                // stack (dev rig only: Thread.Suspend is what it takes); a method's count = samples with it anywhere on the stack.
+                if (Environment.GetEnvironmentVariable("TELEGARM_PROF") == "1")
+                {
+                    var ui = System.Threading.Thread.CurrentThread;
+                    var hits = new Dictionary<string, int>();
+                    var leafSync = new Dictionary<string, int>(); var leafPaint = new Dictionary<string, int>();
+                    int samples = 0; bool stop = false;
+                    var sampler = new System.Threading.Thread(() =>
+                    {
+                        while (!stop)
+                        {
+                            System.Diagnostics.StackTrace st = null;
+#pragma warning disable 618
+                            try { ui.Suspend(); st = new System.Diagnostics.StackTrace(ui, false); }
+                            catch { }
+                            finally { try { ui.Resume(); } catch { } }
+#pragma warning restore 618
+                            if (st != null)
+                            {
+                                samples++;
+                                var seen = new HashSet<string>();
+                                var names = new List<string>();
+                                foreach (var fr in st.GetFrames() ?? new System.Diagnostics.StackFrame[0])
+                                {
+                                    var mb = fr.GetMethod();
+                                    if (mb == null || mb.DeclaringType == null) continue;
+                                    string name = mb.DeclaringType.Name + "." + mb.Name;
+                                    names.Add(name);
+                                    if (seen.Add(name)) { int n; hits.TryGetValue(name, out n); hits[name] = n + 1; }
+                                }
+                                // the innermost 4 frames, for the samples inside the resize (sync) and inside a paint
+                                string leaf = string.Join(" < ", names.Take(4));
+                                var into = seen.Contains("Form.SetBoundsCore") ? leafSync : seen.Contains("Control.WmPaint") ? leafPaint : null;
+                                if (into != null) { int n; into.TryGetValue(leaf, out n); into[leaf] = n + 1; }
+                            }
+                            System.Threading.Thread.Sleep(1);
+                        }
+                    }) { IsBackground = true };
+                    sampler.Start();
+                    string prof = drag(Dpi.Px(12, dpi));
+                    stop = true; sampler.Join(2000);
+                    _log.AppendLine("  info  profiled drag: " + prof + "; " + samples + " samples");
+                    foreach (var kv in hits.OrderByDescending(k => k.Value).Take(40))
+                        _log.AppendLine("    " + (100.0 * kv.Value / Math.Max(1, samples)).ToString("0.0").PadLeft(5) + "%  " + kv.Key);
+                    _log.AppendLine("  info  innermost frames while RESIZING (" + leafSync.Values.Sum() + " samples):");
+                    foreach (var kv in leafSync.OrderByDescending(k => k.Value).Take(28)) _log.AppendLine("    " + kv.Value.ToString().PadLeft(4) + "  " + kv.Key);
+                    _log.AppendLine("  info  innermost frames while PAINTING (" + leafPaint.Values.Sum() + " samples):");
+                    foreach (var kv in leafPaint.OrderByDescending(k => k.Value).Take(22)) _log.AppendLine("    " + kv.Value.ToString().PadLeft(4) + "  " + kv.Key);
+                    File.WriteAllText(Path.Combine(_dir, "shots.txt"), _log.ToString());
+                    return 0;
+                }
+
+                // at the bottom of the chat (where a chat is read): it must stay the bottom
+                string atBottom = drag(Dpi.Px(12, dpi));
+                int gapAfter = bottomGap();
+                _log.AppendLine("  info  drag at the bottom: " + atBottom);
+                // the end state against a plain full layout at the same width
+                var after = boundsNow();
+                int scrollAfter = panel.AutoScrollPosition.Y;
+                foreach (Control c in panel.Controls) { var b = c as UI.Controls.MessageBubbleControl; if (b != null) b.Measure(); }
+                panel.PerformLayout();
+                panel.AutoScrollPosition = new Point(0, -scrollAfter);
+                var reference = boundsNow();
+                int differ = 0;
+                for (int i = 0; i < after.Count; i++) if (after[i] != reference[i]) differ++;
+                bool same = differ == 0;
+                _log.AppendLine("  " + (same ? "PASS  " : "FAIL  ") + "after the drag every bubble is exactly where a plain layout puts it (" + differ + " of " + after.Count + " differ)");
+                if (!same) _failures++;
+                bool stayed = gapAfter <= Dpi.Px(4, dpi) && midGap <= Dpi.Px(4, dpi);
+                _log.AppendLine("  " + (stayed ? "PASS  " : "FAIL  ") + "the bottom of the chat stays the bottom through the drag (" + midGap + " px from it at the narrowest point, "
+                    + gapAfter + " px after; " + midStale + " of " + count + " bubbles waited for the end of the drag)");
+                if (!stayed) _failures++;
+                LiveShot(f, "resize-after-bottom");
+
+                // in the middle of the chat: the message being read stays in view
+                panel.AutoScrollPosition = new Point(0, panel.DisplayRectangle.Height / 2);
+                LivePump(300);
+                var reading = panel.Controls.Cast<Control>().Where(c => c.Bottom > Dpi.Px(8, dpi)).OrderBy(c => c.Top).First();
+                int readingTop = reading.Top;
+                watched = reading;
+                string inMiddle = drag(Dpi.Px(12, dpi));
+                _log.AppendLine("  info  drag in the middle: " + inMiddle);
+                int moved = Math.Abs(reading.Top - readingTop), movedMid = Math.Abs(midReadingTop - readingTop);
+                bool kept = moved <= Dpi.Px(2, dpi) && movedMid <= Dpi.Px(2, dpi);
+                _log.AppendLine("  " + (kept ? "PASS  " : "FAIL  ") + "in the middle of the chat the message at the top of the view stays there (it moved " + movedMid
+                    + " px at the narrowest point, " + moved + " px after; " + midStale + " bubbles waited)");
+                if (!kept) _failures++;
+                var after2 = boundsNow();
+                int scroll2 = panel.AutoScrollPosition.Y;
+                foreach (Control c in panel.Controls) { var b = c as UI.Controls.MessageBubbleControl; if (b != null) b.Measure(); }
+                panel.PerformLayout();
+                panel.AutoScrollPosition = new Point(0, -scroll2);
+                var reference2 = boundsNow();
+                int differ2 = 0;
+                for (int i = 0; i < after2.Count; i++) if (after2[i] != reference2[i]) differ2++;
+                _log.AppendLine("  " + (differ2 == 0 ? "PASS  " : "FAIL  ") + "and again every bubble is where a plain layout puts it (" + differ2 + " differ)");
+                if (differ2 != 0) _failures++;
+
+                // a resize with no drag around it (maximise, snap, a DPI change): done in full at once
+                int wNow = f.Width;
+                f.Width = wNow - Dpi.Px(90, dpi);
+                var plain = boundsNow();
+                foreach (Control c in panel.Controls) { var b = c as UI.Controls.MessageBubbleControl; if (b != null) b.Measure(); }
+                panel.PerformLayout();
+                var plainRef = boundsNow();
+                int differ3 = 0;
+                for (int i = 0; i < plain.Count; i++) if (plain[i].Size != plainRef[i].Size) differ3++;
+                _log.AppendLine("  " + (differ3 == 0 ? "PASS  " : "FAIL  ") + "a resize outside a drag measures every bubble at once (" + differ3 + " sizes differ)");
+                if (differ3 != 0) _failures++;
+                f.Width = wNow;
+                LivePump(300);
+            }
+            catch (Exception ex) { Fail("live-resize", ex); }
+            finally { if (f != null) { try { f.Close(); } catch { } try { f.Dispose(); } catch { } } }
+            File.WriteAllText(Path.Combine(_dir, "shots.txt"), _log.ToString());
+            return _failures == 0 ? 0 : 1;
+        }
+
+        /// <summary>TELEGARM_LIVE=anim (owner 2026-11-13, animations): the ONE rig where the animations really run (every
+        /// other rig suppresses them), sampled value by value: a switch slides, a chat row's hover fades in and out, the
+        /// drawer slides in and out as one frame, a menu and the popups fade in; the clock stops when nothing moves; and each
+        /// off switch makes its animation instant. Frame times are the clock's own. TELEGARM_ARM32=1 runs it at the
+        /// Surface's frame interval (not its speed).</summary>
+        private static int RunLiveAnim(string dir)
+        {
+            ThemeHelper.InitMode(ThemeMode.Light);
+            MainForm.DemoNoSession = true;
+            MainForm f = null;
+            SettingsForm st = null;
+            try
+            {
+                f = new MainForm(new TelegramService());
+                var wa = Screen.PrimaryScreen.WorkingArea;
+                f.StartPosition = FormStartPosition.Manual;
+                f.Bounds = new Rectangle(wa.Left + wa.Width / 10, wa.Top + wa.Height / 12, wa.Width * 7 / 10, wa.Height * 3 / 4);
+                f.TopMost = true;
+                f.Show();
+                LivePump(1200);
+                SeedChatList(f);
+                OpenDemoChat(f);
+                LivePump(600);
+
+                Anim.Suppressed = false;
+                bool winOn = Anim.SystemAnimationsOn;
+                _log.AppendLine("  frame interval " + Anim.FrameMs + " ms" + (Platform.IsArm32 ? " (the ARM32 rate)" : "")
+                                + "; Windows' own animations setting: " + (winOn ? "on" : "OFF"));
+                // Windows' setting off (this dev box, 2026-11-13): nothing moves until "Also when Windows has animations off"
+                // is on. Proven first, then turned on (in memory: the data root is the rig's own) so the rest can run.
+                if (!winOn)
+                {
+                    bool held = !Anim.Enabled(AnimKind.Hover) && !Anim.Enabled(AnimKind.Popups);
+                    AppSettings.Instance.AnimateDespiteSystem = true;
+                    bool released = Anim.Enabled(AnimKind.Hover) && Anim.Enabled(AnimKind.Popups);
+                    _log.AppendLine("  " + (held && released ? "PASS  " : "FAIL  ") + "Windows has animations off: nothing runs, until \"Also when Windows has animations off\" is on");
+                    if (!(held && released)) _failures++;
+                }
+                // pumps messages for ms with NO sleep (every timer tick is taken when it is due) and records each new value
+                Func<int, Func<double>, List<double>> watch = (ms, read) =>
+                {
+                    var seen = new List<double>();
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    while (sw.ElapsedMilliseconds < ms)
+                    {
+                        Application.DoEvents();
+                        double v = read();
+                        if (seen.Count == 0 || !seen[seen.Count - 1].Equals(v)) seen.Add(v);
+                    }
+                    return seen;
+                };
+                Func<List<double>, int, bool> oneWay = (s, sign) => { for (int i = 1; i < s.Count; i++) if ((s[i] - s[i - 1]) * sign < 0) return false; return true; };
+                Func<string> clock = () =>
+                {
+                    int n; float total, worst;
+                    Anim.ReadStats(out n, out total, out worst);
+                    return n + " frames, " + (n > 0 ? (total / n).ToString("0.0") : "-") + " ms each, longest " + worst.ToString("0.0") + " ms [" + Anim.GapsText() + "]";
+                };
+                Action<bool, string> check = (ok, what) => { _log.AppendLine("  " + (ok ? "PASS  " : "FAIL  ") + what); if (!ok) _failures++; };
+                Func<List<double>, string> ends = s => s.Count + " values, " + s[0].ToString("0.00") + " to " + s[s.Count - 1].ToString("0.00");
+                int few = Platform.IsArm32 ? 3 : 4;   // the fewest values a 90-120 ms animation must be seen at (half the frames at the ARM rate)
+                Action<Rectangle, string> grab = (area, name) =>
+                {
+                    area.Intersect(Screen.FromControl(f).Bounds);
+                    if (area.Width <= 0 || area.Height <= 0) return;
+                    using (var bmp = new Bitmap(area.Width, area.Height))
+                    {
+                        using (var g = Graphics.FromImage(bmp)) g.CopyFromScreen(area.Location, Point.Empty, area.Size);
+                        bmp.Save(Path.Combine(_dir, name + ".png"), ImageFormat.Png);
+                    }
+                };
+
+                // 1. a switch slides (Settings, Appearance, the Animations section)
+                st = new SettingsForm { StartPosition = FormStartPosition.Manual, TopMost = true };
+                st.Show(f);
+                st.Location = new Point(f.Left + (f.Width - st.Width) / 2, f.Top + (f.Height - st.Height) / 2);
+                Invoke(st, "ShowPage", 1);
+                LivePump(500);
+                var toggles = new List<UI.Controls.ToggleRow>();
+                Action<Control> findT = null;
+                findT = c => { foreach (Control k in c.Controls) { var tr = k as UI.Controls.ToggleRow; if (tr != null) toggles.Add(tr); findT(k); } };
+                findT(st);
+                var master = toggles.FirstOrDefault(t => t.Text == "Animations");
+                var sw1 = toggles.FirstOrDefault(t => t.Text == "Buttons and rows fade on hover");
+                check(master != null && sw1 != null && toggles.Count(t => t.Text == "Switches slide" || t.Text == "The menu slides in" || t.Text == "Popups and menus fade in") == 3,
+                      "Settings, Appearance has the Animations switch and one switch per animation");
+                for (Control c = sw1; c != null; c = c.Parent)
+                {
+                    var sc = c as ScrollableControl;
+                    if (sc != null && sc.AutoScroll) { sc.ScrollControlIntoView(sw1); break; }
+                }
+                LivePump(300);
+                var pos = (Fade)Field(sw1, "_pos");
+                Anim.ResetStats();
+                sw1.On = false;
+                var offS = watch(450, () => pos.T);
+                bool slidOff = !sw1.On && offS.Count >= few && offS[0] > 0.5 && offS[offS.Count - 1] == 0 && oneWay(offS, -1) && Anim.Active == 0;
+                string switchClock = clock();
+                sw1.On = true;
+                watch(Anim.ToggleMs / 2, () => pos.T);
+                grab(sw1.RectangleToScreen(sw1.ClientRectangle), "anim-switch-midway");
+                var onS = watch(450, () => pos.T);
+                check(slidOff && sw1.On && onS[onS.Count - 1] == 1 && oneWay(onS, 1),
+                      "a switch slides: off in " + ends(offS) + "; " + switchClock + "; the clock stopped after it: " + (Anim.Active == 0));
+                // its own off switch: the knob is there at once
+                AppSettings.Instance.AnimateToggles = false;
+                sw1.On = false;
+                bool instant = pos.T == 0 && Anim.Active == 0;
+                AppSettings.Instance.AnimateToggles = true;
+                sw1.On = true;
+                watch(400, () => pos.T);
+                check(instant, "\"Switches slide\" off: the knob jumps, nothing on the clock");
+                // the master switch dims the four (and they come back)
+                master.On = false;
+                bool dimmed = !sw1.Enabled && !Anim.Enabled(AnimKind.Hover) && !Anim.Enabled(AnimKind.Popups);
+                master.On = true;
+                check(dimmed && sw1.Enabled && Anim.Enabled(AnimKind.Hover), "the master switch turns every animation off, and the four switches grey out with it");
+                st.Close();
+                st = null;
+                LivePump(300);
+
+                // 2. a chat row under the mouse: the tint fades in and out
+                var rows = new List<UI.Controls.ChatListItemControl>();
+                Action<Control> findR = null;
+                findR = c => { foreach (Control k in c.Controls) { var r = k as UI.Controls.ChatListItemControl; if (r != null && r.Visible) rows.Add(r); findR(k); } };
+                findR(f);
+                var row = rows.FirstOrDefault(r => !r.Selected);
+                Anim.ResetStats();
+                Invoke(row, "OnMouseEnter", EventArgs.Empty);
+                var hov = (Fade)Field(row, "_hover");
+                var up = watch(260, () => hov.T);
+                grab(row.RectangleToScreen(row.ClientRectangle), "anim-row-hover");
+                Invoke(row, "OnMouseLeave", EventArgs.Empty);
+                var dn = watch(380, () => hov.T);
+                check(up.Count >= few - 1 && up[up.Count - 1] == 1 && oneWay(up, 1) && dn.Count >= few - 1 && dn[dn.Count - 1] == 0 && oneWay(dn, -1) && Anim.Active == 0,
+                      "a chat row's hover fades in (" + ends(up) + ") and out (" + ends(dn) + "); " + clock());
+
+                // 3. the drawer slides in as one frame, lands, and slides away
+                Anim.ResetStats();
+                var open = System.Diagnostics.Stopwatch.StartNew();
+                Invoke(f, "ShowDrawer");
+                long openMs = open.ElapsedMilliseconds;
+                var drawer = (Control)Field(f, "_drawer");
+                int dw = drawer.Width, x0 = drawer.Left;   // before any message is pumped: fully off the left edge
+                bool oneFrame = Field(drawer, "_slideFrame") != null;
+                var x1 = watch(Anim.DrawerInMs / 2, () => drawer.Left);
+                grab(f.Bounds, "anim-drawer-midway");
+                var x2 = watch(500, () => drawer.Left);
+                var xs = x1.Concat(x2).ToList();
+                bool landed = drawer.Left == 0 && Field(drawer, "_slideFrame") == null && Anim.Active == 0;
+                check(oneFrame && x0 == -dw && landed && oneWay(xs, 1) && xs.Count >= few,
+                      "the drawer slides in: " + xs.Count + " positions from " + x0 + " to " + xs[xs.Count - 1] + " px (its width " + dw + "), drawn once (" + oneFrame
+                      + "), then painted live (" + landed + ": left " + drawer.Left + ", frame dropped " + (Field(drawer, "_slideFrame") == null) + ", moving " + Anim.Active + "); "
+                      + clock() + "; the open call took " + openMs + " ms");
+                LivePump(200);
+                grab(f.Bounds, "anim-drawer-open");
+                Anim.ResetStats();
+                Invoke(f, "CloseDrawer", true);
+                bool detached = Field(f, "_drawer") == null;
+                var outX = watch(450, () => drawer.IsDisposed ? -99999 : drawer.Left);
+                check(detached && drawer.IsDisposed && outX.Count >= few && oneWay(outX, -1),
+                      "the drawer slides away: closed at once for the app (" + detached + "), " + (outX.Count - 1) + " positions, then disposed; " + clock());
+                // an action row closes it at once (a dialog follows): no slide
+                Invoke(f, "ShowDrawer");
+                watch(400, () => 0);
+                var d2 = (Control)Field(f, "_drawer");
+                Invoke(f, "CloseDrawer");
+                check(d2.IsDisposed && Field(f, "_drawer") == null, "a close that an action follows is immediate");
+                // the drawer's own switch off: it is simply there
+                AppSettings.Instance.AnimateDrawer = false;
+                Invoke(f, "ShowDrawer");
+                var d3 = (Control)Field(f, "_drawer");
+                bool there = d3.Left == 0 && Field(d3, "_slideFrame") == null && Anim.Active == 0;
+                Invoke(f, "CloseDrawer", true);
+                check(there && d3.IsDisposed, "\"The menu slides in\" off: the drawer opens and closes at once");
+                AppSettings.Instance.AnimateDrawer = true;
+                LivePump(200);
+
+                // 4. a menu fades in
+                var menu = new ThemedContextMenuStrip();
+                foreach (var label in new[] { "Reply", "Copy text", "Forward", "Delete" }) menu.Items.Add(new ToolStripMenuItem(label));
+                Anim.ResetStats();
+                menu.ShowAt(f, new Point(f.ClientSize.Width / 2, f.ClientSize.Height / 3));
+                var mo = watch(Anim.MenuMs / 2, () => menu.Opacity);
+                var mArea = menu.Bounds; mArea.Inflate(12, 12);
+                grab(mArea, "anim-menu-midway");
+                mo.AddRange(watch(350, () => menu.Opacity));
+                check(mo[0] <= 0.05 && mo[mo.Count - 1] >= 0.99 && oneWay(mo, 1) && mo.Count >= few && Anim.Active == 0,
+                      "a menu fades in: opacity " + ends(mo) + "; " + clock());
+                // at rest after the fade (it stays a layered window): kept, to compare with the same menu opened unfaded
+                var ring = menu.Bounds; ring.Inflate(14, 14);
+                ring.Intersect(Screen.FromControl(f).Bounds);
+                var faded = new Bitmap(ring.Width, ring.Height);
+                using (var g = Graphics.FromImage(faded)) g.CopyFromScreen(ring.Location, Point.Empty, ring.Size);
+                var menuAt = new Rectangle(menu.Left - ring.Left, menu.Top - ring.Top, menu.Width, menu.Height);
+                menu.Close();
+                LivePump(200);
+                AppSettings.Instance.AnimatePopups = false;
+                menu.ShowAt(f, new Point(f.ClientSize.Width / 2, f.ClientSize.Height / 3));
+                LivePump(150);
+                bool solid = menu.Opacity >= 0.999 && Anim.Active == 0;
+                int inside = 0, around = 0, maxDiff = 0;
+                using (var plain = new Bitmap(ring.Width, ring.Height))
+                {
+                    using (var g = Graphics.FromImage(plain)) g.CopyFromScreen(ring.Location, Point.Empty, ring.Size);
+                    for (int y = 0; y < ring.Height; y++)
+                        for (int x = 0; x < ring.Width; x++)
+                        {
+                            Color a = faded.GetPixel(x, y), b = plain.GetPixel(x, y);
+                            int d = Math.Max(Math.Abs(a.R - b.R), Math.Max(Math.Abs(a.G - b.G), Math.Abs(a.B - b.B)));
+                            if (d > maxDiff) maxDiff = d;
+                            if (d > 3) { if (menuAt.Contains(x, y)) inside++; else around++; }
+                        }
+                    faded.Save(Path.Combine(_dir, "anim-menu-rest-faded.png"), ImageFormat.Png);
+                    plain.Save(Path.Combine(_dir, "anim-menu-rest-plain.png"), ImageFormat.Png);
+                }
+                faded.Dispose();
+                menu.Close();
+                menu.Dispose();
+                AppSettings.Instance.AnimatePopups = true;
+                check(solid, "\"Popups and menus fade in\" off: the same menu opens solid (it was left layered by the fade before)");
+                check(inside == 0 && around == 0, "at rest a faded menu (still a layered window) looks like an unfaded one, its shadow included ("
+                      + inside + " pixels differ inside it, " + around + " around it, the largest difference " + maxDiff + " of 255)");
+
+                // 5. the popups fade in: the emoji picker, the downloads list, the reaction grid
+                Anim.ResetStats();
+                Invoke(f, "OpenEmojiPicker");
+                var picker = Application.OpenForms.OfType<EmojiPicker>().FirstOrDefault();
+                var po = watch(Anim.PopupMs / 2, () => picker.Opacity);
+                var pArea = picker.Bounds; pArea.Inflate(12, 12);
+                grab(pArea, "anim-picker-midway");
+                po.AddRange(watch(450, () => picker.Opacity));
+                check(po[0] <= 0.05 && po[po.Count - 1] >= 0.99 && oneWay(po, 1) && po.Count >= few, "the emoji picker fades in: opacity " + ends(po) + "; " + clock());
+                grab(pArea, "anim-picker-shown");
+                picker.Close();
+                LivePump(300);
+                Anim.ResetStats();
+                Invoke(f, "OpenDownloadsPanel");
+                var panel = Application.OpenForms.OfType<DownloadsPanel>().FirstOrDefault();
+                var dlo = watch(500, () => panel.Opacity);
+                check(dlo[0] <= 0.05 && dlo[dlo.Count - 1] >= 0.99 && oneWay(dlo, 1) && dlo.Count >= few, "the downloads list fades in: opacity " + ends(dlo) + "; " + clock());
+                panel.Close();
+                LivePump(300);
+                var svc = Field(f, "_activeService");
+                svc.GetType().GetField("_availableReactions", BindingFlags.NonPublic | BindingFlags.Instance)
+                   .SetValue(svc, new[] { "\U0001F44D", "\U0001F44E", "\u2764", "\U0001F525", "\U0001F389", "\U0001F622", "\U0001F914", "\U0001F44F" });
+                var lastMsg = ((IEnumerable)Field(f, "_currentChatMessages")).Cast<TL.Message>().Last();
+                Anim.ResetStats();
+                Invoke(f, "ShowReactionGrid", lastMsg);
+                var grid = Field(f, "_reactionGrid") as ToolStripDropDown;
+                var go = watch(450, () => grid.Opacity);
+                check(go[0] <= 0.05 && go[go.Count - 1] >= 0.99 && oneWay(go, 1) && go.Count >= few, "the reaction grid fades in: opacity " + ends(go) + "; " + clock()
+                      + " (still moving " + Anim.Active + ", grid visible " + grid.Visible + ", disposed " + grid.IsDisposed + ", same grid " + ReferenceEquals(grid, Field(f, "_reactionGrid")) + ")");
+                Invoke(f, "CloseReactionGrid");
+                LivePump(300);
+
+                // 6. everything off: nothing is ever put on the clock
+                AppSettings.Instance.Animations = false;
+                Anim.ResetStats();
+                Invoke(f, "ShowDrawer");
+                var d4 = (Control)Field(f, "_drawer");
+                bool drawerThere = d4.Left == 0;
+                Invoke(f, "CloseDrawer", true);
+                Invoke(f, "OpenEmojiPicker");
+                var picker2 = Application.OpenForms.OfType<EmojiPicker>().FirstOrDefault();
+                bool pickerSolid = picker2 != null && picker2.Opacity >= 0.999;
+                if (picker2 != null) picker2.Close();
+                Invoke(row, "OnMouseEnter", EventArgs.Empty);
+                bool hoverAtOnce = hov.T == 1;
+                Invoke(row, "OnMouseLeave", EventArgs.Empty);
+                int ticks; float tot, worstGap;
+                Anim.ReadStats(out ticks, out tot, out worstGap);
+                AppSettings.Instance.Animations = true;
+                check(drawerThere && d4.IsDisposed && pickerSolid && hoverAtOnce && hov.T == 0 && ticks == 0 && Anim.Active == 0,
+                      "\"Animations\" off: the drawer, a popup and a hover are all instant, and the clock never starts (" + ticks + " ticks)");
+                LivePump(300);
+            }
+            catch (Exception ex) { Fail("live-anim", ex); }
+            finally
+            {
+                if (st != null) { try { st.Close(); } catch { } }
+                if (f != null) { try { f.Close(); } catch { } try { f.Dispose(); } catch { } }
+            }
+            File.WriteAllText(Path.Combine(_dir, "shots.txt"), _log.ToString());
+            return _failures == 0 ? 0 : 1;
+        }
+
         private static int RunLiveKeys(string dir)
         {
             ThemeHelper.InitMode(ThemeMode.Light);
@@ -1411,6 +1914,86 @@ namespace TelegArm.Helpers
                     _log.AppendLine("  " + (albumOk ? "PASS  " : "FAIL  ") + "a group of files is one bubble of file rows (one bubble each: " + oneBubbleEach + ", file rows: " + fileRows
                         + ", audio rows kept: " + audioRows + ", tap: " + (tapOk ? "ok" : "FAILED " + tapNote) + ", cached file seen: " + cachedOk + ")");
                     if (!albumOk) _failures++;
+                }
+                // owner 2026-11-13 ("fix the group right click"): the menu on an item of a group acts on THAT item, on the rest
+                // of the bubble (the caption) on the whole group; and a deleted item leaves the rest of its group on the screen
+                try
+                {
+                    var panel2 = (Control)Field(f, "_messagePanel");
+                    Func<int, UI.Controls.MessageBubbleControl> albumOf = id =>
+                        panel2.Controls.OfType<UI.Controls.MessageBubbleControl>().FirstOrDefault(b => b.IsAlbum && b.ContainsMessageId(id));
+                    var group = albumOf(9302);
+                    var songs2 = albumOf(9312);
+                    var rowRects = ((IEnumerable)Field(group, "_albumTileRects")).Cast<KeyValuePair<int, Rectangle>>().ToList();
+                    var third = rowRects.First(kv => kv.Key == 9303).Value;
+                    var onRow = new Point(third.X + third.Width / 2, third.Y + third.Height / 2);
+                    int below = rowRects.Max(kv => kv.Value.Bottom);
+                    var onCaption = new Point(third.X + third.Width / 2, below + Math.Max(2, (group.Height - below) / 2));
+                    bool hit = group.AlbumMessageIdAt(onRow) == 9303 && group.AlbumMessageIdAt(onCaption) == 0;
+                    Func<Point, List<string>> menuAt = pt =>
+                    {
+                        Invoke(f, "OnBubbleContextMenu", group, group.PointToScreen(pt));
+                        LivePump(300);
+                        var m = Field(f, "_messageMenu") as ToolStripDropDown;
+                        var labels = m == null ? new List<string>() : m.Items.OfType<ToolStripMenuItem>().Select(i => i.Text).ToList();
+                        if (m != null) m.Close();
+                        LivePump(200);
+                        return labels;
+                    };
+                    var itemMenu = menuAt(onRow);
+                    var groupMenu = menuAt(onCaption);
+                    bool itemOk = itemMenu.Any(t => t.EndsWith("Delete")) && itemMenu.Any(t => t.EndsWith("Save")) && itemMenu.Any(t => t.EndsWith("Forward"))
+                                  && itemMenu.Any(t => t.EndsWith("Reveal in folder")) && !itemMenu.Any(t => t.EndsWith("(4)"));
+                    bool groupOk = groupMenu.Any(t => t.EndsWith("Delete (4)")) && groupMenu.Any(t => t.EndsWith("Save (4)"))
+                                   && groupMenu.Any(t => t.EndsWith("Forward (4)")) && groupMenu.Any(t => t.EndsWith("Copy text"));
+                    var liveMsgs = (IList)Field(f, "_currentChatMessages");
+                    // review 2026-11-13: an EDIT of one item of a group (ours, or from another device) changes the caption in
+                    // place. Rebuilding the bubble from that one message left only it on the screen.
+                    var captionMsg = liveMsgs.Cast<TL.Message>().First(m => m.ID == 9304);
+                    captionMsg.message = "The files for Tuesday";
+                    Invoke(f, "RebuildBubble", 9304, captionMsg);
+                    bool captionEdited = panel2.Controls.Contains(group) && group.AlbumCount == 4 && (Field(group, "_text") as string) == "The files for Tuesday";
+                    Invoke(f, "RebuildBubble", 9301, liveMsgs.Cast<TL.Message>().First(m => m.ID == 9301));
+                    bool firstEdited = panel2.Controls.Contains(group) && !group.IsDisposed && group.AlbumCount == 4 && ReferenceEquals(albumOf(9303), group);
+                    bool editOk = captionEdited && firstEdited;
+                    _log.AppendLine("  " + (editOk ? "PASS  " : "FAIL  ") + "an edit of one item of a group changes the caption in place and keeps the group (caption item: "
+                        + captionEdited + ", first item: " + firstEdited + ")");
+                    if (!editOk) _failures++;
+                    Func<int, int> remove = id => (int)Invoke(f, "RemoveMessagesFromView", new HashSet<int> { id });
+                    int r1 = remove(9302);
+                    bool one = r1 == 1 && group.AlbumCount == 3 && !group.ContainsMessageId(9302) && panel2.Controls.Contains(group) && group.MessageId == 9301;
+                    int r2 = remove(9301);
+                    bool rekeyed = r2 == 1 && group.AlbumCount == 2 && group.MessageId == 9303;
+                    LivePump(300);
+                    using (var whole = new Bitmap(group.Width, group.Height))
+                    {
+                        group.DrawToBitmap(whole, new Rectangle(Point.Empty, group.Size));
+                        whole.Save(Path.Combine(_dir, "keys-album-files-two-left.png"), ImageFormat.Png);
+                    }
+                    bool hadCaption = !string.IsNullOrEmpty(Field(group, "_text") as string) && group.AlbumCaptionMessageId == 9304;
+                    int r3 = remove(9304);
+                    bool captionGone = hadCaption && r3 == 1 && group.AlbumCount == 1 && group.AlbumCaptionMessageId == 0
+                                       && string.IsNullOrEmpty(Field(group, "_text") as string);
+                    int r4 = remove(9303);
+                    bool gone = r4 == 1 && !panel2.Controls.Contains(group) && group.IsDisposed;
+                    bool othersKept = songs2 != null && songs2.AlbumCount == 2 && panel2.Controls.Contains(songs2)
+                                      && !liveMsgs.Cast<TL.Message>().Any(m => m.ID >= 9301 && m.ID <= 9304)
+                                      && liveMsgs.Cast<TL.Message>().Count(m => m.ID == 9311 || m.ID == 9312) == 2;
+                    bool groupMenuOk = hit && itemOk && groupOk && one && rekeyed && captionGone && gone && othersKept;
+                    _log.AppendLine("  " + (groupMenuOk ? "PASS  " : "FAIL  ") + "a group's menu acts on the item under the pointer, and a deleted item leaves the rest (hit test: " + hit
+                        + ", item menu: " + itemOk + ", group menu: " + groupOk + ", one row gone: " + one + ", first gone, next takes over: " + rekeyed
+                        + ", caption goes with its item: " + captionGone + ", last gone, bubble gone: " + gone + ", other group kept: " + othersKept + ")");
+                    if (!groupMenuOk)
+                    {
+                        _failures++;
+                        _log.AppendLine("    item menu: " + string.Join(" | ", itemMenu));
+                        _log.AppendLine("    group menu: " + string.Join(" | ", groupMenu));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _failures++;
+                    _log.AppendLine("  FAIL  a group's menu acts on the item under the pointer: " + ex.GetType().Name + ": " + ex.Message);
                 }
                 // RT trip 2026-10-16 ("pause can't be resumed, can't stop or cancel"): the controls act AT ONCE, never waiting for
                 // a transfer in flight (none here: no network) - pause, resume, pause, cancel; and a pause before a deferred start

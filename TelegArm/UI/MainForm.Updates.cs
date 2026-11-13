@@ -536,20 +536,7 @@ namespace TelegArm.UI
                 bool targetsOpen = channelId != 0 ? (openIsChannel && _selectedChat.PeerId == channelId) : !openIsChannel;
                 if (targetsOpen)
                 {
-                    int removed = 0;
-                    foreach (var c in _messagePanel.Controls.Cast<Control>().ToArray())
-                    {
-                        int id = BubbleMsgId(c);
-                        if (id != 0 && set.Contains(id))
-                        {
-                            _messagePanel.Controls.Remove(c);
-                            c.Dispose();   // MessageBubbleControl.Dispose → _rich.Dispose → text bitmap freed (same as user-delete)
-                            removed++;
-                        }
-                    }
-                    _currentChatMessages.RemoveAll(x => set.Contains(x.ID));
-                    foreach (var id in ids) _shownMessageIds.Remove(id);
-                    if (_replyTarget != null && set.Contains(_replyTarget.ID)) CancelReply();
+                    int removed = RemoveMessagesFromView(set);   // the user-delete path too; an album loses only the deleted items
                     System.Diagnostics.Debug.WriteLine("[UPDATE] delete(open) ids=" + ids.Length + " removed=" + removed + " peer=" + _selectedChat.PeerId);
                 }
             }
@@ -648,8 +635,8 @@ namespace TelegArm.UI
             if (_selectedChat == null || peerId != _selectedChat.PeerId) return;
             int idx = _currentChatMessages.FindIndex(x => x.ID == em.ID);
             if (idx >= 0) _currentChatMessages[idx] = em;   // keep the cache current
-            if (_messagePanel.Controls.OfType<MessageBubbleControl>().Any(b => b.MessageId == em.ID))
-                RebuildBubble(em.ID, em);
+            if (_messagePanel.Controls.OfType<MessageBubbleControl>().Any(b => b.MessageId == em.ID || b.ContainsMessageId(em.ID)))
+                RebuildBubble(em.ID, em);   // (an album item: its caption changes in place)
         }
 
         private void HandleIncomingMessage(MessageBase mbase)
