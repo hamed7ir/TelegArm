@@ -452,6 +452,7 @@ namespace TelegArm.UI
                     album.AddAlbumItem(m.ID, IsVideoMessage(m));
                     StartAlbumTileLoad(album, m);
                     ConfigureAlbumAudio(album, m);   // → renders this item as an audio ROW (if it's audio)
+                    ConfigureAlbumFile(album, m);    // → or as a file ROW (if it's a plain file)
                     // The caption lives on exactly ONE grouped item — may be a LATER one. First non-empty wins.
                     if (!album.AlbumHasCaption && !string.IsNullOrEmpty(m.message)) album.SetCaption(m.message, m.entities);
                     return 1;
@@ -465,6 +466,7 @@ namespace TelegArm.UI
             if (entry != null && entry.IsGroup && !IsOut(m) && from is User fu) WireSenderAvatar(bubble, fu);
             bubble.AlbumTileClicked += id => OpenMediaViewer(id);                              // photo/video tile → viewer
             bubble.AudioRowActivated += docId => OnAlbumAudioActivated(bubble, docId);         // audio row → play/download
+            bubble.FileRowActivated += (msgId, docId) => OnAlbumFileActivated(bubble, msgId, docId);   // file row → open/download
             bubble.BeginAlbum(IsVideoMessage(m));
             ApplyReactions(bubble, m);
             ApplyEntities(bubble, m);   // wires the caption's link/mention router + custom-emoji resolver
@@ -472,6 +474,7 @@ namespace TelegArm.UI
             if (!string.IsNullOrEmpty(m.message)) bubble.SetCaption(m.message, m.entities);   // caption on the first item
             StartAlbumTileLoad(bubble, m);
             ConfigureAlbumAudio(bubble, m);   // → renders the first item as an audio ROW (if it's audio)
+            ConfigureAlbumFile(bubble, m);    // → or as a file ROW (if it's a plain file)
             _albumBubbles[m.grouped_id] = bubble;
             created = bubble;
             return 1;
@@ -541,6 +544,46 @@ namespace TelegArm.UI
                     + (ti.Handle.State == DownloadHandle.DState.Downloading ? "inflight" : "paused"));
                 album.SetAudioRowHandle(doc.id, ti.Handle);
             }
+        }
+
+        /// <summary>If this album item is a plain FILE (a group of documents: PDFs, archives, images sent as files), render it
+        /// as a file ROW - icon or thumbnail, name, size - instead of a picture tile. Telegram shows a group of files as a
+        /// list; here they were blank picture tiles (owner report 2026-11-06). Same cache path as the single file card.</summary>
+        private void ConfigureAlbumFile(MessageBubbleControl album, Message m)
+        {
+            var mi = MediaClassifier.FromMessage(m);
+            if (mi == null || mi.Type != "document") return;
+            var doc = (m.media as MessageMediaDocument)?.document as Document;
+            if (doc == null) return;
+            string path = MediaCache.MediaPath(MediaCache.CacheFileName("document", doc.id, mi.FileName));
+            album.SetAlbumFile(m.ID, doc.id, mi.FileName, mi.FileSize > 0 ? DrawHelper.FormatSize(mi.FileSize) : "",
+                               TelegramService.IsFileComplete(path, doc.size));
+            // re-entering the chat while this file's transfer kept running (or sits paused): the ring goes back on its row
+            var ti = _service.GetTransfer(doc.id);
+            if (ti != null && ti.Handle != null &&
+                (ti.Handle.State == DownloadHandle.DState.Downloading || ti.Handle.State == DownloadHandle.DState.Paused))
+                album.SetAudioRowHandle(doc.id, ti.Handle);
+        }
+
+        /// <summary>A grouped-file row was tapped: open the file when it is on disk, else download it (the ring on its row;
+        /// a tap on the ring pauses, a tap on a paused row resumes) - what the single file card does.</summary>
+        private void OnAlbumFileActivated(MessageBubbleControl album, int messageId, long docId)
+        {
+            var msg = _currentChatMessages.FirstOrDefault(x => x.ID == messageId);
+            var doc = (msg?.media as MessageMediaDocument)?.document as Document;
+            var mi = msg != null ? MediaClassifier.FromMessage(msg) : null;
+            if (doc == null || mi == null || doc.id != docId) return;
+            string path = MediaCache.MediaPath(MediaCache.CacheFileName("document", doc.id, mi.FileName));
+            if (TelegramService.IsFileComplete(path, doc.size))
+            {
+                album.MarkAlbumRowCached(docId);
+                OpenMediaViewer(messageId);
+                return;
+            }
+            var h = StartManagedDownload(doc, "doc", path, true, _selectedChat?.Peer, messageId, mi.FileName);
+            if (h == null) return;
+            if (h.State == DownloadHandle.DState.Done) { album.MarkAlbumRowCached(docId); return; }
+            album.SetAudioRowHandle(docId, h);
         }
 
         /// <summary>An audio-album row was tapped: play if cached, else download (ring on the row) then play.</summary>

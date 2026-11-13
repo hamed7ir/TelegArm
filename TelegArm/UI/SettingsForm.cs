@@ -164,6 +164,14 @@ namespace TelegArm.UI
         /// <summary>Redesign 2.7b: MainForm's drawer opens Settings on the Appearance page.</summary>
         public void ShowAppearancePage() { ShowPage(PageAppearance); }
 
+        /// <summary>Every message box of this form. Settings can be closed (and disposed: both callers wrap it in using)
+        /// while a request of one of its async handlers is still running; a dialog owned by a disposed form throws, and from an
+        /// async void handler that reaches the crash handler. Closed = nobody to tell: -1, as a dismissed dialog (review 2026-11-13).</summary>
+        private int Say(string title, string message, params string[] buttons)
+        {
+            return IsDisposed ? -1 : ThemedDialog.Show(this, title, message, buttons);
+        }
+
         private void ShowPage(int idx)
         {
             for (int i = 0; i < _pages.Length; i++)
@@ -192,7 +200,7 @@ namespace TelegArm.UI
                 if (reverting) return;
                 if (!StartupSetEnabled(start.On))
                 {
-                    ThemedDialog.Show(this, "Startup", "Couldn't update the Windows startup setting — your account may not allow it.", "OK");
+                    Say("Startup", "Couldn't update the Windows startup setting — your account may not allow it.", "OK");
                     reverting = true;
                     try { start.On = StartupIsEnabled(); }   // back to the TRUE state, without re-running this handler
                     finally { reverting = false; }
@@ -486,14 +494,14 @@ namespace TelegArm.UI
             }
             catch (Exception ex)
             {
-                if (!IsDisposed) ThemedDialog.Show(this, "Chat background", ex is InvalidOperationException ? ex.Message : "That picture could not be opened: " + ex.Message, "OK");
+                if (!IsDisposed) Say("Chat background", ex is InvalidOperationException ? ex.Message : "That picture could not be opened: " + ex.Message, "OK");
             }
             finally { if (!IsDisposed) UseWaitCursor = false; }
         }
 
         private void ResetAppearance(AppSettings s)
         {
-            if (ThemedDialog.Show(this, "Reset appearance", "Go back to the default accent, theme colours, chat backgrounds and bubbles? "
+            if (Say("Reset appearance", "Go back to the default accent, theme colours, chat backgrounds and bubbles? "
                                   + "The theme (light / dark) and the interface scale stay as they are.", "Cancel", "Reset") != 1) return;
             s.AccentColor = ""; s.LightBase = ""; s.DarkBase = ""; s.Theme = new TelegArm.Core.ThemeSettings();
             s.Save();
@@ -523,7 +531,7 @@ namespace TelegArm.UI
                     if (cs.Mode == "photo") { cs.Mode = ""; cs.ImageFile = ""; }   // photos stay on this PC
                 var doc = new { TelegArmTheme = 1, AccentColor = s.AccentColor, LightBase = s.LightBase, DarkBase = s.DarkBase, Theme = theme };
                 try { File.WriteAllText(dlg.FileName, Newtonsoft.Json.JsonConvert.SerializeObject(doc, Newtonsoft.Json.Formatting.Indented)); }
-                catch (Exception ex) { ThemedDialog.Show(this, "Export theme", "The theme could not be saved: " + ex.Message, "OK"); }
+                catch (Exception ex) { Say("Export theme", "The theme could not be saved: " + ex.Message, "OK"); }
             }
         }
 
@@ -534,7 +542,7 @@ namespace TelegArm.UI
             {
                 if (dlg.ShowDialog(this) != DialogResult.OK) return;
                 try { json = File.ReadAllText(dlg.FileName); }
-                catch (Exception ex) { ThemedDialog.Show(this, "Import theme", "The file could not be read: " + ex.Message, "OK"); return; }
+                catch (Exception ex) { Say("Import theme", "The file could not be read: " + ex.Message, "OK"); return; }
             }
             try
             {
@@ -562,7 +570,7 @@ namespace TelegArm.UI
             }
             catch (Exception ex)
             {
-                ThemedDialog.Show(this, "Import theme", ex is InvalidOperationException ? ex.Message : "That file is not a theme TelegArm can read: " + ex.Message, "OK");
+                Say("Import theme", ex is InvalidOperationException ? ex.Message : "That file is not a theme TelegArm can read: " + ex.Message, "OK");
             }
         }
 
@@ -681,7 +689,7 @@ namespace TelegArm.UI
             _animateWebm = new ToggleRow("Animate WebM stickers", s.AnimateWebmStickers) { Subtitle = "Off shows the static sticker emoji" };
             bool rl = RLottie.Available;
             var engine = new ActionRow("Sticker engine") { Subtitle = rl ? "Animated (.tgs) stickers available" : "Animated stickers unavailable — tap for details" };
-            engine.Click += (snd, ev) => ThemedDialog.Show(this, "Animated sticker engine (rlottie)", RLottie.Diagnose(), "OK");
+            engine.Click += (snd, ev) => Say("Animated sticker engine (rlottie)", RLottie.Diagnose(), "OK");
             page.Section("Stickers", _animateWebm, engine);
         }
 
@@ -745,7 +753,7 @@ namespace TelegArm.UI
             long freed = MediaCache.ClearAll(AccountContext.CacheRootFor(_cacheBox.Value.Trim()));
             System.Diagnostics.Debug.WriteLine("[MEDIA] active-account cache cleared, freed " + freed + " bytes");
             RefreshCacheSizes();
-            ThemedDialog.Show(this, "Clear cache", "Cleared " + SizeText(freed), "OK");
+            Say("Clear cache", "Cleared " + SizeText(freed), "OK");
         }
 
         // ── Connection ────────────────────────────────────────────────────────────────────────────────────────
@@ -791,7 +799,7 @@ namespace TelegArm.UI
             var row = sender as ActionRow;
             string errors;
             var o = new WsTunnelOptions { AcceptChainErrors = _wsChain.On, Pins = WsRoutes.ParsePins(_wsPins.Value, out errors) };
-            if (errors != null) { ThemedDialog.Show(this, "Gateway addresses", errors + "\n\nWrite one DC=address per entry, e.g. " + WsRoutes.DefaultPins, "OK"); return; }
+            if (errors != null) { Say("Gateway addresses", errors + "\n\nWrite one DC=address per entry, e.g. " + WsRoutes.DefaultPins, "OK"); return; }
             if (row != null) { row.Enabled = false; row.ActionText = "Probing…"; }
             List<string> lines;
             try { lines = await System.Threading.Tasks.Task.Run(() => WsTunnel.ProbeAsync(o)).ConfigureAwait(true); }
@@ -799,7 +807,7 @@ namespace TelegArm.UI
             if (IsDisposed) return;
             if (row != null) { row.Enabled = true; row.ActionText = "Probe"; }
             string routes = WsTunnelStats.Summary();
-            ThemedDialog.Show(this, "WebSocket gateways", string.Join("\n", lines.ToArray())
+            Say("WebSocket gateways", string.Join("\n", lines.ToArray())
                               + (routes != null ? "\n\nLast connections: " + routes : ""), "OK");
         }
 
@@ -838,13 +846,21 @@ namespace TelegArm.UI
             page.Section("Who can see / contact me", rows.ToArray());
         }
 
+        /// <summary>Fetches each rule. A rule that could not be loaded says so, and the next visit to the page loads what is
+        /// still missing (it used to stay on "Loading…" for as long as Settings was open: review 2026-11-13).</summary>
         private async void LoadPrivacyAsync()
         {
-            if (_service == null) return;
+            if (_service == null)
+            {
+                foreach (var row in _privacyExceptionRows.Values) row.Subtitle = "Sign in to change this";
+                return;
+            }
+            bool failed = false;
             foreach (var pair in _privacyRows)
             {
                 var key = pair.Item1;
                 var seg = pair.Item2;
+                if (seg.Enabled) continue;   // loaded on an earlier visit
                 try
                 {
                     var res = await _service.GetPrivacyAsync(key);
@@ -857,8 +873,15 @@ namespace TelegArm.UI
                     seg.Enabled = true;
                     seg.Invalidate();
                 }
-                catch { /* leave this row disabled on failure */ }
+                catch
+                {
+                    if (IsDisposed) return;
+                    failed = true;   // the row stays disabled
+                    ActionRow exRow;
+                    if (_privacyExceptionRows.TryGetValue(key, out exRow)) exRow.Subtitle = "Couldn't load. Open this page again to retry.";
+                }
             }
+            if (failed && !IsDisposed) _privacyLoaded = false;
         }
 
         private async void OnPrivacyChanged(InputPrivacyKey key, SegmentedRow seg, int newIdx)
@@ -871,6 +894,7 @@ namespace TelegArm.UI
                 Account_PrivacyRules cur;
                 _privacyRules.TryGetValue(key, out cur);
                 var res = await _service.SetPrivacyAsync(key, (TelegramService.PrivacyPrimary)newIdx, cur);   // T22: exceptions kept
+                if (IsDisposed) return;
                 if (res != null) { _privacyRules[key] = res; ShowPrivacyExceptions(key); }
                 int confirmed = (int)TelegramService.ReducePrivacy(res?.rules);   // reflect what the server actually set
                 seg.SetSelected(confirmed, false);
@@ -878,8 +902,9 @@ namespace TelegArm.UI
             }
             catch (Exception ex)
             {
+                if (IsDisposed) return;
                 seg.SetSelected(prev, false);   // revert
-                ThemedDialog.Show(this, "Privacy", "Couldn't change this setting: " + ex.Message, "OK");
+                Say("Privacy", "Couldn't change this setting: " + ex.Message, "OK");
             }
             finally { if (!seg.IsDisposed) { seg.Enabled = true; seg.Invalidate(); } }
         }
@@ -915,7 +940,7 @@ namespace TelegArm.UI
                 if (IsDisposed) return;
                 if (res != null) { _privacyRules[key] = res; ShowPrivacyExceptions(key); }
             }
-            catch (Exception ex) { ThemedDialog.Show(this, "Privacy", "Couldn't save the exceptions: " + ex.Message, "OK"); }
+            catch (Exception ex) { Say("Privacy", "Couldn't save the exceptions: " + ex.Message, "OK"); }
         }
 
         // ── Security / Two-step verification ─────────────────────────────────────────────────────────────────
@@ -1000,17 +1025,17 @@ namespace TelegArm.UI
             {
                 if (d.ShowDialog(this) != DialogResult.OK) return;
                 string np = d.Value(0), cf = d.Value(1), hint = d.Value(2), email = d.Value(3).Trim();
-                if (string.IsNullOrEmpty(np)) { ThemedDialog.Show(this, "Set Password", "Password can't be empty.", "OK"); return; }
-                if (np != cf) { ThemedDialog.Show(this, "Set Password", "The passwords don't match.", "OK"); return; }
+                if (string.IsNullOrEmpty(np)) { Say("Set Password", "Password can't be empty.", "OK"); return; }
+                if (np != cf) { Say("Set Password", "The passwords don't match.", "OK"); return; }
                 try
                 {
                     await _service.SetPasswordAsync(np, hint, email);
                     await ReloadSecurityAsync();
-                    ThemedDialog.Show(this, "Set Password", string.IsNullOrEmpty(email)
+                    Say("Set Password", string.IsNullOrEmpty(email)
                         ? "Two-Step Verification is now ON."
                         : "Password set. Check your email and confirm the recovery address.", "OK");
                 }
-                catch (Exception ex) { ThemedDialog.Show(this, "Set Password", FriendlyPwdError(ex), "OK"); }
+                catch (Exception ex) { Say("Set Password", FriendlyPwdError(ex), "OK"); }
             }
         }
 
@@ -1022,15 +1047,15 @@ namespace TelegArm.UI
             {
                 if (d.ShowDialog(this) != DialogResult.OK) return;
                 string cur = d.Value(0), np = d.Value(1), cf = d.Value(2), hint = d.Value(3);
-                if (string.IsNullOrEmpty(cur) || string.IsNullOrEmpty(np)) { ThemedDialog.Show(this, "Change Password", "Fill in both passwords.", "OK"); return; }
-                if (np != cf) { ThemedDialog.Show(this, "Change Password", "The new passwords don't match.", "OK"); return; }
+                if (string.IsNullOrEmpty(cur) || string.IsNullOrEmpty(np)) { Say("Change Password", "Fill in both passwords.", "OK"); return; }
+                if (np != cf) { Say("Change Password", "The new passwords don't match.", "OK"); return; }
                 try
                 {
                     await _service.ChangePasswordAsync(cur, np, hint);
                     await ReloadSecurityAsync();
-                    ThemedDialog.Show(this, "Change Password", "Password changed.", "OK");
+                    Say("Change Password", "Password changed.", "OK");
                 }
-                catch (Exception ex) { ThemedDialog.Show(this, "Change Password", FriendlyPwdError(ex), "OK"); }
+                catch (Exception ex) { Say("Change Password", FriendlyPwdError(ex), "OK"); }
             }
         }
 
@@ -1046,9 +1071,9 @@ namespace TelegArm.UI
                 {
                     await _service.DisablePasswordAsync(cur);
                     await ReloadSecurityAsync();
-                    ThemedDialog.Show(this, "Disable Password", "Two-Step Verification is now OFF.", "OK");
+                    Say("Disable Password", "Two-Step Verification is now OFF.", "OK");
                 }
-                catch (Exception ex) { ThemedDialog.Show(this, "Disable Password", FriendlyPwdError(ex), "OK"); }
+                catch (Exception ex) { Say("Disable Password", FriendlyPwdError(ex), "OK"); }
             }
         }
 
@@ -1064,9 +1089,9 @@ namespace TelegArm.UI
                 {
                     await _service.ConfirmPasswordEmailAsync(code);
                     await ReloadSecurityAsync();
-                    ThemedDialog.Show(this, "Confirm Email", "Recovery email confirmed.", "OK");
+                    Say("Confirm Email", "Recovery email confirmed.", "OK");
                 }
-                catch (Exception ex) { ThemedDialog.Show(this, "Confirm Email", FriendlyPwdError(ex), "OK"); }
+                catch (Exception ex) { Say("Confirm Email", FriendlyPwdError(ex), "OK"); }
             }
         }
 
@@ -1184,7 +1209,7 @@ namespace TelegArm.UI
 
         private async void OnTerminateOne(SessionRowControl row, long hash)
         {
-            int c = ThemedDialog.Show(this, "Terminate session",
+            int c = Say("Terminate session",
                 "Terminate this session? The device will be logged out.", "Terminate", "Cancel");
             if (c != 0) return;
             try { await _service.ResetAuthorizationAsync(hash); }
@@ -1193,9 +1218,10 @@ namespace TelegArm.UI
                 string msg = (ex.Message != null && ex.Message.IndexOf("FRESH_RESET_AUTHORISATION_FORBIDDEN", StringComparison.OrdinalIgnoreCase) >= 0)
                     ? "This session is too new to terminate — sessions can't be reset within 24 hours of signing in."
                     : ex.Message;
-                ThemedDialog.Show(this, "Terminate session", msg, "OK");
+                Say("Terminate session", msg, "OK");
                 return;
             }
+            if (IsDisposed) return;
             if (row != null && !row.IsDisposed) { _devOthers.Controls.Remove(row); row.Dispose(); }
             int left = 0;
             foreach (Control x in _devOthers.Controls) if (x is SessionRowControl) left++;
@@ -1206,11 +1232,12 @@ namespace TelegArm.UI
 
         private async void OnTerminateAll(object sender, EventArgs e)
         {
-            int c = ThemedDialog.Show(this, "Terminate sessions",
+            int c = Say("Terminate sessions",
                 "Terminate ALL other sessions? Every other device will be logged out.", "Terminate all", "Cancel");
             if (c != 0) return;
             try { await _service.TerminateOtherSessionsAsync(); }
-            catch (Exception ex) { ThemedDialog.Show(this, "Terminate sessions", ex.Message, "OK"); return; }
+            catch (Exception ex) { Say("Terminate sessions", ex.Message, "OK"); return; }
+            if (IsDisposed) return;
             Replace(_devOthers, new Control[] { new NoteRow("No other sessions.") });
             _termAllRow.Enabled = false;
             _stacks[DevicesPage].Restack();
@@ -1265,7 +1292,7 @@ namespace TelegArm.UI
             {
                 var sb = new System.Text.StringBuilder();
                 foreach (var k in MainForm.Shortcuts) sb.Append(k[0]).Append("  —  ").Append(k[1]).Append(Environment.NewLine);
-                ThemedDialog.Show(this, "Keyboard shortcuts", sb.ToString().TrimEnd(), "OK");
+                Say("Keyboard shortcuts", sb.ToString().TrimEnd(), "OK");
             };
             page.Section("Keyboard", keys);
 
@@ -1301,7 +1328,7 @@ namespace TelegArm.UI
                 {
                     string cp = CrashLog.FilePath;
                     if (cp != null && File.Exists(cp)) System.Diagnostics.Process.Start(cp);
-                    else ThemedDialog.Show(this, "Crash reports", "No crashes recorded.", "OK");
+                    else Say("Crash reports", "No crashes recorded.", "OK");
                 }
                 catch { }
             };
@@ -1309,7 +1336,7 @@ namespace TelegArm.UI
             crashClear.Click += (snd, ev) =>
             {
                 if (CrashLog.Count() == 0) { crashView.Subtitle = CrashStatusText(0); return; }
-                if (ThemedDialog.Show(this, "Crash reports", "Delete all recorded crash reports?", "Delete", "Cancel") != 0) return;
+                if (Say("Crash reports", "Delete all recorded crash reports?", "Delete", "Cancel") != 0) return;
                 CrashLog.Clear();
                 crashView.Subtitle = CrashStatusText(CrashLog.Count());
             };
@@ -1340,7 +1367,7 @@ namespace TelegArm.UI
             frame.SelectedIndexChanged += (snd, ev) => { s.ChromeMode = frame.SelectedIndex == 1 ? "Native" : ""; s.Save(); };
             // STEP 1.1 — how the process is actually scaled. Tap for the full probe summary.
             var scale = new ActionRow("Display scaling") { Subtitle = Dpi.Mode + " · " + Dpi.SystemDpi + " dpi · " + Dpi.Request + " — tap for details" };
-            scale.Click += (snd, ev) => ThemedDialog.Show(this, "Display scaling", Dpi.ProbeSummary.Replace(" request=", "\nrequest=")
+            scale.Click += (snd, ev) => Say("Display scaling", Dpi.ProbeSummary.Replace(" request=", "\nrequest=")
                 .Replace(" call=", "\ncall=").Replace(" mode=", "\nmode=").Replace(" monitors=", "\nmonitors="), "OK");
             page.Section("Display & window", compSw, dpiSw, frame, scale);
 
@@ -1353,13 +1380,13 @@ namespace TelegArm.UI
                 string report = DiagReport.Build();
                 bool copied = false;
                 try { Clipboard.SetText(report); copied = true; } catch { /* clipboard held by another app */ }
-                ThemedDialog.Show(this, "Copy diagnostics",
+                Say("Copy diagnostics",
                     (copied ? "Copied to the clipboard:" : "The clipboard is busy. Select the text below and press Ctrl+C:")
                     + "\n\n" + report, "OK");
             };
             // Step 2.6 (plan R7): the data folder — useful on RT, where Documents is hidden behind the Metro shell.
             var data = new ActionRow("Open data folder", "Open") { Subtitle = "Settings, accounts and caches live here" };
-            data.Click += (snd, ev) => { try { System.Diagnostics.Process.Start(StoragePaths.ResolveDataRoot()); } catch (Exception ex) { ThemedDialog.Show(this, "Data folder", ex.Message, "OK"); } };
+            data.Click += (snd, ev) => { try { System.Diagnostics.Process.Start(StoragePaths.ResolveDataRoot()); } catch (Exception ex) { Say("Data folder", ex.Message, "OK"); } };
             page.Section("Support", copy, data);
         }
 
@@ -1430,7 +1457,7 @@ namespace TelegArm.UI
             {
                 TelegArm.Helpers.Logger.Diag("[CACHE-PRUNE] settings REJECTED cache folder=\"" + wantCache + "\" reason=" + cacheRefusal);
                 ShowPage(PageData);
-                ThemedDialog.Show(this, "Cache folder",
+                Say("Cache folder",
                     "That media-cache folder can't be used, because " + cacheRefusal + ".\n\n" +
                     "TelegArm deletes old files from this folder, so it must not overlap where your account " +
                     "sessions are stored. Pick a dedicated folder (the default is a \"Cache\" folder).", "OK");
@@ -1448,7 +1475,7 @@ namespace TelegArm.UI
             if (pinErrors != null)
             {
                 ShowPage(PageConnection);
-                ThemedDialog.Show(this, "Gateway addresses", pinErrors + "\n\nWrite one DC=address per entry, e.g. " + WsRoutes.DefaultPins, "OK");
+                Say("Gateway addresses", pinErrors + "\n\nWrite one DC=address per entry, e.g. " + WsRoutes.DefaultPins, "OK");
                 return;   // nothing touched yet
             }
 

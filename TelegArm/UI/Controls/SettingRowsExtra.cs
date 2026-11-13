@@ -319,10 +319,10 @@ namespace TelegArm.UI.Controls
                 path.AddEllipse(r);
                 using (var pb = new PathGradientBrush(pts) { CenterColor = Color.White, SurroundColors = cols })
                 {
-                    var clip = g.Clip;
+                    var state = g.Save();   // (g.Clip hands out a new Region on every read: one leaked per paint)
                     g.SetClip(path, CombineMode.Intersect);
                     g.FillEllipse(pb, Rectangle.Inflate(r, 1, 1));
-                    g.Clip = clip;
+                    g.Restore(state);
                 }
             }
         }

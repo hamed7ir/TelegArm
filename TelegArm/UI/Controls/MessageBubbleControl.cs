@@ -286,12 +286,13 @@ namespace TelegArm.UI.Controls
         private sealed class AlbumTile
         {
             public int MessageId; public Image Image; public bool IsVideo;
-            // Audio-album extras (a grouped-audio album renders as a vertical row list, not a grid):
+            // Row extras (a group of audio or of files renders as a vertical row list, not a grid):
             public bool IsAudio; public long DocId; public string Title; public string Sub; public bool Cached;
+            public bool IsFile;             // a plain file (PDF, ZIP, an image sent as a file...): Title = its name, Sub = its size
             public DownloadHandle Handle;   // in-flight download for this row (ring/cancel); null otherwise
         }
-        private List<AlbumTile> _album;   // non-null → render a grid (photo/video) OR a row list (audio)
-        private bool _albumAudio;         // true → render as a vertical audio row list
+        private List<AlbumTile> _album;   // non-null → render a grid (photo/video) OR a row list (audio, files)
+        private bool _albumRows;          // true → render as a vertical row list (grouped audio or grouped files)
         private readonly List<KeyValuePair<int, Rectangle>> _albumTileRects = new List<KeyValuePair<int, Rectangle>>();
         private int AlbumGap => P(3);
         private int AudioRowH => P(56);      // one audio row
@@ -301,6 +302,9 @@ namespace TelegArm.UI.Controls
 
         /// <summary>Raised when an audio-album ROW is tapped to play/download, with that row's document id.</summary>
         public event Action<long> AudioRowActivated;
+
+        /// <summary>Raised when a grouped-FILE row is tapped (open it, or download it first): its message id and document id.</summary>
+        public event Action<int, long> FileRowActivated;
 
         /// <summary>True when this bubble renders a grouped-media album grid.</summary>
         public bool IsAlbum { get { return _album != null; } }
@@ -340,7 +344,7 @@ namespace TelegArm.UI.Controls
                 if (t.MessageId == messageId)
                 {
                     t.IsAudio = true; t.DocId = docId; t.Title = title; t.Sub = sub; t.Cached = cached;
-                    _albumAudio = true;
+                    _albumRows = true;
                     if (!_audioStateHooked) { AudioPlayer.StateChanged += OnAlbumAudioStateChanged; _audioStateHooked = true; }
                     Measure();
                     if (!IsDisposed) Invalidate();
@@ -348,7 +352,31 @@ namespace TelegArm.UI.Controls
                 }
         }
 
-        /// <summary>Hands the album the in-flight download for a row so it can draw the ring + handle pause.
+        /// <summary>Marks an album item as a plain FILE (→ the vertical row list, as grouped audio): Telegram shows a group
+        /// of documents as a list of files, not as picture tiles (they were blank tiles: owner report 2026-11-06).</summary>
+        public void SetAlbumFile(int messageId, long docId, string fileName, string sizeText, bool cached)
+        {
+            if (_album == null) return;
+            foreach (var t in _album)
+                if (t.MessageId == messageId)
+                {
+                    t.IsFile = true; t.DocId = docId; t.Title = fileName; t.Sub = sizeText; t.Cached = cached;
+                    _albumRows = true;
+                    Measure();
+                    if (!IsDisposed) Invalidate();
+                    return;
+                }
+        }
+
+        /// <summary>The row's file is on disk now (found there when it was tapped): a tap opens it.</summary>
+        public void MarkAlbumRowCached(long docId)
+        {
+            if (_album == null) return;
+            foreach (var t in _album)
+                if (t.DocId == docId && !t.Cached) { t.Cached = true; if (!IsDisposed) Invalidate(); }
+        }
+
+        /// <summary>Hands the album the in-flight download for a row (audio or file) so it can draw the ring + handle pause.
         /// Same-handle re-attach is a no-op (DOWNLOAD-RESUME: pause/resume keep ONE handle — a resubscribe
         /// here would double every Changed event).</summary>
         public void SetAudioRowHandle(long docId, DownloadHandle handle)
@@ -429,7 +457,7 @@ namespace TelegArm.UI.Controls
         /// agree. Audio albums = N rows × rowHeight; photo/video albums = the cover grid.</summary>
         private int AlbumContentHeight(int contentW)
         {
-            return _albumAudio ? _album.Count * AudioRowH : AlbumGridHeight(contentW);
+            return _albumRows ? _album.Count * AudioRowH : AlbumGridHeight(contentW);
         }
 
         private int AlbumCaptionHeight(int contentW)
@@ -473,7 +501,7 @@ namespace TelegArm.UI.Controls
 
             int n = _album.Count;
             _albumTileRects.Clear();
-            if (_albumAudio)   // vertical audio row list (Telegram-Desktop style)
+            if (_albumRows)   // vertical row list (Telegram-Desktop style): grouped audio, or grouped files
             {
                 Color subColor = _outgoing ? ThemeHelper.PaletteFor(IsDark).BubbleOutSub
                                            : (ThemeHelper.PaletteFor(IsDark).BubbleInSub);
@@ -481,7 +509,8 @@ namespace TelegArm.UI.Controls
                 {
                     var rowRect = new Rectangle(innerX, ty + i * AudioRowH, contentW, AudioRowH - P(4));
                     _albumTileRects.Add(new KeyValuePair<int, Rectangle>(_album[i].MessageId, rowRect));
-                    DrawAudioRow(g, _album[i], rowRect, textColor, subColor);
+                    if (_album[i].IsFile) DrawFileRow(g, _album[i], rowRect, textColor, subColor);
+                    else DrawAudioRow(g, _album[i], rowRect, textColor, subColor);
                 }
             }
             else   // photo/video cover grid (unchanged)
@@ -560,6 +589,31 @@ namespace TelegArm.UI.Controls
             var tf = (_rtl ? TextFormatFlags.Right : TextFormatFlags.Left) | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix;
             TextRenderer.DrawText(g, t.Title ?? "Audio", SenderFont, new Rectangle(tx, rowRect.Y + P(7), tw, P(20)), fg, tf | TextFormatFlags.EndEllipsis);
             TextRenderer.DrawText(g, t.Sub ?? "", TimeFont, new Rectangle(tx, rowRect.Y + P(29), tw, P(16)), sub, tf);
+        }
+
+        /// <summary>One grouped-FILE row: the file's icon (its thumbnail when it has one), its name and its size. While it
+        /// downloads the icon is the progress ring with ✕ (a tap there pauses) and the size line counts; paused, the ring
+        /// stands still (a tap resumes) - as the single file card and the audio rows.</summary>
+        private void DrawFileRow(Graphics g, AlbumTile t, Rectangle rowRect, Color fg, Color sub)
+        {
+            var icon = AudioRowCircle(rowRect);
+            bool downloading = t.Handle != null && t.Handle.State == DownloadHandle.DState.Downloading;
+            bool paused = t.Handle != null && t.Handle.State == DownloadHandle.DState.Paused;
+            if (downloading || paused)
+                DrawHelper.DrawProgressRing(g, Rectangle.Inflate(icon, -P(3), -P(3)), t.Handle.Fraction, fg, ColorMath.WithAlpha(sub, 90), cancel: downloading);
+            else if (t.Image != null)
+                DrawFittedImage(g, t.Image, icon, P(6), cover: true);   // an image sent as a file, a PDF's first page...
+            else
+                DrawHelper.DrawFileIcon(g, icon, t.Title);
+
+            int tx = icon.Right + P(10);
+            int tw = rowRect.Right - tx;
+            var tf = (_rtl ? TextFormatFlags.Right : TextFormatFlags.Left) | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix;
+            TextRenderer.DrawText(g, t.Title ?? "File", SenderFont, new Rectangle(tx, rowRect.Y + P(7), tw, P(20)), fg, tf | TextFormatFlags.EndEllipsis);
+            string line = downloading || paused
+                ? (paused ? "Paused  •  " : "") + DrawHelper.FormatSize(t.Handle.Transmitted) + " / " + DrawHelper.FormatSize(t.Handle.Total)
+                : (t.Sub ?? "");
+            TextRenderer.DrawText(g, line, TimeFont, new Rectangle(tx, rowRect.Y + P(29), tw, P(16)), sub, tf | TextFormatFlags.EndEllipsis);
         }
 
         /// <summary>Drawn for the 44 px circle; scales with it.</summary>
@@ -920,7 +974,7 @@ namespace TelegArm.UI.Controls
                 foreach (var kvp in _albumTileRects)
                     if (kvp.Value.Contains(e.Location))
                     {
-                        if (_albumAudio)
+                        if (_albumRows)
                         {
                             var t = FindAlbumTile(kvp.Key);
                             if (t == null) return;
@@ -931,7 +985,8 @@ namespace TelegArm.UI.Controls
                                 if (AudioRowCircle(kvp.Value).Contains(e.Location)) t.Handle.Pause();
                                 return;
                             }
-                            AudioRowActivated?.Invoke(t.DocId);   // play / download(-resume)-then-play
+                            if (t.IsFile) FileRowActivated?.Invoke(t.MessageId, t.DocId);   // open / download(-resume)
+                            else AudioRowActivated?.Invoke(t.DocId);   // play / download(-resume)-then-play
                             return;
                         }
                         AlbumTileClicked?.Invoke(kvp.Key); return;   // photo/video → viewer

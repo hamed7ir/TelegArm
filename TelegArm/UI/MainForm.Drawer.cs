@@ -519,7 +519,7 @@ namespace TelegArm.UI
                 if (_hover == -1)
                     using (var hb = new SolidBrush(ColorMath.WithAlpha(_accent, _dark ? 22 : 18))) g.FillRectangle(hb, _headerRect);
                 TextRenderer.DrawText(g, _name, FontHelper.UiAt(11.5f, dpi), new Rectangle(P(86), P(30), P(CardW - 96), P(24)),
-                    ThemeHelper.PaletteFor(_dark).DrawerHeaderText, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                    ThemeHelper.PaletteFor(_dark).DrawerHeaderText, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);   // NoPrefix: "&" is text ("Theme & accent" read "Theme _accent")
                 TextRenderer.DrawText(g, "View profile", FontHelper.UiAt(8.5f, dpi), new Rectangle(P(86), P(54), P(CardW - 96), P(18)),
                     ThemeHelper.PaletteFor(_dark).DrawerHeaderSub, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
 
@@ -557,7 +557,7 @@ namespace TelegArm.UI
                         }
                         TextRenderer.DrawText(g, row.Label, FontHelper.UiAt(10.5f, dpi), new Rectangle(P(56), r.Y, P(CardW - 60), r.Height),
                             ThemeHelper.PaletteFor(_dark).DrawerRowText,
-                            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);   // NoPrefix: "&" is text ("Theme & accent" read "Theme _accent")
                         continue;
                     }
 
@@ -580,7 +580,7 @@ namespace TelegArm.UI
                         TextRenderer.DrawText(g, row.Glyph, FontHelper.UiAt(12f, dpi), gr, glyphC, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
                     Color lc = row.IsDanger ? danger : (ThemeHelper.PaletteFor(_dark).DrawerRowText);
                     TextRenderer.DrawText(g, row.Label, FontHelper.UiAt(10.5f, dpi), new Rectangle(P(56), r.Y, P(CardW - 110), r.Height), lc,
-                        TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                        TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);   // NoPrefix: "&" is text ("Theme & accent" read "Theme _accent")
 
                     if (row.IsToggle)
                     {

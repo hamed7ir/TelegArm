@@ -1330,6 +1330,88 @@ namespace TelegArm.Helpers
                     _log.AppendLine("  " + (dirOk ? "PASS  " : "FAIL  ") + "bubbles: direction by the first strong letter (Latin-first LTR, Persian-first and digits-first RTL: " + string.Join(", ", got) + ")");
                     if (!dirOk) _failures++;
                 }
+                // owner 2026-11-06: a GROUP of files (PDFs, a ZIP...) was drawn as blank picture tiles. Through the real path
+                // (AddMessageBubble -> HandleAlbumItem) it is one bubble with a file row per item now; grouped audio keeps its
+                // audio rows; a tap on a file row with no connection does nothing harmful; a file found on disk reads as cached.
+                {
+                    Func<int, long, long, string, string, long, TL.DocumentAttribute, TL.Message> grouped = (id, group, docId, name, mime, size, extra) => new TL.Message
+                    {
+                        id = id, date = DateTime.UtcNow, peer_id = new TL.PeerUser { user_id = 900001 }, message = "", grouped_id = group,
+                        media = new TL.MessageMediaDocument
+                        {
+                            document = new TL.Document
+                            {
+                                id = docId, size = size, mime_type = mime,
+                                attributes = extra != null ? new[] { new TL.DocumentAttributeFilename { file_name = name }, extra }
+                                                           : new TL.DocumentAttribute[] { new TL.DocumentAttributeFilename { file_name = name } },
+                            },
+                        },
+                    };
+                    var files = new[]
+                    {
+                        grouped(9301, 55501, 70001, "Analytical Engine - notes.pdf", "application/pdf", 2411724, null),
+                        grouped(9302, 55501, 70002, "Engine drawings.zip", "application/zip", 18874368, null),
+                        grouped(9303, 55501, 70003, "Budget 1843.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 48211, null),
+                        grouped(9304, 55501, 70004, "Letter to Babbage.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", 21877, null),
+                    };
+                    files[3].message = "The files for Monday";   // the caption rides on one item of a group
+                    var songs = new[]
+                    {
+                        grouped(9311, 55502, 70011, "01 Overture.mp3", "audio/mpeg", 5242880, new TL.DocumentAttributeAudio { duration = 212, title = "Overture", performer = "The Difference Engines" }),
+                        grouped(9312, 55502, 70012, "02 Punch Cards.mp3", "audio/mpeg", 4194304, new TL.DocumentAttributeAudio { duration = 187, title = "Punch Cards", performer = "The Difference Engines" }),
+                    };
+                    var chatMsgs = (IList)Field(f, "_currentChatMessages");
+                    foreach (var m in files.Concat(songs)) { chatMsgs.Add(m); Invoke(f, "AddMessageBubble", Field(f, "_selectedChat"), m, null, null); }
+                    Invoke(f, "ScrollMessagesToBottom");
+                    LivePump(600);
+                    var panelNow = (Control)Field(f, "_messagePanel");
+                    var bubblesNow = panelNow.Controls.OfType<UI.Controls.MessageBubbleControl>().ToList();
+                    var fileAlbum = bubblesNow.FirstOrDefault(b => b.IsAlbum && b.ContainsMessageId(9302));
+                    var songAlbum = bubblesNow.FirstOrDefault(b => b.IsAlbum && b.ContainsMessageId(9312));
+                    Func<UI.Controls.MessageBubbleControl, string, List<bool>> flags = (b, field) =>
+                        ((IEnumerable)Field(b, "_album")).Cast<object>().Select(t => (bool)t.GetType().GetField(field).GetValue(t)).ToList();
+                    bool oneBubbleEach = fileAlbum != null && songAlbum != null && !ReferenceEquals(fileAlbum, songAlbum)
+                                         && bubblesNow.Count(b => b.IsAlbum && (b.ContainsMessageId(9301) || b.ContainsMessageId(9304))) == 1;
+                    bool fileRows = fileAlbum != null && (bool)Field(fileAlbum, "_albumRows") && flags(fileAlbum, "IsFile").Count == 4 && flags(fileAlbum, "IsFile").All(x => x)
+                                    && flags(fileAlbum, "IsAudio").All(x => !x);
+                    bool audioRows = songAlbum != null && (bool)Field(songAlbum, "_albumRows") && flags(songAlbum, "IsAudio").Count == 2 && flags(songAlbum, "IsAudio").All(x => x)
+                                     && flags(songAlbum, "IsFile").All(x => !x);
+                    // a tap in the middle of the second file row: no connection here, so nothing starts - and nothing throws
+                    bool tapOk = false; string tapNote = "";
+                    if (fileAlbum != null)
+                    {
+                        var rects = ((IEnumerable)Field(fileAlbum, "_albumTileRects")).Cast<KeyValuePair<int, Rectangle>>().ToList();
+                        var row = rects.FirstOrDefault(kv => kv.Key == 9302).Value;
+                        try
+                        {
+                            Invoke(fileAlbum, "OnMouseClick", new MouseEventArgs(MouseButtons.Left, 1, row.X + row.Width / 2, row.Y + row.Height / 2, 0));
+                            tapOk = rects.Count == 4 && row.Width > 0;
+                        }
+                        catch (Exception ex) { tapNote = ex.GetType().Name + ": " + ex.Message; }
+                    }
+                    // the first file is on disk (the same cache path the single file card uses): its row reads as cached
+                    bool cachedOk = false;
+                    if (fileAlbum != null)
+                    {
+                        string onDisk = TelegArm.Core.MediaCache.MediaPath(TelegArm.Core.MediaCache.CacheFileName("document", 70001, "Analytical Engine - notes.pdf"));
+                        File.WriteAllBytes(onDisk, new byte[2411724]);
+                        Invoke(f, "ConfigureAlbumFile", fileAlbum, files[0]);
+                        cachedOk = flags(fileAlbum, "Cached")[0] && !flags(fileAlbum, "Cached")[1];
+                        try { File.Delete(onDisk); } catch { }
+                    }
+                    LivePump(300);
+                    Capture(f, "keys-album-files");
+                    if (fileAlbum != null)   // the whole bubble, whatever part of it the window shows
+                        using (var whole = new Bitmap(fileAlbum.Width, fileAlbum.Height))
+                        {
+                            fileAlbum.DrawToBitmap(whole, new Rectangle(Point.Empty, fileAlbum.Size));
+                            whole.Save(Path.Combine(_dir, "keys-album-files-bubble.png"), ImageFormat.Png);
+                        }
+                    bool albumOk = oneBubbleEach && fileRows && audioRows && tapOk && cachedOk;
+                    _log.AppendLine("  " + (albumOk ? "PASS  " : "FAIL  ") + "a group of files is one bubble of file rows (one bubble each: " + oneBubbleEach + ", file rows: " + fileRows
+                        + ", audio rows kept: " + audioRows + ", tap: " + (tapOk ? "ok" : "FAILED " + tapNote) + ", cached file seen: " + cachedOk + ")");
+                    if (!albumOk) _failures++;
+                }
                 // RT trip 2026-10-16 ("pause can't be resumed, can't stop or cancel"): the controls act AT ONCE, never waiting for
                 // a transfer in flight (none here: no network) - pause, resume, pause, cancel; and a pause before a deferred start
                 {
