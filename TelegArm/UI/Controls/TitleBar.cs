@@ -16,10 +16,12 @@ namespace TelegArm.UI.Controls
     /// ★ The title is drawn, not a Label (a Label would be hit as itself): script-aware font (Vazirmatn for
     ///   Persian), inline colour emoji, right-aligned when the title is RTL — WITHOUT RightToLeftLayout, which
     ///   mirrors every child and has broken RT input before.
-    /// Height: 46 logical px, or 36 in <see cref="Compact"/> mode (plan D11 — RT's 1366×768 always gets 36).</summary>
+    /// Height: 40 logical px, or 32 in <see cref="Compact"/> mode (plan D11 — RT's 1366×768 always gets 32).</summary>
     public sealed class TitleBar : Control, IDpiAware
     {
-        public const int FullHeight = 46, CompactHeight = 36, ButtonWidth = 52;
+        // Owner 2026-11-15: "a little bigger than original Telegram, make it smaller a little": 46/36/52 became the size of
+        // Windows' own caption (32 px high, 46 px buttons), which is what Telegram Desktop's bar matches; the full bar 40.
+        public const int FullHeight = 40, CompactHeight = 32, ButtonWidth = 46;
 
         public enum LeftButton { None, Menu, Back }
 
@@ -90,6 +92,21 @@ namespace TelegArm.UI.Controls
             }
         }
 
+        private Control _lead;
+
+        /// <summary>A second control, left of <see cref="Slot"/> (the update pill, 2026-11-15). Null removes it.</summary>
+        public Control LeadSlot
+        {
+            get { return _lead; }
+            set
+            {
+                if (_lead != null) Controls.Remove(_lead);
+                _lead = value;
+                if (_lead != null) Controls.Add(_lead);
+                PerformLayout();
+            }
+        }
+
         public void ToggleMaximize()
         {
             var f = FindForm();
@@ -138,6 +155,11 @@ namespace TelegArm.UI.Controls
                 x -= _slot.Width + Dpi.Px(8, this);
                 _slot.Location = new Point(x, (h - _slot.Height) / 2);
             }
+            if (_lead != null && _lead.Visible)   // (hidden until there is an update: it takes no room then)
+            {
+                x -= _lead.Width + Dpi.Px(8, this);
+                _lead.Location = new Point(x, (h - _lead.Height) / 2);
+            }
             _titleRight = x;
             if (_leftKind != LeftButton.None) _left.SetBounds(0, 0, bw, h);
         }
@@ -165,7 +187,7 @@ namespace TelegArm.UI.Controls
             e.Graphics.Clear(p.TitleBar);
             if (_title.Length == 0) return;
             int dpi = Dpi.Of(this);
-            var font = FontHelper.ForAt(_title, _compact ? 11.5f : 13f, dpi, FontStyle.Bold);   // shared: never dispose
+            var font = FontHelper.ForAt(_title, _compact ? 10.5f : 12f, dpi, FontStyle.Bold);   // shared: never dispose (a step smaller with the bar)
             var r = TitleRect();
             if (FontHelper.IsPersian(_title))
             {

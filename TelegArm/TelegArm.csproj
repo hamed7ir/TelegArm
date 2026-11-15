@@ -64,6 +64,8 @@
     <Compile Include="Core\AccountContext.cs" />
     <Compile Include="Core\AccountStore.cs" />
     <Compile Include="Core\AppSettings.cs" />
+    <Compile Include="Core\UpdateCheck.cs" />
+    <Compile Include="Core\Updater.cs" />
     <Compile Include="Core\ThemeSettings.cs" />
     <Compile Include="Core\AudioPlayer.cs" />
     <Compile Include="Core\Media\Tgav.cs" />
@@ -192,6 +194,7 @@
     <Compile Include="UI\MainForm.Media.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
     <Compile Include="UI\MainForm.Scroll.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
     <Compile Include="UI\MainForm.Glide.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
+    <Compile Include="UI\MainForm.AppUpdate.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
     <Compile Include="UI\MainForm.Composer.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
     <Compile Include="UI\MainForm.MessageActions.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
     <Compile Include="UI\MainForm.Tray.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
@@ -258,6 +261,7 @@
     <Compile Include="Helpers\WindowHit.cs" />
     <Compile Include="UI\Controls\GlyphButton.cs" />
     <Compile Include="UI\Controls\TitleBar.cs" />
+    <Compile Include="UI\Controls\UpdatePill.cs" />
     <Compile Include="UI\AppForm.cs">
       <SubType>Form</SubType>
     </Compile>

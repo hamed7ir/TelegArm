@@ -209,12 +209,12 @@ namespace TelegArm.UI.Controls
             RebuildRegion();
         }
 
-        /// <summary>2.7b: the title-bar size. 28 logical px high fits both bars (46, and 36 compact).</summary>
+        /// <summary>2.7b: the title-bar size. 24 logical px high fits both bars (40, and 32 compact: 2026-11-15).</summary>
         private void AutoSizeOnAccent()
         {
             int dpi = Dpi.Of(this);
             var t = TextRenderer.MeasureText(Caption(), FontHelper.UiAt(9f, dpi, FontStyle.Bold));   // shared font: never dispose
-            int h = Math.Max(Dpi.Px(28, dpi), t.Height + Dpi.Px(8, dpi));
+            int h = Math.Max(Dpi.Px(24, dpi), t.Height + Dpi.Px(6, dpi));
             int w = ShowsShield() ? h : t.Width + h + Dpi.Px(14, dpi);
             var want = new Size(w, h);
             if (want != _sizeForText)

@@ -36,6 +36,10 @@
 //    --check [file]                     requirements report only, to file (or a dialog); installs nothing.
 //                                       exit 0 all present, 3 something missing or old, 2 cannot run here
 //    --silent [dir] [--no-desktop]      install without UI. exit 0 ok, 4 TelegArm is running, 1 error
+//    --update <dir> --wait <pid>        TelegArm's own update (2026-11-15): a small progress window waits for the
+//                                       process <pid> (the TelegArm that downloaded this) to end, installs over <dir>
+//                                       (the desktop shortcut kept as it was) and starts TelegArm again.
+//                                       TELEGARM_SETUP_DRYRUN=1: no registry, no shortcuts, no start (the rig).
 //    --uninstall <dir> [--silent] [--purge]
 //                                       remove the install. Without --silent it asks, including whether to
 //                                       delete the user's data (default No). exit 0 ok/cancelled, 4 running, 1 error
@@ -105,6 +109,16 @@ namespace TelegArmSetup
                     Say(silent, "This is TelegArm's uninstaller, not its installer. To remove TelegArm use Settings > Apps, "
                                 + "or run uninstall.exe in TelegArm's folder.", MessageBoxIcon.Information);
                     return 1;
+                }
+
+                if (Eq(a0, "--update"))
+                {
+                    string dir = args.Length >= 2 && !args[1].StartsWith("--") ? args[1] : DefaultDir();
+                    int pid = 0;
+                    for (int i = 0; i + 1 < args.Length; i++)
+                        if (Eq(args[i], "--wait")) int.TryParse(args[i + 1], out pid);
+                    Application.Run(new UpdateForm(Clean(dir), pid));
+                    return UpdateForm.ExitCode;
                 }
 
                 if (Eq(a0, "--check"))
@@ -197,6 +211,9 @@ namespace TelegArmSetup
         }
 
         internal static bool Eq(string a, string b) { return string.Equals(a, b, StringComparison.OrdinalIgnoreCase); }
+
+        /// <summary>TELEGARM_SETUP_DRYRUN=1 (the update rig): files only; no registry, no shortcuts, TelegArm not started.</summary>
+        internal static bool DryRun { get { return Environment.GetEnvironmentVariable("TELEGARM_SETUP_DRYRUN") == "1"; } }
 
         private static bool HasFlag(string[] args, string flag)
         {
@@ -736,6 +753,7 @@ namespace TelegArmSetup
                 }
             }
 
+            if (Program.DryRun) { Report(progress, "Done (dry run: no shortcuts, no registry)."); return; }
             Report(progress, "Creating shortcuts...");
             string programs = Environment.GetFolderPath(Environment.SpecialFolder.Programs);
             Shortcut.Create(Path.Combine(programs, Program.AppName + ".lnk"), exe, null, targetDir, exe, Program.ShortcutDesc);
@@ -1206,6 +1224,132 @@ namespace TelegArmSetup
     }
 
     /// <summary>The install wizard, with an on-demand "Check requirements" report. The report only informs.</summary>
+    /// <summary>"--update dir --wait pid": TelegArm's own update. Waits for that TelegArm to end (it exits right after
+    /// starting this), installs over its folder and starts it again. Never kills it: still running after two minutes, it
+    /// asks to close it (Retry / Cancel).</summary>
+    internal sealed class UpdateForm : Form
+    {
+        private readonly string _dir;
+        private readonly int _pid;
+        private readonly Label _status;
+        private readonly ProgressBar _bar;
+        internal static int ExitCode = 1;   // 0 updated, 4 cancelled while TelegArm still ran, 1 failed
+
+        public UpdateForm(string dir, int pid)
+        {
+            _dir = dir;
+            _pid = pid;
+            Text = Program.AppName + " update";
+            try { using (var s = Assembly.GetExecutingAssembly().GetManifestResourceStream("setup.icon.ico")) if (s != null) Icon = new Icon(s); } catch { }
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false; MinimizeBox = false;
+            StartPosition = FormStartPosition.CenterScreen;
+            ClientSize = new Size(440, 124);
+            BackColor = Color.White;
+            Font = new Font("Segoe UI", 9f);
+            var title = new Label { Left = 18, Top = 16, Width = 404, Height = 24, Font = new Font("Segoe UI", 11f, FontStyle.Bold),
+                                    Text = "Updating " + Program.AppName + " to " + Info.AppVersion };
+            _status = new Label { Left = 18, Top = 48, Width = 404, Height = 18, ForeColor = Color.Gray, Text = "Waiting for " + Program.AppName + " to close..." };
+            _bar = new ProgressBar { Left = 18, Top = 76, Width = 404, Height = 14, Style = ProgressBarStyle.Marquee, MarqueeAnimationSpeed = 30 };
+            Controls.Add(title); Controls.Add(_status); Controls.Add(_bar);
+            Shown += (s, e) => { var t = new Thread(Work) { IsBackground = true }; t.Start(); };
+        }
+
+        private void Say(string msg) { try { BeginInvoke((Action)(() => _status.Text = msg)); } catch { } }
+
+        /// <summary>update.log in %TEMP%/TelegArm-update: what the update did (a failed one can be read afterwards).</summary>
+        private static void Log(string msg)
+        {
+            try
+            {
+                string d = Path.Combine(Path.GetTempPath(), "TelegArm-update");
+                Directory.CreateDirectory(d);
+                File.AppendAllText(Path.Combine(d, "update.log"), DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + "  " + msg + Environment.NewLine);
+            }
+            catch { }
+        }
+
+        private void Work()
+        {
+            Exception err = null;
+            Log("update to " + Info.AppVersion + " into " + _dir + ", waiting for pid " + _pid + (Program.DryRun ? " (dry run)" : ""));
+            try
+            {
+                WaitForApp();
+                bool desktop = File.Exists(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), Program.AppName + ".lnk"));
+                Installer.Install(_dir, desktop, Say);
+                Log("installed");
+            }
+            catch (Exception ex) { err = ex; Log("failed: " + ex.GetType().Name + ": " + ex.Message); }
+            try { BeginInvoke((Action)(() => Done(err))); } catch { }
+        }
+
+        /// <summary>The TelegArm that started this, then anything else of TelegArm's in the folder (its mutex, or an exe from
+        /// it), must be gone. It is never killed.</summary>
+        private void WaitForApp()
+        {
+            if (_pid > 0)
+            {
+                var w = Stopwatch.StartNew();
+                try
+                {
+                    using (var p = Process.GetProcessById(_pid))
+                    {
+                        string name = p.ProcessName;
+                        bool ours = string.Equals(name, "TelegArm", StringComparison.OrdinalIgnoreCase);   // (a reused id: not ours)
+                        bool ended = !ours || p.WaitForExit(120000);
+                        Log("pid " + _pid + " is " + name + (ours ? (ended ? ", it ended after " : ", STILL RUNNING after ") + w.ElapsedMilliseconds + " ms" : ": not TelegArm, not waited for"));
+                    }
+                }
+                catch (ArgumentException) { Log("pid " + _pid + " already gone"); }
+                catch (InvalidOperationException ex) { Log("pid " + _pid + ": " + ex.Message); }
+                catch (System.ComponentModel.Win32Exception ex) { Log("pid " + _pid + ": " + ex.Message); }
+            }
+            var sw = Stopwatch.StartNew();
+            string busy;
+            while ((busy = InUse.Describe(_dir)) != null)
+            {
+                if (sw.ElapsedMilliseconds > 15000)
+                {
+                    string why = busy;
+                    bool retry = (bool)Invoke((Func<bool>)(() =>
+                        MessageBox.Show(this, why + "\n\nClose it, then press Retry.", Program.AppName + " update",
+                                        MessageBoxButtons.RetryCancel, MessageBoxIcon.Warning) == DialogResult.Retry));
+                    if (!retry) throw new OperationCanceledException("cancelled");
+                    sw = Stopwatch.StartNew();
+                }
+                Thread.Sleep(250);
+            }
+        }
+
+        private void Done(Exception err)
+        {
+            _bar.Style = ProgressBarStyle.Continuous;
+            _bar.Value = err == null ? 100 : 0;
+            if (err is OperationCanceledException) { ExitCode = 4; Close(); return; }
+            if (err != null)
+            {
+                ExitCode = 1;
+                MessageBox.Show(this, "The update did not finish:\n\n" + err.Message + "\n\nRun this installer again, or download "
+                                + Program.AppName + " from its release page.", Program.AppName + " update", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Close();
+                return;
+            }
+            ExitCode = 0;
+            if (!Program.DryRun)
+            {
+                _status.Text = "Starting " + Program.AppName + "...";
+                try { Process.Start(new ProcessStartInfo(Path.Combine(_dir, Program.ExeName)) { WorkingDirectory = _dir, UseShellExecute = true }); }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(this, Program.AppName + " is updated but did not start: " + ex.Message, Program.AppName + " update",
+                                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            }
+            Close();
+        }
+    }
+
     internal sealed class InstallForm : Form
     {
         private readonly TextBox _path, _reqs;

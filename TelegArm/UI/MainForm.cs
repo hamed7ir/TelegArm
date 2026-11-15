@@ -348,6 +348,7 @@ namespace TelegArm.UI
 
             // Tray: a real user close (X) hides to tray instead, once the tray exists.
             FormClosing += MainForm_FormClosing;
+            Shown += (s, e) => StartUpdateChecks();   // 2026-11-15: the update check (MainForm.AppUpdate)
             Activated += (s, e) => _isForeground = true;
             Deactivate += (s, e) => _isForeground = false;
 

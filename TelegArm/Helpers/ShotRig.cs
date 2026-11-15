@@ -8,6 +8,7 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
 using System.Text;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using TelegArm.Core;
 using TelegArm.UI;
@@ -88,6 +89,7 @@ namespace TelegArm.Helpers
             if (live == "anim") return RunLiveAnim(dir);
             if (live == "resize") return RunLiveResize(dir);
             if (live == "startup") return RunLiveStartup(dir);
+            if (live == "update") return RunLiveUpdate(dir);
 
             foreach (var mode in new[] { ThemeMode.Light, ThemeMode.Dark })
             {
@@ -1214,6 +1216,246 @@ namespace TelegArm.Helpers
                 if (((GetQueueStatus(0x04FF) >> 16) & ~0x0010u) == 0) break;   // 0x10 = QS_TIMER: periodic timers never stop
                 System.Threading.Thread.Sleep(1);
             }
+        }
+
+        /// <summary>A tiny HTTP/1.1 server on 127.0.0.1 for the update rig: GET path -> (content type, bytes); unknown -> 404.
+        /// Bodies over 64 KB go out in slices with a short pause, so a download shows its progress.</summary>
+        private sealed class TinyHttp
+        {
+            private readonly System.Net.Sockets.TcpListener _l = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+            private readonly Dictionary<string, KeyValuePair<string, byte[]>> _routes = new Dictionary<string, KeyValuePair<string, byte[]>>();
+            private volatile bool _stop;
+            public int Port { get; private set; }
+            public int Requests;
+            public void Set(string path, string type, byte[] body) { lock (_routes) _routes[path] = new KeyValuePair<string, byte[]>(type, body); }
+            public void Remove(string path) { lock (_routes) _routes.Remove(path); }
+            public void Start()
+            {
+                _l.Start();
+                Port = ((System.Net.IPEndPoint)_l.LocalEndpoint).Port;
+                new System.Threading.Thread(() =>
+                {
+                    while (!_stop)
+                    {
+                        System.Net.Sockets.TcpClient c;
+                        try { c = _l.AcceptTcpClient(); } catch { break; }
+                        var t = new System.Threading.Thread(() => Serve(c)) { IsBackground = true };
+                        t.Start();
+                    }
+                }) { IsBackground = true }.Start();
+            }
+            public void Stop() { _stop = true; try { _l.Stop(); } catch { } }
+            private void Serve(System.Net.Sockets.TcpClient c)
+            {
+                try
+                {
+                    using (c)
+                    using (var s = c.GetStream())
+                    {
+                        var rd = new StreamReader(s, Encoding.ASCII);
+                        string first = rd.ReadLine() ?? "";
+                        string line;
+                        while (!string.IsNullOrEmpty(line = rd.ReadLine())) { }
+                        System.Threading.Interlocked.Increment(ref Requests);
+                        var parts = first.Split(' ');
+                        string path = parts.Length > 1 ? parts[1] : "/";
+                        KeyValuePair<string, byte[]> r;
+                        bool found;
+                        lock (_routes) found = _routes.TryGetValue(path, out r);
+                        byte[] body = found ? r.Value : Encoding.ASCII.GetBytes("not found");
+                        string head = "HTTP/1.1 " + (found ? "200 OK" : "404 Not Found") + "\r\nContent-Type: " + (found ? r.Key : "text/plain")
+                                    + "\r\nContent-Length: " + body.Length + "\r\nConnection: close\r\n\r\n";
+                        var hb = Encoding.ASCII.GetBytes(head);
+                        s.Write(hb, 0, hb.Length);
+                        int slice = body.Length > 65536 ? body.Length / 20 : body.Length;
+                        for (int o = 0; o < body.Length; o += slice)
+                        {
+                            s.Write(body, o, Math.Min(slice, body.Length - o));
+                            if (slice < body.Length) System.Threading.Thread.Sleep(15);
+                        }
+                    }
+                }
+                catch { }
+            }
+        }
+
+        private static string Sha256Hex(byte[] b)
+        {
+            using (var sha = System.Security.Cryptography.SHA256.Create())
+                return string.Concat(sha.ComputeHash(b).Select(x => x.ToString("x2")));
+        }
+
+        /// <summary>TELEGARM_LIVE=update (owner 2026-11-15: "check the repo for updates in background and warn user there is a
+        /// update, and when user clicks it download the update and install"). A fake GitHub on 127.0.0.1: nothing newer =
+        /// no pill; a newer release = the Update pill in the title bar; the download shows progress, is checked against its
+        /// SHA256SUMS.txt and starts the installer in update mode (caught, not run); a damaged download or a release with no
+        /// checksums is refused and nothing starts; a dead server stays silent. TELEGARM_UPDATE_REAL=1 also asks the real
+        /// GitHub (info). TELEGARM_SETUP=&lt;Setup.exe&gt; also runs its update mode as a dry run (files only), waiting for a
+        /// TelegArm process to end first.</summary>
+        private static int RunLiveUpdate(string dir)
+        {
+            ThemeHelper.InitMode(ThemeMode.Light);
+            MainForm.DemoNoSession = true;
+            Anim.Suppressed = true;
+            var srv = new TinyHttp();
+            MainForm f = null;
+            try
+            {
+                srv.Start();
+                string root = "http://127.0.0.1:" + srv.Port;
+                Environment.SetEnvironmentVariable("TELEGARM_UPDATE_URL", root + "/latest");
+                Environment.SetEnvironmentVariable("TELEGARM_UPDATE_PREFIX", root + "/download/");
+                var rnd = new Random(5);
+                var setup = new byte[1200000];
+                rnd.NextBytes(setup);
+                setup[0] = (byte)'M'; setup[1] = (byte)'Z';
+                string good = Sha256Hex(setup);
+                Func<string, bool, string> release = (tag, withSums) =>
+                    "{\"tag_name\":\"" + tag + "\",\"draft\":false,\"prerelease\":false,\"html_url\":\"https://github.com/hamed7ir/TelegArm/releases/tag/" + tag
+                    + "\",\"body\":\"Test notes\",\"assets\":[{\"name\":\"TelegArm-9.9.9-Setup.exe\",\"size\":" + setup.Length
+                    + ",\"browser_download_url\":\"" + root + "/download/v9.9.9/TelegArm-9.9.9-Setup.exe\"}"
+                    + (withSums ? ",{\"name\":\"SHA256SUMS.txt\",\"size\":100,\"browser_download_url\":\"" + root + "/download/v9.9.9/SHA256SUMS.txt\"}" : "") + "]}";
+                srv.Set("/download/v9.9.9/TelegArm-9.9.9-Setup.exe", "application/octet-stream", setup);
+                srv.Set("/download/v9.9.9/SHA256SUMS.txt", "text/plain", Encoding.ASCII.GetBytes("TelegArm 9.9.9\n\n" + good + "  TelegArm-9.9.9-Setup.exe\n"));
+
+                f = new MainForm(new TelegramService());
+                var wa = Screen.PrimaryScreen.WorkingArea;
+                f.StartPosition = FormStartPosition.Manual;
+                f.Bounds = new Rectangle(wa.Left + 60, wa.Top + 60, Math.Min(wa.Width - 120, 1000 * f.WindowDpiValue / 96), Math.Min(wa.Height - 120, 640 * f.WindowDpiValue / 96));
+                f.TopMost = true;
+                f.Show();
+                LivePump(1200);
+                Action<Task> wait = t => { var sw = System.Diagnostics.Stopwatch.StartNew(); while (!t.IsCompleted && sw.ElapsedMilliseconds < 30000) { Application.DoEvents(); System.Threading.Thread.Sleep(5); } };
+                Func<UI.Controls.UpdatePill> pill = () => Field(f, "_updatePill") as UI.Controls.UpdatePill;
+                Action<bool, string> check = (ok, what) => { _log.AppendLine("  " + (ok ? "PASS  " : "FAIL  ") + what); if (!ok) _failures++; };
+
+                // 1. the newest release is this build: no pill
+                srv.Set("/latest", "application/json", Encoding.UTF8.GetBytes(release("v" + Program.Version, true)));
+                wait((Task)Invoke(f, "CheckForUpdateAsync", false));
+                check(pill() == null || !pill().Visible, "the newest release is this version (" + Program.Version + "): no Update pill");
+
+                // 2. a newer one: the pill in the title bar, left of the proxy pill
+                srv.Set("/latest", "application/json", Encoding.UTF8.GetBytes(release("v9.9.9", true)));
+                wait((Task)Invoke(f, "CheckForUpdateAsync", false));
+                LivePump(400);
+                var bar = (UI.Controls.TitleBar)Member(f, "Bar");
+                var up = pill();
+                var proxy = Field(f, "_proxyPill") as Control;
+                bool inBar = up != null && up.Visible && ReferenceEquals(bar.LeadSlot, up) && up.Parent == bar && up.Bottom <= bar.Height && up.Top >= 0
+                             && (proxy == null || !proxy.Visible || up.Right <= proxy.Left);
+                check(inBar, "a newer release (9.9.9): the Update pill shows in the title bar, left of the proxy pill (pill " + (up != null ? up.Bounds.ToString() : "none")
+                      + ", proxy " + (proxy != null && proxy.Visible ? proxy.Bounds.ToString() : "hidden") + ", bar height " + bar.Height + ")");
+                var shotArea = bar.RectangleToScreen(bar.ClientRectangle);
+                using (var bmp = new Bitmap(shotArea.Width, shotArea.Height))
+                {
+                    using (var g = Graphics.FromImage(bmp)) g.CopyFromScreen(shotArea.Location, Point.Empty, shotArea.Size);
+                    bmp.Save(Path.Combine(_dir, "update-pill.png"), ImageFormat.Png);
+                }
+
+                // 3. the download: progress in the pill, checked against SHA256SUMS.txt, the installer started in update mode
+                string installDir = Path.Combine(_dir, "fake-install");
+                Directory.CreateDirectory(installDir);
+                Updater.TestInstallDir = installDir;
+                var launched = new List<string>();
+                Updater.LaunchOverride = (path, args) => launched.Add(path + "|" + args);
+                var seen = new List<int>();
+                var rel = Updater.Pending;
+                var task = (Task<string>)Invoke(f, "RunUpdateAsync", rel, installDir);
+                var sw2 = System.Diagnostics.Stopwatch.StartNew();
+                while (!task.IsCompleted && sw2.ElapsedMilliseconds < 30000)
+                {
+                    Application.DoEvents();
+                    int pr = up.Progress;
+                    if (seen.Count == 0 || seen[seen.Count - 1] != pr) seen.Add(pr);
+                    if (pr >= 40 && pr <= 70 && !File.Exists(Path.Combine(_dir, "update-pill-progress.png")))
+                        using (var bmp = new Bitmap(shotArea.Width, shotArea.Height))
+                        {
+                            using (var g = Graphics.FromImage(bmp)) g.CopyFromScreen(shotArea.Location, Point.Empty, shotArea.Size);
+                            bmp.Save(Path.Combine(_dir, "update-pill-progress.png"), ImageFormat.Png);
+                        }
+                    System.Threading.Thread.Sleep(2);
+                }
+                string err3 = task.IsCompleted ? task.Result : "timed out";
+                string setupPath = launched.Count > 0 ? launched[0].Split('|')[0] : null;
+                bool intact = setupPath != null && File.Exists(setupPath) && Sha256Hex(File.ReadAllBytes(setupPath)) == good;
+                string expectArgs = "--update \"" + installDir + "\" --wait " + System.Diagnostics.Process.GetCurrentProcess().Id;
+                bool argsOk = launched.Count == 1 && launched[0].EndsWith("|" + expectArgs);
+                check(err3 == null && intact && argsOk && seen.Count >= 4 && seen[seen.Count - 1] == 100,
+                      "Update: the installer downloads (progress " + string.Join(",", seen.Take(12)) + (seen.Count > 12 ? ",…" : "") + "), matches its SHA256SUMS.txt and starts as \""
+                      + (launched.Count > 0 ? launched[0].Split('|')[1] : "nothing") + "\"" + (err3 != null ? " (error: " + err3 + ")" : ""));
+
+                // 4. a damaged download: refused, nothing starts, the pill is back to "Update"
+                srv.Set("/download/v9.9.9/SHA256SUMS.txt", "text/plain", Encoding.ASCII.GetBytes(new string('0', 64) + "  TelegArm-9.9.9-Setup.exe\n"));
+                launched.Clear();
+                var t4 = (Task<string>)Invoke(f, "RunUpdateAsync", rel, installDir);
+                wait(t4);
+                check(t4.Result != null && t4.Result.Contains("damaged") && launched.Count == 0 && up.Progress == -1,
+                      "a download that does not match its checksum is refused and nothing starts (\"" + t4.Result + "\")");
+
+                // 5. a release with no SHA256SUMS.txt: refused before downloading anything
+                srv.Set("/latest", "application/json", Encoding.UTF8.GetBytes(release("v9.9.9", false)));
+                wait((Task)Invoke(f, "CheckForUpdateAsync", false));
+                var t5 = (Task<string>)Invoke(f, "RunUpdateAsync", Updater.Pending, installDir);
+                wait(t5);
+                check(t5.Result != null && t5.Result.Contains("SHA256SUMS") && launched.Count == 0,
+                      "a release without SHA256SUMS.txt is refused (\"" + t5.Result + "\")");
+
+                // 6. GitHub out of reach: the background check says nothing (no dialog, no exception)
+                srv.Stop();
+                var t6 = (Task)Invoke(f, "CheckForUpdateAsync", false);
+                wait(t6);
+                check(t6.IsCompleted && !t6.IsFaulted, "GitHub out of reach: the background check stays silent");
+
+                // 7. the real GitHub (info only)
+                if (Environment.GetEnvironmentVariable("TELEGARM_UPDATE_REAL") == "1")
+                {
+                    Environment.SetEnvironmentVariable("TELEGARM_UPDATE_URL", null);
+                    Environment.SetEnvironmentVariable("TELEGARM_UPDATE_PREFIX", null);
+                    var tr = Updater.CheckAsync();
+                    wait(tr);
+                    if (tr.IsFaulted) _log.AppendLine("  info  the real GitHub: " + tr.Exception.GetBaseException().GetType().Name + ": " + tr.Exception.GetBaseException().Message);
+                    else _log.AppendLine("  info  the real GitHub answered: " + (tr.Result == null ? "nothing newer than " + Program.Version : "newer " + tr.Result.Tag
+                        + ", installer " + tr.Result.SetupName + ", checksums " + (tr.Result.SumsUrl != null)));
+                }
+
+                // 8. the installer's update mode, as a dry run: it waits for a TelegArm process to end, then installs the files
+                string setupExe = Environment.GetEnvironmentVariable("TELEGARM_SETUP");
+                if (!string.IsNullOrEmpty(setupExe) && File.Exists(setupExe))
+                {
+                    string target = Path.Combine(_dir, "dryrun-install");
+                    if (Directory.Exists(target)) Directory.Delete(target, true);
+                    var other = new System.Diagnostics.ProcessStartInfo(Application.ExecutablePath, "--shoot \"" + Path.Combine(_dir, "waited-for") + "\"") { UseShellExecute = false };
+                    other.EnvironmentVariables["TELEGARM_LIVE"] = "startup";
+                    other.EnvironmentVariables.Remove("TELEGARM_SETUP");
+                    var waited = System.Diagnostics.Process.Start(other);
+                    var psi = new System.Diagnostics.ProcessStartInfo(setupExe, "--update \"" + target + "\" --wait " + waited.Id) { UseShellExecute = false };
+                    psi.EnvironmentVariables["TELEGARM_SETUP_DRYRUN"] = "1";
+                    var sw8 = System.Diagnostics.Stopwatch.StartNew();
+                    var inst = System.Diagnostics.Process.Start(psi);
+                    while (!inst.HasExited && sw8.ElapsedMilliseconds < 240000) { Application.DoEvents(); System.Threading.Thread.Sleep(50); }
+                    bool exited = inst.HasExited;
+                    int code = exited ? inst.ExitCode : -1;
+                    // the installer's own log says whom it waited for and when (the Process object's view was unreliable here)
+                    string ulog = Path.Combine(Path.GetTempPath(), "TelegArm-update", "update.log");
+                    string logText = File.Exists(ulog) ? File.ReadAllText(ulog) : "";
+                    int waitedAt = logText.LastIndexOf("pid " + waited.Id + " is TelegArm, it ended after", StringComparison.Ordinal);
+                    bool otherDoneFirst = waitedAt >= 0 && logText.IndexOf("installed", waitedAt, StringComparison.Ordinal) > waitedAt;
+                    bool files = File.Exists(Path.Combine(target, "TelegArm.exe")) && File.Exists(Path.Combine(target, "uninstall.manifest"));
+                    check(exited && code == 0 && files && otherDoneFirst, "the installer's update mode (dry run) waits for TelegArm to end, then installs (exit " + code
+                          + ", files " + files + ", the waited-for TelegArm ended first " + otherDoneFirst + ", " + (sw8.ElapsedMilliseconds / 1000.0).ToString("0.0") + " s)");
+                    try { if (!inst.HasExited) inst.Kill(); } catch { }
+                }
+            }
+            catch (Exception ex) { Fail("live-update", ex); }
+            finally
+            {
+                srv.Stop();
+                Updater.LaunchOverride = null;
+                Updater.TestInstallDir = null;
+                if (f != null) { try { f.Close(); } catch { } try { f.Dispose(); } catch { } }
+            }
+            File.WriteAllText(Path.Combine(_dir, "shots.txt"), _log.ToString());
+            return _failures == 0 ? 0 : 1;
         }
 
         /// <summary>TELEGARM_LIVE=startup (owner 2026-11-15, the PGO question): how long a start takes, from the process

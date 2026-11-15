@@ -1458,6 +1458,42 @@ namespace TelegArm.UI
                 using (var f = new AboutForm(ThemeHelper.Palette.Dark, ThemeHelper.Palette.Accent)) f.ShowDialog(this);
             };
             page.Section("About", version, about);
+
+            // 2026-11-15: updates from GitHub. The found release shows as an Update pill in the main window's title bar.
+            var s = AppSettings.Instance;
+            var autoUpdate = new ToggleRow("Check for updates automatically", s.CheckForUpdates) { Subtitle = "Looks for a new version twice a day" };
+            autoUpdate.Changed += (snd, ev) => { s.CheckForUpdates = autoUpdate.On; s.Save(); };
+            var checkNow = new ActionRow("Check for updates", "Check") { Subtitle = "This is TelegArm " + Program.Version };
+            checkNow.Click += async (snd, ev) =>
+            {
+                if (!checkNow.Enabled) return;
+                checkNow.Enabled = false;
+                checkNow.Subtitle = "Checking…";
+                try
+                {
+                    var r = await Updater.CheckAsync();
+                    if (IsDisposed) return;
+                    if (r != null)
+                    {
+                        Updater.RaiseFound(r);
+                        checkNow.Subtitle = "TelegArm " + r.Version.ToString(3) + " is out";
+                        Say("Updates", "TelegArm " + r.Version.ToString(3) + " is out. Click Update in the title bar of the main window.", "OK");
+                    }
+                    else
+                    {
+                        checkNow.Subtitle = "You have the latest version (" + Program.Version + ")";
+                        Say("Updates", "You have the latest version (" + Program.Version + ").", "OK");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    if (IsDisposed) return;
+                    checkNow.Subtitle = "This is TelegArm " + Program.Version;
+                    Say("Updates", "Couldn't check for updates: " + ex.Message, "OK");
+                }
+                finally { if (!IsDisposed) checkNow.Enabled = true; }
+            };
+            page.Section("Updates", autoUpdate, checkNow);
         }
 
         // ── OK ────────────────────────────────────────────────────────────────────────────────────────────────

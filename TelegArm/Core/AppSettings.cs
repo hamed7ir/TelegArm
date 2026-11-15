@@ -142,6 +142,10 @@ namespace TelegArm.Core
         /// <see cref="Animations"/>).</summary>
         public bool AnimateColumns { get; set; } = true;
 
+        /// <summary>2026-11-15: look for a new TelegArm release on GitHub in the background (20 s after start, then every 12
+        /// hours); a newer one shows an Update pill in the title bar. Settings, About.</summary>
+        public bool CheckForUpdates { get; set; } = true;
+
         /// <summary>FOLDER-SIDEBAR: folder navigation style. false = horizontal TAB bar above the chat list
         /// (default, today's exact layout); true = a vertical icon RAIL left of the chat list (Telegram-Desktop
         /// style). Read ONCE at construction (BuildLeftPanel) — restart to apply, like CompositedScroll, so the

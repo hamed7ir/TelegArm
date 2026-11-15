@@ -62,10 +62,12 @@
     <Compile Include="ComposerTests.cs" />
     <Compile Include="MediaTests.cs" />
     <Compile Include="CallTests.cs" />
+    <Compile Include="UpdateTests.cs" />
   </ItemGroup>
   <!-- The app sources under test. Add a file here when a test needs it (and whatever it depends on). -->
   <ItemGroup>
     <Compile Include="..\TelegArm\Core\AppSettings.cs"><Link>Linked\Core\AppSettings.cs</Link></Compile>
+    <Compile Include="..\TelegArm\Core\UpdateCheck.cs"><Link>Linked\Core\UpdateCheck.cs</Link></Compile>
     <Compile Include="..\TelegArm\Core\ThemeSettings.cs"><Link>Linked\Core\ThemeSettings.cs</Link></Compile>
     <Compile Include="..\TelegArm\Core\StoragePaths.cs"><Link>Linked\Core\StoragePaths.cs</Link></Compile>
     <Compile Include="..\TelegArm\Core\PrivacyRules.cs"><Link>Linked\Core\PrivacyRules.cs</Link></Compile>

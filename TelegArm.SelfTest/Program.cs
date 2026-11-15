@@ -31,6 +31,7 @@ namespace TelegArm.SelfTest
             WsTunnelTests.Register(tests);
             ProxyTests.Register(tests);
             ComposerTests.Register(tests);
+            UpdateTests.Register(tests);
             MediaTests.Register(tests);
             CallTests.Register(tests);
 
