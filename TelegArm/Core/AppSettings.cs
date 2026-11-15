@@ -134,6 +134,14 @@ namespace TelegArm.Core
         /// <see cref="Animations"/>). The only animation that changes a window style (a layered window while it fades).</summary>
         public bool AnimatePopups { get; set; } = true;
 
+        /// <summary>The message list glides to the bottom, to a replied message, a search result or a mention, and
+        /// follows a new message (needs <see cref="Animations"/>). Off = those jumps are instant, as before.</summary>
+        public bool AnimateScroll { get; set; } = true;
+
+        /// <summary>In a narrow window (one column), going from the list to a chat and back slides (needs
+        /// <see cref="Animations"/>).</summary>
+        public bool AnimateColumns { get; set; } = true;
+
         /// <summary>FOLDER-SIDEBAR: folder navigation style. false = horizontal TAB bar above the chat list
         /// (default, today's exact layout); true = a vertical icon RAIL left of the chat list (Telegram-Desktop
         /// style). Read ONCE at construction (BuildLeftPanel) — restart to apply, like CompositedScroll, so the

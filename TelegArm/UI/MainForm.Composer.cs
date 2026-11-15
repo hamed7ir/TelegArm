@@ -55,7 +55,7 @@ namespace TelegArm.UI
             bubble.Pending = true;
             if (replyPreview != null) { bubble.ReplyPreview = replyPreview; bubble.Measure(); }
             _messagePanel.Controls.Add(bubble);
-            ScrollMessagesToBottom();
+            GlideMessagesToBottom(Anim.NewMessageMs);   // stage 3: your message slides in from the bottom (instant when off)
 
             try
             {

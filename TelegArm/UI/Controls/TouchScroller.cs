@@ -73,6 +73,20 @@ namespace TelegArm.UI.Controls
         /// <summary>Fire <see cref="Scrolled"/> for a surface (single funnel for pan / momentum / wheel).</summary>
         private static void RaiseScrolled(ScrollableControl s) { var h = Scrolled; if (h != null) h(s); }
 
+        /// <summary>Animations stage 3: raised when a finger lands (on any surface) or the wheel turns over one. A glide
+        /// by code stops on it, the way a finger catches a coast.</summary>
+        public static event Action<ScrollableControl> UserInput;
+        private static void RaiseUserInput(ScrollableControl surface) { var h = UserInput; if (h != null) { try { h(surface); } catch { } } }
+
+        /// <summary>Animations stage 3: a programmatic VERTICAL scroll to offset <paramref name="y"/> (positive), through
+        /// the same funnel as a finger: <see cref="Scrolled"/> follows, so the thumb and the host's paging checks run.</summary>
+        internal static void ScrollTo(ScrollableControl s, int y)
+        {
+            if (s == null || s.IsDisposed) return;
+            s.AutoScrollPosition = new Point(-s.AutoScrollPosition.X, Math.Max(0, y));
+            RaiseScrolled(s);
+        }
+
         /// <summary>Enable finger-pan on a scroll surface (horizontal = pan along X, else Y).</summary>
         public static void Enable(ScrollableControl surface, bool horizontal)
         {
@@ -109,6 +123,7 @@ namespace TelegArm.UI.Controls
 
                 // 3.2: wheel on the coasting surface → the wheel takes over; the coast stops first.
                 if (_mSurface != null && ReferenceEquals(surface, _mSurface)) StopMomentum("catch");
+                RaiseUserInput(surface);   // a glide by code on that surface stops too
 
                 if (IsHorizontal(surface))
                 {
@@ -330,6 +345,7 @@ namespace TelegArm.UI.Controls
                     // pan/flick, but it can never tap or long-press (the finger came down to stop content, not to aim).
                     var caught = _mSurface;                       // capture before StopMomentum nulls it
                     if (_mSurface != null) StopMomentum("catch");
+                    RaiseUserInput(surface);                      // a glide by code on that surface stops too (stage 3)
                     // Watchdog: a tracked gesture whose UP was lost (id reuse proves the old contact ended;
                     // 15s outlives any real press) would otherwise eat every future DOWN — reset and proceed.
                     if (_active && (ti.dwID == _touchId || Environment.TickCount - _startTick > 15000))

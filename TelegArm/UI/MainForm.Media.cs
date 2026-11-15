@@ -715,6 +715,7 @@ namespace TelegArm.UI
 
         private void ClearMessagePanel()
         {
+            CancelGlide();                  // stage 3: a glide must not scroll the NEXT chat's content either
             TouchScroller.StopMomentum();   // 3.4: a coast must not scroll the NEXT chat's content
             StopRemeasure();                // step 3.4 (review): a DPI re-measure queue must not touch the next chat's view
 

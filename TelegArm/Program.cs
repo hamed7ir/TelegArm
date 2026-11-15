@@ -239,6 +239,10 @@ namespace TelegArm
             // Default OFF: only the session header is written and no handle is held (Settings→Advanced toggles).
             try { FileLog.Init(AppSettings.Instance.FileLogging); } catch { /* logging must never block startup */ }
 
+            // Owner 2026-11-15 ("can we use pgo ... to make its performance better?"): the .NET side of that is multicore
+            // JIT. Start-up records which methods it compiles; the next start compiles them ahead on the other cores.
+            StartJitProfile(StoragePaths.ResolveDataRoot());
+
             // ⚠ TA-37 FIX — REPLAY THE [SHELL] LINES Init() RAISED BEFORE THIS POINT.
             //   ShellNotify.Init() runs in Main(), ahead of Run(), so COM's activation timeout is met —
             //   but that is BEFORE the line above registers the trace tee, and Logger.Diag drops anything
@@ -306,6 +310,7 @@ namespace TelegArm
 
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
+            PaintBuffers.Init();   // trip 5: one reused paint bitmap instead of a new one per paint
 
             // BATCH-TA-33 — set the AUMID and probe Action Center / tile support ONCE, before any window.
             // It must run early: the AUMID also decides taskbar grouping, and Windows reads it when the
@@ -492,6 +497,7 @@ namespace TelegArm
             NativeLibraries.Init();
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
+            PaintBuffers.Init();
             if (probeFile != null)
             {
                 // A probe that dies must say where and why — RunGallery returns before Run() installs the app's handlers,
@@ -520,16 +526,43 @@ namespace TelegArm
         ///   forms — sees an empty throwaway folder, never the user's profile.
         /// Deliberately skipped versus Run(): the mutex, ShellNotify/ToastActivator (registry + COM), file logging,
         /// the daily cache prune and the old-libVLC cleanup (writes outside the isolated root). None of them draws anything.</summary>
+        /// <summary>Multicore JIT (System.Runtime.ProfileOptimization, .NET 4.5+): this start records which methods the
+        /// JIT compiles (startup.jitprofile in <paramref name="dir"/>, a few KB, rewritten each start); the next start
+        /// compiles them ahead on the other cores while the main thread runs (the Surface has four slow ones). A profile
+        /// of another build is ignored by the runtime. TELEGARM_MCJ=0 turns it off; TELEGARM_JITPROFILE_DIR points it
+        /// elsewhere (the start-up rig: its runs share one profile although each has its own throwaway data root).</summary>
+        private static void StartJitProfile(string dir)
+        {
+            try
+            {
+                if (Environment.GetEnvironmentVariable("TELEGARM_MCJ") == "0") return;
+                string over = Environment.GetEnvironmentVariable("TELEGARM_JITPROFILE_DIR");
+                if (!string.IsNullOrEmpty(over)) dir = over;
+                if (string.IsNullOrEmpty(dir)) return;
+                System.IO.Directory.CreateDirectory(dir);
+                JitProfileExisted = System.IO.File.Exists(System.IO.Path.Combine(dir, "startup.jitprofile"));
+                System.Runtime.ProfileOptimization.SetProfileRoot(dir);
+                System.Runtime.ProfileOptimization.StartProfile("startup.jitprofile");
+                JitProfileOn = true;
+            }
+            catch { }
+        }
+
+        /// <summary>The rig reads them: multicore JIT is on, and a profile from an earlier start was there to use.</summary>
+        internal static bool JitProfileOn, JitProfileExisted;
+
         private static void RunShoot(string dir)
         {
             string iso = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
                                                 "TelegArm-shoot-" + Guid.NewGuid().ToString("N").Substring(0, 8));
             StoragePaths.UseIsolatedRoot(iso);
+            StartJitProfile(iso);
             DeclareDpiAwareness();
             InitAccent(AppSettings.Instance);   // the isolated settings have none: TELEGARM_ACCENT shoots an accent set
             NativeLibraries.Init();
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
+            PaintBuffers.Init();
             int code = ShotRig.Run(dir, iso);
             try { System.IO.Directory.Delete(iso, true); } catch { }
             Environment.Exit(code);

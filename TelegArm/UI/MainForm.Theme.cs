@@ -100,24 +100,24 @@ namespace TelegArm.UI
             {
                 // The hover tint is a one-shot property, so unlike the drawn glyph it does NOT follow a live
                 // accent change on its own — re-assert it here, where every other themed control is refreshed.
-                _chatMenuBtn.FlatAppearance.MouseOverBackColor = ColorMath.WithAlpha(_accent, 40);
+                _chatMenuBtn.FlatAppearance.MouseOverBackColor = Color.Transparent;   // the tint is painted (and faded) by PaintButtonBackdrop
                 _chatMenuBtn.Invalidate();
             }
             if (_callBtn != null)
             {
-                _callBtn.FlatAppearance.MouseOverBackColor = ColorMath.WithAlpha(_accent, 40);   // the one-shot hover tint, as _dockBtn
+                _callBtn.FlatAppearance.MouseOverBackColor = Color.Transparent;   // the tint is painted (and faded) by PaintButtonBackdrop   // the one-shot hover tint, as _dockBtn
                 _callBtn.Invalidate();
             }
             if (_backBtn != null)
             {
-                _backBtn.FlatAppearance.MouseOverBackColor = ColorMath.WithAlpha(_accent, 40);   // same one-shot gap as _dockBtn
+                _backBtn.FlatAppearance.MouseOverBackColor = Color.Transparent;   // the tint is painted (and faded) by PaintButtonBackdrop   // same one-shot gap as _dockBtn
                 _backBtn.Invalidate();
             }
             if (_dockBtn != null)
             {
                 // TA-23/D1c — same one-shot-property gap as _chatMenuBtn: re-assert the hover tint here,
                 // because unlike the drawn glyph it does not follow a live accent change by itself.
-                _dockBtn.FlatAppearance.MouseOverBackColor = ColorMath.WithAlpha(_accent, 40);
+                _dockBtn.FlatAppearance.MouseOverBackColor = Color.Transparent;   // the tint is painted (and faded) by PaintButtonBackdrop
                 _dockBtn.Invalidate();
             }
             if (_dockEmoji != null)

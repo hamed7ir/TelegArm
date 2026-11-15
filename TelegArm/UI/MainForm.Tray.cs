@@ -24,13 +24,16 @@ namespace TelegArm.UI
         /// exists to prevent.</summary>
         protected override void OnResize(EventArgs e)
         {
+            var sw = InSizeMove ? System.Diagnostics.Stopwatch.StartNew() : null;
             base.OnResize(e);
             EnforceDockWidth();
             UpdateColumnLayout();   // owner 2026-10-15: one column below OneColumnBelow
+            if (sw != null) NoteResizeStep(sw.ElapsedMilliseconds);   // trip 5: a slow drag holds the content's layout
         }
 
         protected override void WndProc(ref System.Windows.Forms.Message m)
         {
+            if (m.Msg == 0x02E0) ReleaseDragLayout();   // WM_DPICHANGED: a held drag lets go first, so the rescale lays the content out
             // BATCH-TA-28/T2 — the shell has (re)created our taskbar button. Anything we sent to
             // SetOverlayIcon before this point was silently discarded, and this fires AGAIN after an
             // explorer.exe restart — so without re-applying here the badge disappears for the rest of the

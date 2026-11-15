@@ -191,6 +191,7 @@
     <Compile Include="UI\MainForm.Bubbles.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
     <Compile Include="UI\MainForm.Media.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
     <Compile Include="UI\MainForm.Scroll.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
+    <Compile Include="UI\MainForm.Glide.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
     <Compile Include="UI\MainForm.Composer.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
     <Compile Include="UI\MainForm.MessageActions.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
     <Compile Include="UI\MainForm.Tray.cs"><DependentUpon>MainForm.cs</DependentUpon></Compile>
@@ -244,6 +245,7 @@
     <Compile Include="Helpers\DpiCaches.cs" />
     <Compile Include="Helpers\Platform.cs" />
     <Compile Include="Helpers\Anim.cs" />
+    <Compile Include="Helpers\PaintBuffers.cs" />
     <Compile Include="Helpers\IDpiAware.cs" />
     <Compile Include="Helpers\DpiScaler.cs" />
     <Compile Include="Helpers\FontCache.cs" />

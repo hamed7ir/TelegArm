@@ -516,7 +516,14 @@ namespace TelegArm.UI
                             // WM_NCCALCSIZE that maximises the window (review 1.3), so the clip never fired.
                             if (IsZoomed(Handle)) ClipToWorkArea(m.LParam);
                             else if (UsesNativeEdges) { NativeEdgesCalc(ref m); return; }
-                            m.Result = (IntPtr)WVR_REDRAW;
+                            // Device trip 5: WVR_REDRAW repaints EVERY pixel of the window on every size change. During a
+                            // drag that was a full repaint per step on the Surface (the gutter path; Windows 10+ takes
+                            // NativeEdgesCalc, which never asked for it): the chat list repainted although nothing in it
+                            // moved. Mid-drag Windows now keeps what is still right and the layout repaints what changed
+                            // (OnResize repaints the gutter and its border); maximise, restore and snap keep the full
+                            // redraw they were tested with. (TELEGARM_NCREDRAW=1: the old way, for the resize rig.)
+                            // (only a plain edge-drag step: a snap or a drag-restore inside the loop changes the state: full redraw)
+                            m.Result = InSizeMove && !_ncRedrawAlways && !IsZoomed(Handle) && WindowState == _layoutState ? IntPtr.Zero : (IntPtr)WVR_REDRAW;
                             return;
                         }
                         break;
@@ -562,6 +569,7 @@ namespace TelegArm.UI
 
         /// <summary>True between WM_ENTERSIZEMOVE and WM_EXITSIZEMOVE (a drag or resize in progress).</summary>
         protected bool InSizeMove { get; private set; }
+        private static readonly bool _ncRedrawAlways = Environment.GetEnvironmentVariable("TELEGARM_NCREDRAW") == "1";
         /// <summary>A drag/resize began: suspend expensive relayout until <see cref="OnSizeMoveEnd"/>.</summary>
         protected virtual void OnSizeMoveBegin() { }
         protected virtual void OnSizeMoveEnd() { }

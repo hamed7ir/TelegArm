@@ -55,7 +55,7 @@ namespace TelegArm.UI
             // Just before the menu shows: touch-size the rows + give each known action an emoji icon (moving any
             // text-emoji prefix into the icon slot). Centralized here → EVERY themed menu in the app is enhanced.
             // Step 3.1: at the DPI of WHERE it opens (a popup's own monitor), not of the window that owns it.
-            Opening += (s, e) => { Point at = OpenPoint(); _openAt = null; PrepareFor(at); ArmFade(); };
+            Opening += (s, e) => { Point at = OpenPoint(); _openAt = null; PrepareFor(at); ArmFade(); ThemedMenuRenderer.SnapHover(Items); };
             Opened += (s, e) => StartFade();
             Closed += (s, e) => _openAt = null;
         }
@@ -441,6 +441,64 @@ namespace TelegArm.UI
     internal sealed class ThemedMenuRenderer : ToolStripProfessionalRenderer
     {
         public ThemedMenuRenderer() : base(new ThemedColorTable()) { RoundedEdges = false; }
+
+        // Animations stage 2 (the leftover): the highlight of a menu row FADES in and out (mouse or keyboard). One 0..1
+        // value per item (dropped with the item); fully highlighted, not highlighted, or animations off, the row is drawn
+        // by the stock renderer exactly as before, so a menu at rest is pixel-identical. Only the frames in between are
+        // drawn here: the same fill and border colours, mixed toward the menu background.
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ToolStripItem, Fade> _menuHover =
+            new System.Runtime.CompilerServices.ConditionalWeakTable<ToolStripItem, Fade>();
+
+        // the stock renderer's drop-down item padding (2, 0, 1, 0), in its own unscaled pixels: the in-between frames sit on
+        // the same rectangle as the stock highlight they fade into
+        private const int StockPadLeft = 2, StockPadRight = 1;
+
+        /// <summary>A menu opens: every row starts unlit (a reused menu kept the last row's value: a ghost highlight faded
+        /// off it on the next open, review).</summary>
+        internal static void SnapHover(ToolStripItemCollection items)
+        {
+            if (items == null) return;
+            foreach (ToolStripItem it in items)
+            {
+                Fade f;
+                if (_menuHover.TryGetValue(it, out f)) f.Snap(false);
+                var mi = it as ToolStripMenuItem;
+                if (mi != null && mi.HasDropDownItems) SnapHover(mi.DropDownItems);
+            }
+        }
+
+        private static float MenuHover(ToolStripItem item)
+        {
+            var owner = item.Owner;
+            bool on = item.Selected;
+            if (owner == null) return on ? 1f : 0f;
+            Fade f;
+            if (!_menuHover.TryGetValue(item, out f))
+            {
+                f = new Fade(owner, AnimKind.Hover, Anim.HoverInMs, Anim.HoverOutMs,
+                             () => { try { if (!item.IsDisposed) item.Invalidate(); } catch { } }, on);
+                _menuHover.Add(item, f);
+            }
+            f.Set(on);
+            return f.T;
+        }
+
+        protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e)
+        {
+            var item = e.Item;
+            if (item == null || !item.IsOnDropDown || item.Owner == null || !Anim.Enabled(AnimKind.Hover)) { base.OnRenderMenuItemBackground(e); return; }
+            float t = MenuHover(item);
+            bool sel = item.Selected;
+            if ((t >= 1f && sel) || (t <= 0f && !sel)) { base.OnRenderMenuItemBackground(e); return; }   // at rest: the stock drawing
+            if (t <= 0f) return;   // just highlighted: the fade draws it from the next frame (and just left: from t = 1, below)
+            var bounds = new Rectangle(StockPadLeft, 0, item.Width - StockPadLeft - StockPadRight, item.Height);
+            if (bounds.Width <= 0 || bounds.Height <= 0) return;
+            Color back = ThemedMenuColors.Background;
+            if (item.Enabled)
+                using (var b = new SolidBrush(ColorMath.Mix(back, ColorTable.MenuItemSelected, t))) e.Graphics.FillRectangle(b, bounds);
+            using (var pen = new Pen(ColorMath.Mix(back, ColorTable.MenuItemBorder, t)))
+                e.Graphics.DrawRectangle(pen, bounds.X, bounds.Y, bounds.Width - 1, bounds.Height - 1);
+        }
 
         protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
         {

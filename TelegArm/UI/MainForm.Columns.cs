@@ -51,6 +51,7 @@ namespace TelegArm.UI
         /// <summary>From the resize path and after a DPI change: picks the mode for the window's width now.</summary>
         private void UpdateColumnLayout()
         {
+            EndColumnSlide();   // the picture is of the old size: a resize lands a running slide
             if (_split == null || Dpi.Busy || WindowState == FormWindowState.Minimized) return;
             bool one = Width < Px(OneColumnBelow);
             if (one != _oneColumn)
@@ -71,10 +72,154 @@ namespace TelegArm.UI
 
         /// <summary>One column: bring the list (true) or the open chat (false) to the front. A no-op in two columns, apart
         /// from keeping the back arrow right.</summary>
-        private void ShowColumn(bool list)
+        private void ShowColumn(bool list) { ShowColumn(list, true); }
+
+        /// <param name="slide">Animations stage 3: in one column the page that leaves slides away (false: a reset, a logout).</param>
+        private void ShowColumn(bool list, bool slide)
         {
-            _listInFront = list;
-            ApplyColumns();
+            EndColumnSlide();   // a slide still running lands first
+            // What is ON THE SCREEN, not the state: the back arrow closes the chat (_selectedChat = null) before it gets here
+            // (review: the back arrow never slid).
+            bool chatBefore = ChatPaneOnScreen;
+            // The page that leaves, as a picture, laid over it BEFORE the change (so the new page never flashes on first).
+            ColumnPicture pic = slide && _oneColumn && Anim.Enabled(AnimKind.Columns) ? TakeColumnPicture() : null;
+            _columnSlide = pic;   // from now on every EndColumnSlide removes it, whatever happens below
+            try
+            {
+                _listInFront = list;
+                ApplyColumns();
+            }
+            catch { EndColumnSlide(); throw; }
+            if (pic == null) return;
+            bool chatAfter = ChatPaneOnScreen;
+            if (chatAfter == chatBefore) { EndColumnSlide(); return; }   // nothing changed sides
+            StartColumnSlide(pic, !chatAfter);
+        }
+
+        /// <summary>One column with the chat on screen (the list behind it).</summary>
+        private bool ChatColumnShown { get { return _oneColumn && _selectedChat != null && !_listInFront; } }
+
+        /// <summary>One column and the chat's pane is the one shown, whatever the state says.</summary>
+        private bool ChatPaneOnScreen { get { return _oneColumn && _split != null && _split.Panel1Collapsed && !_split.Panel2Collapsed; } }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "WindowFromPoint")]
+        private static extern IntPtr ColumnsWindowFromPoint(Point p);
+        [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "GetWindowThreadProcessId")]
+        private static extern uint ColumnsWindowPid(IntPtr hwnd, out uint pid);
+
+        /// <summary>Is the whole rectangle ours on the screen? Five points (the middle and four inset corners) must each be
+        /// over a window of this process: another window, a toast or the docked touch keyboard on top of it would end up
+        /// in the picture and slide away while the real one stays (review).</summary>
+        private bool OursOnScreen(Rectangle r)
+        {
+            try
+            {
+                uint me = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
+                int ix = Math.Max(2, r.Width / 10), iy = Math.Max(2, r.Height / 10);
+                var pts = new[] { new Point(r.X + r.Width / 2, r.Y + r.Height / 2), new Point(r.X + ix, r.Y + iy), new Point(r.Right - ix, r.Y + iy),
+                                  new Point(r.X + ix, r.Bottom - iy), new Point(r.Right - ix, r.Bottom - iy) };
+                foreach (var p in pts)
+                {
+                    uint pid;
+                    var h = ColumnsWindowFromPoint(p);
+                    if (h == IntPtr.Zero) return false;
+                    ColumnsWindowPid(h, out pid);
+                    if (pid != me) return false;
+                }
+                return true;
+            }
+            catch { return false; }
+        }
+
+        // ── the one-column slide (owner 2026-11-13, "make it feel smooth"; animations stage 3) ─────────────────────────
+        // Opening a chat in one column slides the list away to the left; going back slides the chat away to the right.
+        // The page that leaves is a PICTURE (one screen capture, laid over the split before the change), the page that
+        // comes is the real one, already switched underneath and revealed as the picture moves: nothing is reparented (rule
+        // 11), the real page is not repainted per frame, and a slow open (a chat's first paint on the Surface) just keeps
+        // the old page on screen a little longer (the picture waits up to 2 s for its first frame).
+
+        private ColumnPicture _columnSlide;
+
+        /// <summary>The rig reads each frame: how far (px) the leaving page has moved.</summary>
+        internal static Action<int> ColumnSlideObserver;
+
+        private sealed class ColumnPicture : Control
+        {
+            public Bitmap Picture;
+            public int Shift;   // where the picture is drawn in this control (negative: moved left)
+            public ColumnPicture()
+            {
+                SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+                SetStyle(ControlStyles.Selectable, false);
+                TabStop = false;
+            }
+            protected override void OnPaintBackground(PaintEventArgs e) { }   // the picture covers it all
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                var b = Picture;
+                if (b == null) return;
+                try { e.Graphics.DrawImageUnscaled(b, Shift, 0); } catch { }
+            }
+            protected override void Dispose(bool disposing)
+            {
+                if (disposing && Picture != null) { try { Picture.Dispose(); } catch { } Picture = null; }
+                base.Dispose(disposing);
+            }
+        }
+
+        /// <summary>The split as it is on the screen now, laid over it (null when it cannot be taken: the window is not
+        /// on the screen, or the capture failed).</summary>
+        private ColumnPicture TakeColumnPicture()
+        {
+            try
+            {
+                if (_split == null || !_split.IsHandleCreated || !_split.Visible || !Visible || WindowState == FormWindowState.Minimized) return null;
+                var host = _split.Parent;
+                if (host == null) return null;
+                var r = _split.RectangleToScreen(_split.ClientRectangle);
+                var scr = Screen.FromControl(this).Bounds;
+                if (r.Width <= 0 || r.Height <= 0 || !scr.Contains(r)) return null;   // partly off the screen: no honest picture
+                if (!OursOnScreen(r)) return null;                                     // something else is on top of it
+                var bmp = new Bitmap(r.Width, r.Height, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
+                try { using (var g = Graphics.FromImage(bmp)) g.CopyFromScreen(r.Location, Point.Empty, r.Size); }
+                catch { bmp.Dispose(); return null; }
+                var pic = new ColumnPicture { Picture = bmp, Bounds = _split.Bounds };
+                host.Controls.Add(pic);
+                pic.BringToFront();
+                return pic;
+            }
+            catch (Exception ex) { Logger.Diag("[ANIM] column picture: " + ex.GetType().Name + ": " + ex.Message); return null; }
+        }
+
+        private void RemoveColumnPicture(ColumnPicture pic)
+        {
+            if (pic == null) return;
+            try { if (pic.Parent != null) pic.Parent.Controls.Remove(pic); pic.Dispose(); } catch { }
+        }
+
+        private void StartColumnSlide(ColumnPicture pic, bool towardList)
+        {
+            _columnSlide = pic;
+            var home = pic.Bounds;
+            int w = home.Width;
+            Anim.Run(pic, AnimKind.Columns, Anim.ColumnMs, t =>
+            {
+                if (pic.IsDisposed) return;
+                int d = (int)Math.Round(w * Anim.EaseOut(t));
+                var obs = ColumnSlideObserver;   // (before the move: the screen then shows what the last frame left)
+                if (obs != null) obs(d);
+                if (towardList) { pic.Shift = 0; pic.SetBounds(home.X + d, home.Y, Math.Max(1, w - d), home.Height); }   // the chat leaves right
+                else { pic.Shift = -d; pic.SetBounds(home.X, home.Y, Math.Max(1, w - d), home.Height); }                 // the list leaves left
+                pic.Invalidate();
+            }, () => { if (ReferenceEquals(_columnSlide, pic)) EndColumnSlide(); else RemoveColumnPicture(pic); }, 2000);
+        }
+
+        /// <summary>A running slide lands at once (another switch, a resize, a reset).</summary>
+        private void EndColumnSlide()
+        {
+            var pic = _columnSlide;
+            _columnSlide = null;
+            RemoveColumnPicture(pic);
         }
 
         private void ApplyColumns()
@@ -86,7 +231,8 @@ namespace TelegArm.UI
             {
                 bool wasOne = _split.Panel1Collapsed || _split.Panel2Collapsed;
                 _split.Panel1Collapsed = false; _split.Panel2Collapsed = false;
-                if (wasOne) RestoreListWidth();
+                // (a held drag: the split still has its size from the last catch-up; the width is put back after the next one)
+                if (wasOne) { if (_dragLayoutHeld) _restoreListOwed = true; else RestoreListWidth(); }
             }
             else if (chat) { _split.Panel2Collapsed = false; _split.Panel1Collapsed = true; }
             else { _split.Panel1Collapsed = false; _split.Panel2Collapsed = true; }

@@ -677,7 +677,7 @@ namespace TelegArm.UI
             {
                 // Telegram rule: only auto-scroll if the view is already at/near the bottom. If the user
                 // is reading up, keep the exact offset and bump the floating button's unread count.
-                bool wasAtBottom = AtBottom(AtBottomThreshold);
+                bool wasAtBottom = AtBottom(AtBottomThreshold) || GlidingToBottom;   // a glide to the bottom is following it
                 int keepY = -_messagePanel.AutoScrollPosition.Y;
 
                 string sender = null;
@@ -730,7 +730,7 @@ namespace TelegArm.UI
                     // just sent it, so show it instead of leaving it below the fold with no scroll/indicator.
                     if (wasAtBottom || (outgoing && _atLiveTail))
                     {
-                        ScrollMessagesToBottom();
+                        GlideMessagesToBottom(Anim.NewMessageMs);   // stage 3: it slides in from the bottom (instant when off)
                         MarkCaughtUp();                 // we're following along → read it
                     }
                     else
@@ -761,7 +761,7 @@ namespace TelegArm.UI
 
             if (_selectedChat != null && peerId == _selectedChat.PeerId)
             {
-                bool wasAtBottom = AtBottom(AtBottomThreshold);
+                bool wasAtBottom = AtBottom(AtBottomThreshold) || GlidingToBottom;   // a glide to the bottom is following it
                 if (AddMessageBubble(_selectedChat, svc, null, null) && wasAtBottom)
                     ScrollMessagesToBottom();
             }

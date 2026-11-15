@@ -19,6 +19,10 @@ namespace TelegArm.Helpers
         Drawer,
         /// <summary>Popups and menus fade in.</summary>
         Popups,
+        /// <summary>The message list glides to the bottom and to a message (stage 3).</summary>
+        Scroll,
+        /// <summary>In a narrow window (one column) the list and the chat slide (stage 3).</summary>
+        Columns,
     }
 
     /// <summary>One thing on the animation clock. <see cref="Step"/> gets the milliseconds since the last tick and answers
@@ -44,6 +48,7 @@ namespace TelegArm.Helpers
         public const int ToggleMs = 160;
         public const int DrawerInMs = 190, DrawerOutMs = 140;
         public const int PopupMs = 120, MenuMs = 90;
+        public const int GlideMs = 280, NewMessageMs = 200, ColumnMs = 220;
 
         // ── switches ─────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -94,6 +99,8 @@ namespace TelegArm.Helpers
                 case AnimKind.Toggles: own = s.AnimateToggles; break;
                 case AnimKind.Hover: own = s.AnimateHover; break;
                 case AnimKind.Drawer: own = s.AnimateDrawer; break;
+                case AnimKind.Scroll: own = s.AnimateScroll; break;
+                case AnimKind.Columns: own = s.AnimateColumns; break;
                 default: own = s.AnimatePopups; break;
             }
             return own && (s.AnimateDespiteSystem || SystemAnimationsOn);
@@ -237,7 +244,14 @@ namespace TelegArm.Helpers
         /// done() run before this returns. The owner going away mid-way also lands it.</summary>
         public static Tween Run(Control owner, AnimKind kind, int ms, Action<float> step, Action done = null)
         {
-            var t = new Tween(owner, ms, step, done);
+            return Run(owner, kind, ms, step, done, 250);
+        }
+
+        /// <param name="maxWaitMs">How late the first frame may come and the tween still play (else it lands at once). 250
+        /// for a popup (it sits at opacity 0 meanwhile); longer where the start state is a picture of what was there.</param>
+        public static Tween Run(Control owner, AnimKind kind, int ms, Action<float> step, Action done, int maxWaitMs)
+        {
+            var t = new Tween(owner, ms, step, done, maxWaitMs);
             if (ms <= 0 || !CanAnimate(owner, kind)) { t.Finish(); return t; }
             Add(t);
             return t;
@@ -305,12 +319,14 @@ namespace TelegArm.Helpers
         /// <summary>The longest a tween waits for its first tick and still plays. Past it the UI thread was busy for that
         /// long with the thing on the screen at its START state (a popup at opacity 0: invisible, and it has the focus):
         /// it lands at once instead of adding its own duration to the wait (review 2026-11-13).</summary>
-        private const double MaxWaitMs = 250;
+        private const double MaxWaitMs = 250;   // the default of _maxWaitMs (Anim.Run without one)
 
-        internal Tween(Control owner, int ms, Action<float> step, Action done)
+        internal Tween(Control owner, int ms, Action<float> step, Action done, int maxWaitMs = 250)
         {
-            _owner = owner; _ms = Math.Max(1, ms); _step = step; _done = done;
+            _owner = owner; _ms = Math.Max(1, ms); _step = step; _done = done; _maxWaitMs = maxWaitMs;
         }
+
+        private readonly double _maxWaitMs;
 
         public bool Finished { get { return _finished; } }
 
@@ -338,7 +354,7 @@ namespace TelegArm.Helpers
             {
                 _started = true;
                 double waited = (System.Diagnostics.Stopwatch.GetTimestamp() - _born) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
-                if (waited > MaxWaitMs) { Anim.NoteLateStart(); Finish(); return false; }
+                if (waited > _maxWaitMs) { Anim.NoteLateStart(); Finish(); return false; }
             }
             float t = _elapsed / _ms;
             if (t >= 1f) { Finish(); return false; }

@@ -171,7 +171,7 @@ namespace TelegArm.UI
             if (!_atLiveTail && !_loadingNewer && DistanceFromBottom() <= 300)
                 _ = LoadNewerMessages();
 
-            if (_atLiveTail && AtBottom(40))   // at the REAL bottom → caught up
+            if (_atLiveTail && (AtBottom(40) || GlidingToBottom))   // at the REAL bottom → caught up (a glide there counts: review)
             {
                 _jumpUnread = 0;
                 if (_jumpBtn.Visible) { _jumpBtn.Visible = false; PositionJumpButton(); }   // T2: the stack moves down
@@ -190,7 +190,7 @@ namespace TelegArm.UI
             // From an island, a plain scroll only reaches the island edge — reload the bottom window so the
             // jump lands on the real latest message (simpler + guaranteed to reach the tail).
             if (!_atLiveTail && _selectedChat != null) { var _ = LoadHistoryAsync(_selectedChat); return; }
-            ScrollMessagesToBottom();
+            GlideMessagesToBottom(Anim.GlideMs);   // stage 3: glides (instant when animations are off)
             if (_jumpBtn != null) _jumpBtn.Visible = false;
             MarkCaughtUp();
         }
@@ -332,6 +332,14 @@ namespace TelegArm.UI
             _messagePanel.PerformLayout();
             var c = FindMessageControl(messageId);
             if (c == null) return false;
+            // Stage 3: a message out of view glides to the middle of the view and flashes when it arrives. In view, or
+            // animations off: as before (the smallest scroll that shows it, then the flash).
+            bool inView = c.Top >= 0 && c.Bottom <= _messagePanel.ClientSize.Height;
+            if (!inView && Anim.Enabled(AnimKind.Scroll))
+            {
+                GlideMessagesTo(() => CentredOffset(c), Anim.GlideMs, () => { if (!c.IsDisposed) (c as IFlashable)?.Flash(); });
+                return true;
+            }
             _messagePanel.ScrollControlIntoView(c);
             (c as IFlashable)?.Flash();
             return true;

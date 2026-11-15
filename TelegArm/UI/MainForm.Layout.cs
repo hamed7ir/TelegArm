@@ -98,6 +98,7 @@ namespace TelegArm.UI
             // (☰ U+2630 / Segoe UI Symbol) rendered inconsistently across fonts/DPI/RT — 2-vs-3 lines and a
             // small font-fallback with no accent. A drawn shape is deterministic: always 3 lines, always accent.
             _hamburger.Paint += (s, e) => PaintButtonBackdrop(e.Graphics, _hamburger);   // step 5.9: before the glyph
+            HeaderButtonFades(_hamburger);
             _hamburger.Paint += (s, e) => DrawHamburger(e.Graphics, _hamburger.ClientRectangle, ThemeHelper.PaletteFor(_dark).AccentGlyph);
 
             var searchRow = new TableLayoutPanel
@@ -272,10 +273,41 @@ namespace TelegArm.UI
         /// button with its parent's solid colour; with the backdrop on, paint the slice (and the hover tint) before the glyph.</summary>
         private void PaintButtonBackdrop(Graphics g, Button b)
         {
-            if (!WindowBackdrop.Enabled || b == null || b.IsDisposed) return;
-            WindowBackdrop.ClearBehind(g, b, b.Parent, b.ClientRectangle, ThemeHelper.PaletteFor(_dark).Header);
-            if (b.ClientRectangle.Contains(b.PointToClient(Cursor.Position)))
-                using (var hb = new SolidBrush(ColorMath.WithAlpha(_accent, 40))) g.FillRectangle(hb, b.ClientRectangle);
+            if (b == null || b.IsDisposed) return;
+            if (WindowBackdrop.Enabled) WindowBackdrop.ClearBehind(g, b, b.Parent, b.ClientRectangle, ThemeHelper.PaletteFor(_dark).Header);
+            // Animations stage 2 (the leftover): the hover and press tint FADES. Windows' own tint (MouseOverBackColor) was
+            // instant; it is off now (HeaderButtonFades) and drawn here, under the glyph: the same 40 / 70 accent alphas.
+            Fade hov, down;
+            float h = _headerHover.TryGetValue(b, out hov) ? hov.T : 0f, d = _headerPress.TryGetValue(b, out down) ? down.T : 0f;
+            if (!b.Enabled) h = d = 0f;
+            int alpha = (int)Math.Round(40 * Math.Max(h, d) + 30 * d);
+            if (alpha > 0)
+                using (var hb = new SolidBrush(ColorMath.WithAlpha(_accent, alpha))) g.FillRectangle(hb, b.ClientRectangle);
+        }
+
+        private readonly Dictionary<Button, Fade> _headerHover = new Dictionary<Button, Fade>();
+        private readonly Dictionary<Button, Fade> _headerPress = new Dictionary<Button, Fade>();
+
+        /// <summary>A header button's hover and press tint fades (painted by <see cref="PaintButtonBackdrop"/>): Windows' own
+        /// instant tint is turned off. A finger gets the press tint only (a hover would stay behind after the tap).</summary>
+        private void HeaderButtonFades(Button b)
+        {
+            if (b == null || _headerHover.ContainsKey(b)) return;
+            b.FlatAppearance.MouseOverBackColor = Color.Transparent;
+            b.FlatAppearance.MouseDownBackColor = Color.Transparent;
+            var hov = new Fade(b, AnimKind.Hover, Anim.HoverInMs, Anim.HoverOutMs);
+            var down = new Fade(b, AnimKind.Hover, Anim.PressInMs, Anim.PressOutMs);
+            _headerHover[b] = hov;
+            _headerPress[b] = down;
+            b.MouseEnter += (s, e) => { if (!TouchKeyboard.LastInputWasTouch()) hov.Set(true); };
+            b.MouseLeave += (s, e) => { hov.Set(false); down.Set(false); };
+            b.MouseDown += (s, e) => { if (e.Button == MouseButtons.Left) down.Set(true); };
+            b.MouseUp += (s, e) => down.Set(false);
+            // hidden or disabled under the pointer: no leave comes, so the tint would wait for the next show (review)
+            EventHandler unlit = (s, e) => { if (!b.Visible || !b.Enabled) { hov.Snap(false); down.Snap(false); } };
+            b.VisibleChanged += unlit;
+            b.EnabledChanged += unlit;
+            b.Disposed += (s, e) => { _headerHover.Remove(b); _headerPress.Remove(b); };
         }
 
         private void OnChatBackdropChanged()
@@ -599,6 +631,7 @@ namespace TelegArm.UI
             _callBtn.FlatAppearance.BorderSize = 0;
             _callBtn.FlatAppearance.MouseOverBackColor = ColorMath.WithAlpha(_accent, 40);
             _callBtn.Paint += (s, e) => PaintButtonBackdrop(e.Graphics, _callBtn);
+            HeaderButtonFades(_callBtn);
             _callBtn.Paint += (s, e) =>
             {
                 var glyph = ThemeHelper.PaletteFor(_dark).AccentGlyph;
@@ -618,6 +651,7 @@ namespace TelegArm.UI
             _chatMenuBtn.FlatAppearance.BorderSize = 0;
             _chatMenuBtn.FlatAppearance.MouseOverBackColor = ColorMath.WithAlpha(_accent, 40);
             _chatMenuBtn.Paint += (s, e) => PaintButtonBackdrop(e.Graphics, _chatMenuBtn);
+            HeaderButtonFades(_chatMenuBtn);
             _chatMenuBtn.Paint += (s, e) => DrawKebab(e.Graphics, _chatMenuBtn.ClientRectangle, ThemeHelper.PaletteFor(_dark).AccentGlyph);
             _chatMenuBtn.Click += (s, e) => ShowChatHeaderMenu();
             topBar.Controls.Add(_chatMenuBtn);
@@ -633,6 +667,7 @@ namespace TelegArm.UI
             _chatSearchBtn.FlatAppearance.BorderSize = 0;
             _chatSearchBtn.FlatAppearance.MouseOverBackColor = ColorMath.WithAlpha(_accent, 40);
             _chatSearchBtn.Paint += (s, e) => PaintButtonBackdrop(e.Graphics, _chatSearchBtn);
+            HeaderButtonFades(_chatSearchBtn);
             _chatSearchBtn.Paint += (s, e) => DrawMagnifier(e.Graphics, _chatSearchBtn.ClientRectangle, ThemeHelper.PaletteFor(_dark).AccentGlyph);
             _chatSearchBtn.Click += (s, e) => EnterInChatSearch();
             topBar.Controls.Add(_chatSearchBtn);
@@ -654,6 +689,7 @@ namespace TelegArm.UI
             _dockBtn.FlatAppearance.BorderSize = 0;
             _dockBtn.FlatAppearance.MouseOverBackColor = ColorMath.WithAlpha(_accent, 40);
             _dockBtn.Paint += (s, e) => PaintButtonBackdrop(e.Graphics, _dockBtn);
+            HeaderButtonFades(_dockBtn);
             _dockBtn.Paint += (s, e) => DrawDockGlyph(e.Graphics, _dockBtn.ClientRectangle, ThemeHelper.PaletteFor(_dark).AccentGlyph,
                                                       _dock != null && _dock.Visible);
             _dockBtn.Click += (s, e) => ToggleDock();
@@ -680,6 +716,7 @@ namespace TelegArm.UI
             _backBtn.FlatAppearance.BorderSize = 0;
             _backBtn.FlatAppearance.MouseOverBackColor = ColorMath.WithAlpha(_accent, 40);
             _backBtn.Paint += (s, e) => PaintButtonBackdrop(e.Graphics, _backBtn);
+            HeaderButtonFades(_backBtn);
             _backBtn.Paint += (s, e) => PaintBackButton(e.Graphics);
             _backBtn.Click += (s, e) => OnBackClick();
             topBar.Controls.Add(_backBtn);
@@ -712,7 +749,7 @@ namespace TelegArm.UI
                 // Plan E3: bubbles depend on the WIDTH only. The growing composer changes the panel's HEIGHT on every
                 // wrapped line; re-measuring every bubble for that was the cost the plan flagged (Tegra 3).
                 if (w == _bubbleLayoutWidth) return;
-                RelayoutBubbles(w, InSizeMove, false);   // during a drag: only the bubbles near the view (the rest when it ends)
+                RelayoutBubbles(w, InSizeMove || _releasingHold, false);   // during a drag (and its release): only the bubbles near the view
             };
             // Redesign 2.7b: the empty state. With no chat open, a centred service pill says what to do, as in Telegram.
             _messagePanel.Paint += PaintChatBackdrop;   // step 5.4: before the empty state, which draws over it
@@ -1051,20 +1088,14 @@ namespace TelegArm.UI
             TouchScroller.Scrolled += surface =>
             {
                 if (IsDisposed) return;
-                NoteActivity();   // PRESENCE 1.1: touch pans are real user input (taps arrive via the posted click)
+                if (_glide == null) NoteActivity();   // PRESENCE 1.1: touch pans are real user input; a glide by code is not (review)
                 if (surface == _chatListPanel) { CheckChatListPaging(); return; }   // list paging on touch pans
                 if (surface != _messagePanel) return;
                 InvalidateFixedBackdrop();   // step 5.5
                 // TOUCH-FREEZE: this runs per coalesced pan tick (~100Hz) — a pan parked near the top
                 // fired the line + call 85×/s. Attempts are tick-limited; the head limiter in
                 // LoadOlderMessages spaces the actual work for every other trigger path too.
-                if (!_loadingOlder && _hasMoreHistory && -_messagePanel.AutoScrollPosition.Y <= Px(40)
-                    && Environment.TickCount - _lastNearTopAttemptTick >= 250)
-                {
-                    _lastNearTopAttemptTick = Environment.TickCount;
-                    if (LogOn) System.Diagnostics.Debug.WriteLine("[SCROLL] touch-handled near-top → load older");
-                    _ = LoadOlderMessages();
-                }
+                if (_glide == null) MaybeLoadOlderNearTop();   // a glide asks once it has arrived (paging mid-glide stopped it)
                 OnScrollPositionChanged();   // jump button + near-bottom LoadNewerMessages (island → tail)
             };
 
@@ -1105,14 +1136,99 @@ namespace TelegArm.UI
         {
             base.OnSizeMoveBegin();
             _dragPinned = _messagePanel != null && AtBottom(AtBottomThreshold);
+            _dragSlowSteps = 0;
+            if (DragLayoutMode == "hold") HoldDragLayout();
         }
 
         protected override void OnSizeMoveEnd()
         {
             base.OnSizeMoveEnd();
+            ReleaseDragLayout();   // the content at the final size, first
             if (!_bubblesStale || _messagePanel == null || Dpi.Busy || _dpiRelayoutPending) return;
             RelayoutBubbles(ContentWidth(_messagePanel), false, true);
         }
+
+        // ── a slow drag: the frame follows the pointer, the content catches up (device trip 5, 2026-11-15) ───────────
+        // On the Surface one live step costs ~170 ms even after the paint fixes, so the window edge itself crawled at a
+        // few frames a second. When a step is slow (two steps over 50 ms), the layout INSIDE the content area is held for
+        // the rest of the drag: each step then moves only the frame and the title bar (cheap), and the content is laid out
+        // a few times a second (each catch-up waits twice as long as the last one took, so the frame keeps two thirds of
+        // the time) and once more at the end. Meanwhile a growing window shows the content's background in the new strip
+        // and a shrinking one cuts the content at its right edge. A fast PC never holds (its steps stay under 50 ms).
+        // TELEGARM_DRAGLAYOUT=hold (always) | live (never): the rig's switches.
+
+        private static readonly string DragLayoutMode = Environment.GetEnvironmentVariable("TELEGARM_DRAGLAYOUT");
+        private const int SlowStepMs = 50;
+        private System.Windows.Forms.Timer _dragLayoutTimer;
+        private bool _dragLayoutHeld, _dragLayoutOwed, _dragLayoutHooked;
+        private bool _releasingHold;      // the end of a held drag: its layout keeps the drag's rules (near view, the saved bottom pin)
+        private bool _restoreListOwed;    // a two-column switch while held: the list width is put back after the catch-up
+        private int _dragSlowSteps;
+
+        /// <summary>The window's resize step took <paramref name="ms"/> (MainForm.OnResize, the layout included).</summary>
+        private void NoteResizeStep(long ms)
+        {
+            if (!InSizeMove || _dragLayoutHeld || DragLayoutMode == "live" || Dpi.Busy) return;
+            if (ms <= SlowStepMs) { _dragSlowSteps = 0; return; }   // two slow steps IN A ROW (review: a cold first step, a GC pause)
+            if (++_dragSlowSteps >= 2) HoldDragLayout();
+        }
+
+        private void HoldDragLayout()
+        {
+            if (_dragLayoutHeld || Content == null || IsDisposed || Dpi.Busy || _dpiRelayoutPending) return;
+            if (!_dragLayoutHooked)
+            {
+                _dragLayoutHooked = true;
+                Content.SizeChanged += (s, e) => { if (_dragLayoutHeld) _dragLayoutOwed = true; };
+            }
+            if (_dragLayoutTimer == null)
+            {
+                _dragLayoutTimer = new System.Windows.Forms.Timer();
+                _dragLayoutTimer.Tick += (s, e) => CatchUpDragLayout();
+                FormClosed += (s, e) => { try { _dragLayoutTimer.Dispose(); } catch { } };
+            }
+            Content.SuspendLayout();
+            _dragLayoutHeld = true;
+            _dragLayoutOwed = false;
+            _dragLayoutTimer.Interval = 2 * SlowStepMs;
+            _dragLayoutTimer.Start();
+            if (LogOn) Logger.Diag("[RESIZE] slow steps: the content catches up while the frame follows the pointer");
+        }
+
+        /// <summary>A catch-up during the drag: the content at the size it has now, then held again.</summary>
+        private void CatchUpDragLayout()
+        {
+            if (!_dragLayoutHeld) { _dragLayoutTimer.Stop(); return; }
+            if (!InSizeMove || IsDisposed || Dpi.Busy || _dpiRelayoutPending) { ReleaseDragLayout(); return; }   // a DPI change mid-drag: live again
+            if (!_dragLayoutOwed) return;
+            _dragLayoutOwed = false;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            Content.ResumeLayout(true);
+            if (_restoreListOwed) { _restoreListOwed = false; RestoreListWidth(); }
+            Content.SuspendLayout();
+            DragCatchUps++;
+            int took = (int)sw.ElapsedMilliseconds;
+            _dragLayoutTimer.Interval = Math.Max(30, Math.Min(400, 2 * took));
+        }
+
+        private void ReleaseDragLayout()
+        {
+            if (_dragLayoutTimer != null) _dragLayoutTimer.Stop();
+            if (!_dragLayoutHeld) return;
+            _dragLayoutHeld = false;
+            _dragLayoutOwed = false;
+            _releasingHold = true;
+            try
+            {
+                if (Content != null && !Content.IsDisposed) Content.ResumeLayout(true);
+                if (_restoreListOwed) { _restoreListOwed = false; RestoreListWidth(); }
+            }
+            catch { }
+            finally { _releasingHold = false; }
+        }
+
+        /// <summary>The rig reads it: catch-ups since the process started.</summary>
+        internal int DragCatchUps { get; private set; }
 
         /// <summary>Gives every control of the message panel the width <paramref name="w"/> and re-measures the bubbles for
         /// it, with one flow layout at the end, keeping the reading position.</summary>
@@ -1156,6 +1272,16 @@ namespace TelegArm.UI
             if (pinned) panel.AutoScrollPosition = new Point(0, panel.VerticalScroll.Maximum);
             else if (anchor != null && !anchor.IsDisposed && anchor.Top != anchorTop)
                 panel.AutoScrollPosition = new Point(0, -panel.AutoScrollPosition.Y + (anchor.Top - anchorTop));
+        }
+
+        /// <summary>The list is within 40 px of its loaded top: page older (tick-limited: this runs per pan tick).</summary>
+        private void MaybeLoadOlderNearTop()
+        {
+            if (_messagePanel == null || _loadingOlder || !_hasMoreHistory || -_messagePanel.AutoScrollPosition.Y > Px(40)
+                || Environment.TickCount - _lastNearTopAttemptTick < 250) return;
+            _lastNearTopAttemptTick = Environment.TickCount;
+            if (LogOn) System.Diagnostics.Debug.WriteLine("[SCROLL] touch-handled near-top → load older");
+            _ = LoadOlderMessages();
         }
 
         private static int ContentWidth(FlowLayoutPanel p)

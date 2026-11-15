@@ -328,15 +328,20 @@ namespace TelegArm.UI
             var animHover = new ToggleRow("Buttons and rows fade on hover", s.AnimateHover);
             var animDrawer = new ToggleRow("The menu slides in", s.AnimateDrawer);
             var animPopups = new ToggleRow("Popups and menus fade in", s.AnimatePopups);
-            Action animParts = () => { animAlways.Enabled = animToggles.Enabled = animHover.Enabled = animDrawer.Enabled = animPopups.Enabled = anim.On; };
+            var animScroll = new ToggleRow("Scrolling glides to the bottom and to messages", s.AnimateScroll);
+            var animColumns = new ToggleRow("Pages slide in a narrow window", s.AnimateColumns);
+            Action animParts = () => { animAlways.Enabled = animToggles.Enabled = animHover.Enabled = animDrawer.Enabled = animPopups.Enabled
+                                       = animScroll.Enabled = animColumns.Enabled = anim.On; };
             animAlways.Changed += (snd, ev) => { s.AnimateDespiteSystem = animAlways.On; s.Save(); animAlways.Subtitle = winNote(); };
             anim.Changed += (snd, ev) => { s.Animations = anim.On; s.Save(); animParts(); };
             animToggles.Changed += (snd, ev) => { s.AnimateToggles = animToggles.On; s.Save(); };
             animHover.Changed += (snd, ev) => { s.AnimateHover = animHover.On; s.Save(); };
             animDrawer.Changed += (snd, ev) => { s.AnimateDrawer = animDrawer.On; s.Save(); };
             animPopups.Changed += (snd, ev) => { s.AnimatePopups = animPopups.On; s.Save(); };
+            animScroll.Changed += (snd, ev) => { s.AnimateScroll = animScroll.On; s.Save(); };
+            animColumns.Changed += (snd, ev) => { s.AnimateColumns = animColumns.On; s.Save(); };
             animParts();
-            page.Section("Animations", anim, animAlways, animToggles, animHover, animDrawer, animPopups);
+            page.Section("Animations", anim, animAlways, animToggles, animHover, animDrawer, animPopups, animScroll, animColumns);
 
             // Step 5.7: start over, or carry a look to another PC.
             var reset = new ActionRow("Reset appearance", "Reset") { Subtitle = "Accent, theme colours, chat backgrounds and bubbles" };
