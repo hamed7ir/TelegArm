@@ -35,7 +35,9 @@
 //    (no args)                          install wizard, with a "Check requirements" button
 //    --check [file]                     requirements report only, to file (or a dialog); installs nothing.
 //                                       exit 0 all present, 3 something missing or old, 2 cannot run here
-//    --silent [dir] [--no-desktop]      install without UI. exit 0 ok, 4 TelegArm is running, 1 error
+//    --silent [dir] [--no-desktop] [--ngen]
+//                                       install without UI. exit 0 ok, 4 TelegArm is running, 1 error.
+//                                       --ngen: also queue the native images (needs admin: a UAC prompt otherwise)
 //    --update <dir> --wait <pid>        TelegArm's own update (2026-11-15): a small progress window waits for the
 //                                       process <pid> (the TelegArm that downloaded this) to end, installs over <dir>
 //                                       (the desktop shortcut kept as it was) and starts TelegArm again.
@@ -146,6 +148,7 @@ namespace TelegArmSetup
                     string note = Requirements.RuntimeNote();
                     if (note != null) Console.Error.WriteLine(note);   // informs; a scripted install still proceeds
                     Installer.Install(dir, desktop, null);
+                    if (HasFlag(args, "--ngen")) NativeImages.Queue(dir);
                     return 0;
                 }
 
@@ -191,6 +194,7 @@ namespace TelegArmSetup
                 string busy = InUse.Describe(dir);
                 if (busy != null) { Console.Error.WriteLine(busy); return 4; }
             }
+            NativeImages.Remove(dir, silent);
             if (!Uninstaller.Run(dir, purge))
                 Say(silent, AppName + " was unregistered, but its install list was missing, so its files in " + dir
                             + " were left in place. Delete that folder yourself if you no longer need it.", MessageBoxIcon.Information);
@@ -707,6 +711,7 @@ namespace TelegArmSetup
             var names = new List<string>();
             foreach (var f in files) names.Add(f.Name);
             names.Add("uninstall.exe");
+            names.Add(NativeImages.Marker);   // written later, only when the native images were queued
 
             // ⚠ Upgrading replaces the previous version, so the target must be empty or TelegArm's (its manifest or
             //   TelegArm.exe) — never someone's folder that happens to be typed after --silent.
@@ -1227,6 +1232,65 @@ namespace TelegArmSetup
     /// <summary>"--update dir --wait pid": TelegArm's own update. Waits for that TelegArm to end (it exits right after
     /// starting this), installs over its folder and starts it again. Never kills it: still running after two minutes, it
     /// asks to close it (Retry / Cancel).</summary>
+    /// <summary>
+    /// Owner 2026-11-15 ("use the installer way for ngen"): TelegArm's own code compiled for this device ahead of time.
+    /// Measured on the Surface RT: the main window shows in 1.4 s instead of 3.2 s, a chat in 1.9 s instead of 4.4 s. It
+    /// needs admin (one UAC prompt: the install itself stays per-user) and has to be redone for every build, so the
+    /// installer and the update ask once each time. "/queue:1" hands it to Windows' native image service: the command
+    /// returns at once and the service compiles in the background (8 minutes on the Surface; TelegArm works meanwhile).
+    /// A declined prompt changes nothing: TelegArm runs as before. The 32-bit framework's ngen: TelegArm runs 32-bit.
+    /// </summary>
+    internal static class NativeImages
+    {
+        internal const string Marker = "ngen.queued";
+
+        private static string NgenPath()
+        {
+            string w = Environment.GetEnvironmentVariable("windir");
+            if (string.IsNullOrEmpty(w)) return null;
+            string p = Path.Combine(w, @"Microsoft.NET\Framework\v4.0.30319\ngen.exe");
+            return File.Exists(p) ? p : null;
+        }
+
+        internal static bool Available { get { return NgenPath() != null; } }
+
+        /// <summary>Queues the native images for TelegArm.exe in <paramref name="dir"/> (a UAC prompt). True when queued.</summary>
+        internal static bool Queue(string dir)
+        {
+            if (Program.DryRun) return false;
+            string ngen = NgenPath();
+            if (ngen == null) return false;
+            if (!RunElevated(ngen, "install \"" + Path.Combine(dir, Program.ExeName) + "\" /queue:1 /nologo")) return false;
+            try { File.WriteAllText(Path.Combine(dir, Marker), DateTime.Now.ToString("s")); } catch { }
+            return true;
+        }
+
+        /// <summary>Removes them before an uninstall, only when they were queued (otherwise no prompt).</summary>
+        internal static void Remove(string dir, bool silent)
+        {
+            if (Program.DryRun || !File.Exists(Path.Combine(dir, Marker))) return;
+            string ngen = NgenPath();
+            if (ngen == null) return;
+            RunElevated(ngen, "uninstall \"" + Path.Combine(dir, Program.ExeName) + "\" /nologo");
+        }
+
+        private static bool RunElevated(string exe, string args)
+        {
+            try
+            {
+                var psi = new ProcessStartInfo(exe, args) { Verb = "runas", UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden };
+                using (var p = Process.Start(psi))
+                {
+                    if (p == null) return false;
+                    p.WaitForExit(120000);
+                    return p.HasExited && p.ExitCode == 0;
+                }
+            }
+            catch (System.ComponentModel.Win32Exception) { return false; }   // the prompt was declined
+            catch { return false; }
+        }
+    }
+
     internal sealed class UpdateForm : Form
     {
         private readonly string _dir;
@@ -1338,6 +1402,9 @@ namespace TelegArmSetup
             ExitCode = 0;
             if (!Program.DryRun)
             {
+                _status.Text = "Preparing it to start faster...";
+                bool q = NativeImages.Queue(_dir);
+                Log("native images " + (q ? "queued" : "not queued (no permission, or no ngen here)"));
                 _status.Text = "Starting " + Program.AppName + "...";
                 try { Process.Start(new ProcessStartInfo(Path.Combine(_dir, Program.ExeName)) { WorkingDirectory = _dir, UseShellExecute = true }); }
                 catch (Exception ex)
@@ -1353,7 +1420,7 @@ namespace TelegArmSetup
     internal sealed class InstallForm : Form
     {
         private readonly TextBox _path, _reqs;
-        private readonly CheckBox _desktop;
+        private readonly CheckBox _desktop, _fast;
         private readonly Button _install, _cancel, _browse, _check;
         private readonly Label _status;
         private readonly ProgressBar _bar;
@@ -1379,7 +1446,9 @@ namespace TelegArmSetup
             _path = new TextBox { Left = 18, Top = 100, Width = 430, Text = Program.DefaultDir() };
             _browse = new Button { Left = 458, Top = 98, Width = 84, Height = 26, Text = "Browse..." };
             _browse.Click += (s, e) => { using (var d = new FolderBrowserDialog()) { try { d.SelectedPath = _path.Text; } catch { } if (d.ShowDialog(this) == DialogResult.OK) _path.Text = Path.Combine(d.SelectedPath, Program.InstallFolderName); } };
-            _desktop = new CheckBox { Left = 18, Top = 132, Width = 300, Text = "Create a desktop shortcut", Checked = true };
+            _fast = new CheckBox { Left = 300, Top = 132, Width = 242, Text = "Start faster (asks permission once)", Checked = NativeImages.Available };
+            _fast.Enabled = NativeImages.Available;
+            _desktop = new CheckBox { Left = 18, Top = 132, Width = 270, Text = "Create a desktop shortcut", Checked = true };
 
             var rl = new Label { Left = 18, Top = 164, Width = 524, Height = 18, Text = "Requirements (optional check - installing does not depend on it):" };
             _reqs = new TextBox { Left = 18, Top = 184, Width = 524, Height = 150, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, BackColor = Color.White, Font = new Font("Consolas", 8.5f),
@@ -1396,7 +1465,7 @@ namespace TelegArmSetup
             _cancel.Click += (s, e) => Close();
 
             Controls.Add(header);
-            Controls.Add(lbl); Controls.Add(_path); Controls.Add(_browse); Controls.Add(_desktop);
+            Controls.Add(lbl); Controls.Add(_path); Controls.Add(_browse); Controls.Add(_desktop); Controls.Add(_fast);
             Controls.Add(rl); Controls.Add(_reqs); Controls.Add(_links);
             Controls.Add(_status); Controls.Add(_bar); Controls.Add(_check); Controls.Add(_install); Controls.Add(_cancel);
             AcceptButton = _install; CancelButton = _cancel;
@@ -1487,6 +1556,7 @@ namespace TelegArmSetup
                 return;
             }
             _busy = false;
+            if (_fast.Checked) NativeImages.Queue(dir);   // one permission prompt; Windows compiles it in the background
             if (MessageBox.Show(this, Program.AppName + " was installed.\n\nLaunch it now?", "Setup",
                 MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes)
                 try { Process.Start(Path.Combine(dir, Program.ExeName)); } catch { }
