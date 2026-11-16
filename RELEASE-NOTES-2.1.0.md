@@ -20,6 +20,8 @@ in the same message.
 - The installer can prepare TelegArm for your device, so it starts about twice as fast. It takes a while (about 8
   minutes on a Surface RT) and is off by default. "Install updates fast" in Settings > Advanced skips it on updates.
 - A group of files shows as a list of files.
+- FFmpeg 9. Videos decode 2 to 3 times faster on PCs, and AV1 videos play now. On the Surface RT the speed is the same
+  as before.
 
 ## Fixed
 

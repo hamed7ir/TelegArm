@@ -32,7 +32,7 @@ namespace TelegArm.SelfTest
         private static void Loads()
         {
             Check.True(Tgav.Available, "tgav loaded (" + Tgav.Status + ", " + (Environment.Is64BitProcess ? "64" : "32") + "-bit process)");
-            Check.True(Tgav.Status.Contains("avcodec 62."), "FFmpeg 8 (avcodec 62): " + Tgav.Status);
+            Check.True(Tgav.Status.Contains("avcodec 63."), "FFmpeg 9 (avcodec 63, kodi-rt's 9.0.2): " + Tgav.Status);
         }
 
         // ── audio ────────────────────────────────────────────────────────────────────────────────────────────────────

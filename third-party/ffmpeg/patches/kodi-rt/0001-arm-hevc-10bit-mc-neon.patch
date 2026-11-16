@@ -1,0 +1,527 @@
+diff --git a/libavcodec/arm/Makefile b/libavcodec/arm/Makefile
+index e32a0bf..fcf9478 100644
+--- a/libavcodec/arm/Makefile
++++ b/libavcodec/arm/Makefile
+@@ -131,6 +131,7 @@ NEON-OBJS-$(CONFIG_DCA_DECODER)        += arm/synth_filter_neon.o
+ NEON-OBJS-$(CONFIG_HEVC_DECODER)       += arm/hevcdsp_init_neon.o       \
+                                           arm/hevcdsp_deblock_neon.o    \
+                                           arm/hevcdsp_idct_neon.o       \
++                                          arm/hevcdsp_mc10_neon.o       \
+                                           arm/hevcdsp_qpel_neon.o       \
+                                           arm/hevcdsp_sao_neon.o
+ NEON-OBJS-$(CONFIG_RV30_DECODER)       += arm/rv34dsp_neon.o
+diff --git a/libavcodec/arm/hevcdsp_arm.h b/libavcodec/arm/hevcdsp_arm.h
+index de23033..e2d6d1c 100644
+--- a/libavcodec/arm/hevcdsp_arm.h
++++ b/libavcodec/arm/hevcdsp_arm.h
+@@ -22,5 +22,6 @@
+ #include "libavcodec/hevc/dsp.h"
+ 
+ void ff_hevc_dsp_init_neon(HEVCDSPContext *c, const int bit_depth);
++void ff_hevc_dsp_init_mc10_neon(HEVCDSPContext *c);
+ 
+ #endif /* AVCODEC_ARM_HEVCDSP_ARM_H */
+diff --git a/libavcodec/arm/hevcdsp_init_neon.c b/libavcodec/arm/hevcdsp_init_neon.c
+index 6f11361..790a266 100644
+--- a/libavcodec/arm/hevcdsp_init_neon.c
++++ b/libavcodec/arm/hevcdsp_init_neon.c
+@@ -317,5 +317,7 @@ av_cold void ff_hevc_dsp_init_neon(HEVCDSPContext *c, const int bit_depth)
+         c->idct[1] = ff_hevc_idct_8x8_10_neon;
+         c->idct[2] = ff_hevc_idct_16x16_10_neon;
+         c->idct[3] = ff_hevc_idct_32x32_10_neon;
++
++        ff_hevc_dsp_init_mc10_neon(c);
+     }
+ }
+diff --git a/libavcodec/arm/hevcdsp_mc10_neon.c b/libavcodec/arm/hevcdsp_mc10_neon.c
+new file mode 100644
+index 0000000..006df85
+--- /dev/null
++++ b/libavcodec/arm/hevcdsp_mc10_neon.c
+@@ -0,0 +1,486 @@
++/*
++ * HEVC 10-bit motion compensation (qpel/epel: pixels, h, v, hv; plain, uni, bi) for 32-bit ARM NEON
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++/*
++ * Bit-exact with h26x/h2656_inter_template.c and hevc/dsp_template.c at BIT_DEPTH 10.
++ * 10-bit samples times the filter taps exceed 16 bits, so the filters accumulate in 32 bits (vmull/vmlal by lane)
++ * and narrow after the shift: first passes >> 2, the second pass of hv >> 6.
++ * uni: (v + 8) >> 4 == vrshr(v, 4). bi: (v + src2 + 16) >> 5 == vrshr(vhadd(v, src2), 4), without 16-bit overflow.
++ * Every load reads exactly the samples the C code reads. Widths must be multiples of 4 (4..64).
++ */
++
++#include <arm_neon.h>
++#include <stddef.h>
++#include <stdint.h>
++
++#include "libavutil/attributes.h"
++#include "libavcodec/hevc/dsp.h"
++#include "hevcdsp_arm.h"
++
++#define PIXEL_MAX ((1 << 10) - 1)
++
++static av_always_inline int16x8_t ld8(const uint16_t *p)
++{
++    return vreinterpretq_s16_u16(vld1q_u16(p));
++}
++
++static av_always_inline int16x4_t ld4(const uint16_t *p)
++{
++    return vreinterpret_s16_u16(vld1_u16(p));
++}
++
++static av_always_inline void qpel_coeffs(intptr_t m, int16x4_t *cl, int16x4_t *ch)
++{
++    const int16x8_t c = vmovl_s8(vld1_s8(ff_hevc_qpel_filters[m]));
++    *cl = vget_low_s16(c);
++    *ch = vget_high_s16(c);
++}
++
++static av_always_inline int16x4_t epel_coeffs(intptr_t m)
++{
++    const int8_t *f = ff_hevc_epel_filters[m];
++    int16x4_t c = vdup_n_s16(f[0]);
++    c = vset_lane_s16(f[1], c, 1);
++    c = vset_lane_s16(f[2], c, 2);
++    c = vset_lane_s16(f[3], c, 3);
++    return c;
++}
++
++static av_always_inline uint16x8_t clip8(int16x8_t v)
++{
++    return vreinterpretq_u16_s16(vminq_s16(vmaxq_s16(v, vdupq_n_s16(0)), vdupq_n_s16(PIXEL_MAX)));
++}
++
++static av_always_inline uint16x4_t clip4(int16x4_t v)
++{
++    return vreinterpret_u16_s16(vmin_s16(vmax_s16(v, vdup_n_s16(0)), vdup_n_s16(PIXEL_MAX)));
++}
++
++/* 8-tap sum over 8 lanes of 8 inputs */
++#define MAC8x8(lo, hi, w0, w1, w2, w3, w4, w5, w6, w7, cl, ch) do {                     \
++    lo = vmull_lane_s16(vget_low_s16(w0), cl, 0);  hi = vmull_lane_s16(vget_high_s16(w0), cl, 0);      \
++    lo = vmlal_lane_s16(lo, vget_low_s16(w1), cl, 1); hi = vmlal_lane_s16(hi, vget_high_s16(w1), cl, 1); \
++    lo = vmlal_lane_s16(lo, vget_low_s16(w2), cl, 2); hi = vmlal_lane_s16(hi, vget_high_s16(w2), cl, 2); \
++    lo = vmlal_lane_s16(lo, vget_low_s16(w3), cl, 3); hi = vmlal_lane_s16(hi, vget_high_s16(w3), cl, 3); \
++    lo = vmlal_lane_s16(lo, vget_low_s16(w4), ch, 0); hi = vmlal_lane_s16(hi, vget_high_s16(w4), ch, 0); \
++    lo = vmlal_lane_s16(lo, vget_low_s16(w5), ch, 1); hi = vmlal_lane_s16(hi, vget_high_s16(w5), ch, 1); \
++    lo = vmlal_lane_s16(lo, vget_low_s16(w6), ch, 2); hi = vmlal_lane_s16(hi, vget_high_s16(w6), ch, 2); \
++    lo = vmlal_lane_s16(lo, vget_low_s16(w7), ch, 3); hi = vmlal_lane_s16(hi, vget_high_s16(w7), ch, 3); \
++} while (0)
++
++/* 8-tap sum over 4 lanes */
++#define MAC8x4(acc, w0, w1, w2, w3, w4, w5, w6, w7, cl, ch) do {                         \
++    acc = vmull_lane_s16(w0, cl, 0);                                                    \
++    acc = vmlal_lane_s16(acc, w1, cl, 1); acc = vmlal_lane_s16(acc, w2, cl, 2);         \
++    acc = vmlal_lane_s16(acc, w3, cl, 3); acc = vmlal_lane_s16(acc, w4, ch, 0);         \
++    acc = vmlal_lane_s16(acc, w5, ch, 1); acc = vmlal_lane_s16(acc, w6, ch, 2);         \
++    acc = vmlal_lane_s16(acc, w7, ch, 3);                                               \
++} while (0)
++
++/* 4-tap sum over 8 lanes */
++#define MAC4x8(lo, hi, w0, w1, w2, w3, c) do {                                          \
++    lo = vmull_lane_s16(vget_low_s16(w0), c, 0);  hi = vmull_lane_s16(vget_high_s16(w0), c, 0);        \
++    lo = vmlal_lane_s16(lo, vget_low_s16(w1), c, 1); hi = vmlal_lane_s16(hi, vget_high_s16(w1), c, 1); \
++    lo = vmlal_lane_s16(lo, vget_low_s16(w2), c, 2); hi = vmlal_lane_s16(hi, vget_high_s16(w2), c, 2); \
++    lo = vmlal_lane_s16(lo, vget_low_s16(w3), c, 3); hi = vmlal_lane_s16(hi, vget_high_s16(w3), c, 3); \
++} while (0)
++
++/* 4-tap sum over 4 lanes */
++#define MAC4x4(acc, w0, w1, w2, w3, c) do {                                             \
++    acc = vmull_lane_s16(w0, c, 0);       acc = vmlal_lane_s16(acc, w1, c, 1);          \
++    acc = vmlal_lane_s16(acc, w2, c, 2);  acc = vmlal_lane_s16(acc, w3, c, 3);          \
++} while (0)
++
++/* ---- horizontal filters on samples (p points at the first tap), >> 2 ---- */
++
++static av_always_inline int16x8_t qpel_h8(const uint16_t *p, int16x4_t cl, int16x4_t ch)
++{
++    const int16x8_t a = ld8(p);                          /* p[0..7] */
++    const int16x8_t b = ld8(p + 7);                      /* p[7..14] */
++    const int16x8_t c = vextq_s16(b, b, 1);              /* p[8..14] in lanes 0..6 */
++    int32x4_t lo, hi;
++    MAC8x8(lo, hi, a, vextq_s16(a, c, 1), vextq_s16(a, c, 2), vextq_s16(a, c, 3),
++           vextq_s16(a, c, 4), vextq_s16(a, c, 5), vextq_s16(a, c, 6), vextq_s16(a, c, 7), cl, ch);
++    return vcombine_s16(vshrn_n_s32(lo, 2), vshrn_n_s32(hi, 2));
++}
++
++static av_always_inline int16x4_t qpel_h4(const uint16_t *p, int16x4_t cl, int16x4_t ch)
++{
++    int32x4_t acc;
++    MAC8x4(acc, ld4(p), ld4(p + 1), ld4(p + 2), ld4(p + 3), ld4(p + 4), ld4(p + 5), ld4(p + 6), ld4(p + 7),
++           cl, ch);
++    return vshrn_n_s32(acc, 2);
++}
++
++static av_always_inline int16x8_t epel_h8(const uint16_t *p, int16x4_t c)
++{
++    const int16x8_t a = ld8(p);                          /* p[0..7] */
++    const int16x4_t t = ld4(p + 7);                      /* p[7..10] */
++    const int16x4_t u = vext_s16(t, t, 1);               /* p[8..10] in lanes 0..2 */
++    const int16x8_t b = vcombine_s16(u, u);
++    int32x4_t lo, hi;
++    MAC4x8(lo, hi, a, vextq_s16(a, b, 1), vextq_s16(a, b, 2), vextq_s16(a, b, 3), c);
++    return vcombine_s16(vshrn_n_s32(lo, 2), vshrn_n_s32(hi, 2));
++}
++
++static av_always_inline int16x4_t epel_h4(const uint16_t *p, int16x4_t c)
++{
++    int32x4_t acc;
++    MAC4x4(acc, ld4(p), ld4(p + 1), ld4(p + 2), ld4(p + 3), c);
++    return vshrn_n_s32(acc, 2);
++}
++
++/* ---- output stages ---- */
++
++static av_always_inline uint16x8_t uni8(int16x8_t v)            { return clip8(vrshrq_n_s16(v, 4)); }
++static av_always_inline uint16x4_t uni4(int16x4_t v)            { return clip4(vrshr_n_s16(v, 4)); }
++static av_always_inline uint16x8_t bi8(int16x8_t v, int16x8_t s) { return clip8(vrshrq_n_s16(vhaddq_s16(v, s), 4)); }
++static av_always_inline uint16x4_t bi4(int16x4_t v, int16x4_t s) { return clip4(vrshr_n_s16(vhadd_s16(v, s), 4)); }
++
++#define OUT_PLAIN 0
++#define OUT_UNI   1
++#define OUT_BI    2
++
++/* store 8 or 4 results at column x of the current row */
++#define STORE8(mode, v) do {                                                            \
++    if (mode == OUT_PLAIN)    vst1q_s16(dst16 + x, v);                                  \
++    else if (mode == OUT_UNI) vst1q_u16(dstp + x, uni8(v));                             \
++    else                      vst1q_u16(dstp + x, bi8(v, vld1q_s16(src2 + x)));         \
++} while (0)
++#define STORE4(mode, v) do {                                                            \
++    if (mode == OUT_PLAIN)    vst1_s16(dst16 + x, v);                                   \
++    else if (mode == OUT_UNI) vst1_u16(dstp + x, uni4(v));                              \
++    else                      vst1_u16(dstp + x, bi4(v, vld1_s16(src2 + x)));           \
++} while (0)
++
++/* next row; only the pointers the mode uses move (the others may be NULL) */
++#define ADVANCE(mode, d16, dp, s2) do {                                                 \
++    if (mode == OUT_PLAIN) d16 += MAX_PB_SIZE;                                          \
++    else                   dp  += dstride;                                              \
++    if (mode == OUT_BI)    s2  += MAX_PB_SIZE;                                          \
++} while (0)
++
++/* ---- generic drivers. dst16: int16 intermediate (stride MAX_PB_SIZE); dstp: pixels (uni, bi) ---- */
++
++static av_always_inline void mc_pixels(int mode, int16_t *dst16, uint16_t *dstp, ptrdiff_t dstride,
++                                       const uint16_t *src, ptrdiff_t sstride, const int16_t *src2,
++                                       int height, int width)
++{
++    for (int y = 0; y < height; y++) {
++        int x = 0;
++        for (; x + 8 <= width; x += 8)
++            STORE8(mode, vshlq_n_s16(ld8(src + x), 4));
++        if (x < width)
++            STORE4(mode, vshl_n_s16(ld4(src + x), 4));
++        src += sstride;
++        ADVANCE(mode, dst16, dstp, src2);
++    }
++}
++
++static av_always_inline void mc_qpel_h(int mode, int16_t *dst16, uint16_t *dstp, ptrdiff_t dstride,
++                                       const uint16_t *src, ptrdiff_t sstride, const int16_t *src2,
++                                       int height, intptr_t mx, int width)
++{
++    int16x4_t cl, ch;
++    qpel_coeffs(mx, &cl, &ch);
++    src -= 3;
++    for (int y = 0; y < height; y++) {
++        int x = 0;
++        for (; x + 8 <= width; x += 8)
++            STORE8(mode, qpel_h8(src + x, cl, ch));
++        if (x < width)
++            STORE4(mode, qpel_h4(src + x, cl, ch));
++        src += sstride;
++        ADVANCE(mode, dst16, dstp, src2);
++    }
++}
++
++static av_always_inline void mc_epel_h(int mode, int16_t *dst16, uint16_t *dstp, ptrdiff_t dstride,
++                                       const uint16_t *src, ptrdiff_t sstride, const int16_t *src2,
++                                       int height, intptr_t mx, int width)
++{
++    const int16x4_t c = epel_coeffs(mx);
++    src -= 1;
++    for (int y = 0; y < height; y++) {
++        int x = 0;
++        for (; x + 8 <= width; x += 8)
++            STORE8(mode, epel_h8(src + x, c));
++        if (x < width)
++            STORE4(mode, epel_h4(src + x, c));
++        src += sstride;
++        ADVANCE(mode, dst16, dstp, src2);
++    }
++}
++
++/*
++ * Vertical 8-tap over a column strip, rows kept in registers (one new row per output row).
++ * Sources: 10-bit samples (shift 2) or the int16 hv intermediate (shift 6), given as int16 rows.
++ */
++#define QPEL_V_STRIPS(mode, LD8, LD4, sh, s0, sstr)                                     \
++    for (int x = 0; x < width; ) {                                                      \
++        const int16_t *s2 = src2;                                                       \
++        int16_t *d16 = dst16;                                                           \
++        uint16_t *dp = dstp;                                                            \
++        if (x + 8 <= width) {                                                           \
++            const SRCT *s = s0 + x;                                                     \
++            int16x8_t r0 = LD8(s), r1 = LD8(s + sstr), r2 = LD8(s + 2 * sstr),          \
++                      r3 = LD8(s + 3 * sstr), r4 = LD8(s + 4 * sstr),                   \
++                      r5 = LD8(s + 5 * sstr), r6 = LD8(s + 6 * sstr);                   \
++            s += 7 * sstr;                                                              \
++            for (int y = 0; y < height; y++) {                                          \
++                const int16x8_t r7 = LD8(s);                                            \
++                int32x4_t lo, hi;                                                       \
++                int16x8_t v;                                                            \
++                s += sstr;                                                              \
++                MAC8x8(lo, hi, r0, r1, r2, r3, r4, r5, r6, r7, cl, ch);                 \
++                v = vcombine_s16(vshrn_n_s32(lo, sh), vshrn_n_s32(hi, sh));             \
++                if (mode == OUT_PLAIN)    vst1q_s16(d16 + x, v);                        \
++                else if (mode == OUT_UNI) vst1q_u16(dp + x, uni8(v));                   \
++                else                      vst1q_u16(dp + x, bi8(v, vld1q_s16(s2 + x))); \
++                ADVANCE(mode, d16, dp, s2);                                            \
++                r0 = r1; r1 = r2; r2 = r3; r3 = r4; r4 = r5; r5 = r6; r6 = r7;          \
++            }                                                                           \
++            x += 8;                                                                     \
++        } else {                                                                        \
++            const SRCT *s = s0 + x;                                                     \
++            int16x4_t r0 = LD4(s), r1 = LD4(s + sstr), r2 = LD4(s + 2 * sstr),          \
++                      r3 = LD4(s + 3 * sstr), r4 = LD4(s + 4 * sstr),                   \
++                      r5 = LD4(s + 5 * sstr), r6 = LD4(s + 6 * sstr);                   \
++            s += 7 * sstr;                                                              \
++            for (int y = 0; y < height; y++) {                                          \
++                const int16x4_t r7 = LD4(s);                                            \
++                int32x4_t acc;                                                          \
++                int16x4_t v;                                                            \
++                s += sstr;                                                              \
++                MAC8x4(acc, r0, r1, r2, r3, r4, r5, r6, r7, cl, ch);                    \
++                v = vshrn_n_s32(acc, sh);                                               \
++                if (mode == OUT_PLAIN)    vst1_s16(d16 + x, v);                         \
++                else if (mode == OUT_UNI) vst1_u16(dp + x, uni4(v));                    \
++                else                      vst1_u16(dp + x, bi4(v, vld1_s16(s2 + x)));   \
++                ADVANCE(mode, d16, dp, s2);                                            \
++                r0 = r1; r1 = r2; r2 = r3; r3 = r4; r4 = r5; r5 = r6; r6 = r7;          \
++            }                                                                           \
++            x += 4;                                                                     \
++        }                                                                               \
++    }
++
++#define EPEL_V_STRIPS(mode, LD8, LD4, sh, s0, sstr)                                     \
++    for (int x = 0; x < width; ) {                                                      \
++        const int16_t *s2 = src2;                                                       \
++        int16_t *d16 = dst16;                                                           \
++        uint16_t *dp = dstp;                                                            \
++        if (x + 8 <= width) {                                                           \
++            const SRCT *s = s0 + x;                                                     \
++            int16x8_t r0 = LD8(s), r1 = LD8(s + sstr), r2 = LD8(s + 2 * sstr);          \
++            s += 3 * sstr;                                                              \
++            for (int y = 0; y < height; y++) {                                          \
++                const int16x8_t r3 = LD8(s);                                            \
++                int32x4_t lo, hi;                                                       \
++                int16x8_t v;                                                            \
++                s += sstr;                                                              \
++                MAC4x8(lo, hi, r0, r1, r2, r3, c);                                      \
++                v = vcombine_s16(vshrn_n_s32(lo, sh), vshrn_n_s32(hi, sh));             \
++                if (mode == OUT_PLAIN)    vst1q_s16(d16 + x, v);                        \
++                else if (mode == OUT_UNI) vst1q_u16(dp + x, uni8(v));                   \
++                else                      vst1q_u16(dp + x, bi8(v, vld1q_s16(s2 + x))); \
++                ADVANCE(mode, d16, dp, s2);                                            \
++                r0 = r1; r1 = r2; r2 = r3;                                              \
++            }                                                                           \
++            x += 8;                                                                     \
++        } else {                                                                        \
++            const SRCT *s = s0 + x;                                                     \
++            int16x4_t r0 = LD4(s), r1 = LD4(s + sstr), r2 = LD4(s + 2 * sstr);          \
++            s += 3 * sstr;                                                              \
++            for (int y = 0; y < height; y++) {                                          \
++                const int16x4_t r3 = LD4(s);                                            \
++                int32x4_t acc;                                                          \
++                int16x4_t v;                                                            \
++                s += sstr;                                                              \
++                MAC4x4(acc, r0, r1, r2, r3, c);                                         \
++                v = vshrn_n_s32(acc, sh);                                               \
++                if (mode == OUT_PLAIN)    vst1_s16(d16 + x, v);                         \
++                else if (mode == OUT_UNI) vst1_u16(dp + x, uni4(v));                    \
++                else                      vst1_u16(dp + x, bi4(v, vld1_s16(s2 + x)));   \
++                ADVANCE(mode, d16, dp, s2);                                            \
++                r0 = r1; r1 = r2; r2 = r3;                                              \
++            }                                                                           \
++            x += 4;                                                                     \
++        }                                                                               \
++    }
++
++#define LDT8(p) vld1q_s16(p)
++#define LDT4(p) vld1_s16(p)
++
++static av_always_inline void mc_qpel_v(int mode, int16_t *dst16, uint16_t *dstp, ptrdiff_t dstride,
++                                       const uint16_t *src, ptrdiff_t sstride, const int16_t *src2,
++                                       int height, intptr_t my, int width)
++{
++    int16x4_t cl, ch;
++    const uint16_t *s0 = src - 3 * sstride;
++    qpel_coeffs(my, &cl, &ch);
++#define SRCT uint16_t
++    QPEL_V_STRIPS(mode, ld8, ld4, 2, s0, sstride)
++#undef SRCT
++}
++
++static av_always_inline void mc_epel_v(int mode, int16_t *dst16, uint16_t *dstp, ptrdiff_t dstride,
++                                       const uint16_t *src, ptrdiff_t sstride, const int16_t *src2,
++                                       int height, intptr_t my, int width)
++{
++    const int16x4_t c = epel_coeffs(my);
++    const uint16_t *s0 = src - sstride;
++#define SRCT uint16_t
++    EPEL_V_STRIPS(mode, ld8, ld4, 2, s0, sstride)
++#undef SRCT
++}
++
++static av_always_inline void mc_qpel_hv(int mode, int16_t *dst16, uint16_t *dstp, ptrdiff_t dstride,
++                                        const uint16_t *src, ptrdiff_t sstride, const int16_t *src2,
++                                        int height, intptr_t mx, intptr_t my, int width)
++{
++    int16_t tmp[(MAX_PB_SIZE + 7) * MAX_PB_SIZE];
++    const int16_t *s0 = tmp;
++    int16x4_t cl, ch;
++
++    qpel_coeffs(mx, &cl, &ch);
++    src -= 3 * sstride + 3;
++    for (int y = 0; y < height + 7; y++) {
++        int16_t *t = tmp + y * MAX_PB_SIZE;
++        int x = 0;
++        for (; x + 8 <= width; x += 8)
++            vst1q_s16(t + x, qpel_h8(src + x, cl, ch));
++        if (x < width)
++            vst1_s16(t + x, qpel_h4(src + x, cl, ch));
++        src += sstride;
++    }
++    qpel_coeffs(my, &cl, &ch);
++#define SRCT int16_t
++    QPEL_V_STRIPS(mode, LDT8, LDT4, 6, s0, MAX_PB_SIZE)
++#undef SRCT
++}
++
++static av_always_inline void mc_epel_hv(int mode, int16_t *dst16, uint16_t *dstp, ptrdiff_t dstride,
++                                        const uint16_t *src, ptrdiff_t sstride, const int16_t *src2,
++                                        int height, intptr_t mx, intptr_t my, int width)
++{
++    int16_t tmp[(MAX_PB_SIZE + 3) * MAX_PB_SIZE];
++    const int16_t *s0 = tmp;
++    int16x4_t c = epel_coeffs(mx);
++
++    src -= sstride + 1;
++    for (int y = 0; y < height + 3; y++) {
++        int16_t *t = tmp + y * MAX_PB_SIZE;
++        int x = 0;
++        for (; x + 8 <= width; x += 8)
++            vst1q_s16(t + x, epel_h8(src + x, c));
++        if (x < width)
++            vst1_s16(t + x, epel_h4(src + x, c));
++        src += sstride;
++    }
++    c = epel_coeffs(my);
++#define SRCT int16_t
++    EPEL_V_STRIPS(mode, LDT8, LDT4, 6, s0, MAX_PB_SIZE)
++#undef SRCT
++}
++
++/* ---- entry points with the HEVCDSPContext signatures ---- */
++
++#define SRC16  ((const uint16_t *)src)
++#define SSTR   (srcstride >> 1)
++
++static void put_pixels_10_neon(int16_t *dst, const uint8_t *src, ptrdiff_t srcstride,
++                               int height, intptr_t mx, intptr_t my, int width)
++{
++    mc_pixels(OUT_PLAIN, dst, NULL, 0, SRC16, SSTR, NULL, height, width);
++}
++
++static void put_bi_pixels_10_neon(uint8_t *dst, ptrdiff_t dststride, const uint8_t *src, ptrdiff_t srcstride,
++                                  const int16_t *src2, int height, intptr_t mx, intptr_t my, int width)
++{
++    mc_pixels(OUT_BI, NULL, (uint16_t *)dst, dststride >> 1, SRC16, SSTR, src2, height, width);
++}
++
++#define DEF_MC(name, call_plain, call_uni, call_bi)                                      \
++static void put_ ## name ## _10_neon(int16_t *dst, const uint8_t *src, ptrdiff_t srcstride,               \
++                                     int height, intptr_t mx, intptr_t my, int width)    \
++{                                                                                        \
++    const int mode = OUT_PLAIN; int16_t *dst16 = dst; uint16_t *dstp = NULL;             \
++    ptrdiff_t dstride = 0; const int16_t *src2 = NULL;                                   \
++    call_plain;                                                                          \
++}                                                                                        \
++static void put_ ## name ## _uni_10_neon(uint8_t *dst, ptrdiff_t dststride, const uint8_t *src,           \
++                                         ptrdiff_t srcstride, int height, intptr_t mx, intptr_t my,       \
++                                         int width)                                      \
++{                                                                                        \
++    const int mode = OUT_UNI; int16_t *dst16 = NULL; uint16_t *dstp = (uint16_t *)dst;   \
++    ptrdiff_t dstride = dststride >> 1; const int16_t *src2 = NULL;                      \
++    call_uni;                                                                            \
++}                                                                                        \
++static void put_ ## name ## _bi_10_neon(uint8_t *dst, ptrdiff_t dststride, const uint8_t *src,            \
++                                        ptrdiff_t srcstride, const int16_t *src2, int height,             \
++                                        intptr_t mx, intptr_t my, int width)             \
++{                                                                                        \
++    const int mode = OUT_BI; int16_t *dst16 = NULL; uint16_t *dstp = (uint16_t *)dst;    \
++    ptrdiff_t dstride = dststride >> 1;                                                  \
++    call_bi;                                                                             \
++}
++
++#define H_ARGS(f)   f(mode, dst16, dstp, dstride, SRC16, SSTR, src2, height, mx, width)
++#define V_ARGS(f)   f(mode, dst16, dstp, dstride, SRC16, SSTR, src2, height, my, width)
++#define HV_ARGS(f)  f(mode, dst16, dstp, dstride, SRC16, SSTR, src2, height, mx, my, width)
++
++DEF_MC(qpel_h,  H_ARGS(mc_qpel_h),   H_ARGS(mc_qpel_h),   H_ARGS(mc_qpel_h))
++DEF_MC(qpel_v,  V_ARGS(mc_qpel_v),   V_ARGS(mc_qpel_v),   V_ARGS(mc_qpel_v))
++DEF_MC(qpel_hv, HV_ARGS(mc_qpel_hv), HV_ARGS(mc_qpel_hv), HV_ARGS(mc_qpel_hv))
++DEF_MC(epel_h,  H_ARGS(mc_epel_h),   H_ARGS(mc_epel_h),   H_ARGS(mc_epel_h))
++DEF_MC(epel_v,  V_ARGS(mc_epel_v),   V_ARGS(mc_epel_v),   V_ARGS(mc_epel_v))
++DEF_MC(epel_hv, HV_ARGS(mc_epel_hv), HV_ARGS(mc_epel_hv), HV_ARGS(mc_epel_hv))
++
++av_cold void ff_hevc_dsp_init_mc10_neon(HEVCDSPContext *c)
++{
++    /* widths 4, 8, 12, 16, 24, 32, 48, 64; 2 and 6 (small chroma blocks) stay in C */
++    for (int i = 1; i < 10; i++) {
++        if (i == 2)
++            continue;
++        c->put_hevc_qpel[i][0][0]     = put_pixels_10_neon;
++        c->put_hevc_qpel[i][0][1]     = put_qpel_h_10_neon;
++        c->put_hevc_qpel[i][1][0]     = put_qpel_v_10_neon;
++        c->put_hevc_qpel[i][1][1]     = put_qpel_hv_10_neon;
++        c->put_hevc_qpel_uni[i][0][1] = put_qpel_h_uni_10_neon;
++        c->put_hevc_qpel_uni[i][1][0] = put_qpel_v_uni_10_neon;
++        c->put_hevc_qpel_uni[i][1][1] = put_qpel_hv_uni_10_neon;
++        c->put_hevc_qpel_bi[i][0][0]  = put_bi_pixels_10_neon;
++        c->put_hevc_qpel_bi[i][0][1]  = put_qpel_h_bi_10_neon;
++        c->put_hevc_qpel_bi[i][1][0]  = put_qpel_v_bi_10_neon;
++        c->put_hevc_qpel_bi[i][1][1]  = put_qpel_hv_bi_10_neon;
++
++        c->put_hevc_epel[i][0][0]     = put_pixels_10_neon;
++        c->put_hevc_epel[i][0][1]     = put_epel_h_10_neon;
++        c->put_hevc_epel[i][1][0]     = put_epel_v_10_neon;
++        c->put_hevc_epel[i][1][1]     = put_epel_hv_10_neon;
++        c->put_hevc_epel_uni[i][0][1] = put_epel_h_uni_10_neon;
++        c->put_hevc_epel_uni[i][1][0] = put_epel_v_uni_10_neon;
++        c->put_hevc_epel_uni[i][1][1] = put_epel_hv_uni_10_neon;
++        c->put_hevc_epel_bi[i][0][0]  = put_bi_pixels_10_neon;
++        c->put_hevc_epel_bi[i][0][1]  = put_epel_h_bi_10_neon;
++        c->put_hevc_epel_bi[i][1][0]  = put_epel_v_bi_10_neon;
++        c->put_hevc_epel_bi[i][1][1]  = put_epel_hv_bi_10_neon;
++    }
++}

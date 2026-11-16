@@ -1,0 +1,4 @@
+-machine:x64
+-libpath:"D:/Program Files/vs22buildtools/VC/Tools/MSVC/14.44.35207/lib/x64"
+-libpath:"D:/Windows Kits/10/Lib/10.0.19041.0/ucrt/x64"
+-libpath:"D:/Windows Kits/10/Lib/10.0.19041.0/um/x64"

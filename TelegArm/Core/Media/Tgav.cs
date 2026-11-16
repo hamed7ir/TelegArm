@@ -8,7 +8,7 @@ namespace TelegArm.Core.Media
     /// <summary>
     /// The FFmpeg shim (native\tgav: tgav.h is the contract). 2026-10-16: replaces libVLC for every playback path. The
     /// DLLs live in ffmpeg\&lt;ARM|x86&gt;\ beside the exe: tgav.dll and the ffmpeg-rt libraries it imports. tgav.dll is loaded
-    /// by FULL PATH with LOAD_WITH_ALTERED_SEARCH_PATH, so the loader finds avcodec-62.dll and the rest in tgav's own folder
+    /// by FULL PATH with LOAD_WITH_ALTERED_SEARCH_PATH, so the loader finds avcodec-63.dll and the rest in tgav's own folder
     /// (no SetDllDirectory: NativeLibraries already points that at rlottie's folder); the [DllImport]s below then bind to
     /// the module already loaded under the name "tgav".
     /// </summary>

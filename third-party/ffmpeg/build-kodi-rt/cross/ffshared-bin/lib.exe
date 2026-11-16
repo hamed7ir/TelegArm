@@ -1,0 +1,5 @@
+#!/bin/sh
+# kodi-rt Stage 11: a shell script named lib.exe, as ffmpeg-rt's cross/bin/lib.exe. FFmpeg's compat/windows/makedef
+# calls a hardcoded `lib.exe` (configure's SLIB_CREATE_DEF_CMD doesn't pass $AR), so scripts/s11-ffmpeg-shared.sh puts
+# this folder first on PATH; it forwards to rt2.4's llvm-lib, which is lib.exe-compatible.
+exec "F:/kodi-rt/tc/rt24d-cr/bin/llvm-lib.exe" "$@"
