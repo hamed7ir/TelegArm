@@ -12,8 +12,8 @@ call library (tgcalls), built for ARM32 and x86.
 
 Get the latest version from the [Releases](https://github.com/hamed7ir/TelegArm/releases) page.
 
-- `TelegArm-2.0.0-Setup.exe` installs it.
-- `TelegArm-2.0.0-Portable.zip` runs without installing.
+- `TelegArm-2.1.0-Setup.exe` installs it.
+- `TelegArm-2.1.0-Portable.zip` runs without installing.
 
 ## Runs on
 
