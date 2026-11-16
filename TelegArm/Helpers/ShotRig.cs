@@ -79,6 +79,7 @@ namespace TelegArm.Helpers
             if (live == "1") return RunLive(dir);
             if (live == "placement") return RunLivePlacement(dir);
             if (live == "keys") return RunLiveKeys(dir);
+            if (live == "decode") return RunLiveDecode(dir);
             if (live == "columns") return RunLiveColumns(dir);
             if (live == "media") return RunLiveMedia(dir);
             if (live == "camera") return RunLiveCamera(dir);
@@ -3019,6 +3020,94 @@ namespace TelegArm.Helpers
             PostMessage(c.Handle, 0x0201, (IntPtr)1, lp);   // WM_LBUTTONDOWN (MK_LBUTTON)
             PostMessage(c.Handle, 0x0202, IntPtr.Zero, lp); // WM_LBUTTONUP
             LivePump(300);
+        }
+
+        /// <summary>
+        /// TELEGARM_LIVE=decode (2026-11-16): how fast FFmpeg decodes through tgav, to compare two builds of it (a plain one
+        /// and a PGO one). Every clip in TELEGARM_BENCH_DIR (default "bench" beside the exe), each the best of 3 runs of up
+        /// to 600 frames: as playback does it (FFmpeg's threads, each frame converted to the screen's pixels) and the bare
+        /// decoder (one thread, nothing converted), where a faster build shows most. Audio files: decoded to 48 kHz stereo.
+        /// Opens no window.
+        /// </summary>
+        private static int RunLiveDecode(string dir)
+        {
+            string bench = Environment.GetEnvironmentVariable("TELEGARM_BENCH_DIR");
+            if (string.IsNullOrEmpty(bench)) bench = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "bench");
+            bool loaded = TelegArm.Core.Media.Tgav.Available;
+            _log.AppendLine("  info  FFmpeg: " + TelegArm.Core.Media.Tgav.Status + "; clips in " + bench);
+            if (!loaded) { _log.AppendLine("  FAIL  FFmpeg did not load"); _failures++; }
+            var exts = new[] { ".mp4", ".webm", ".mkv", ".mov", ".ogg", ".oga", ".opus", ".m4a", ".mp3" };
+            var files = Directory.Exists(bench) ? Directory.GetFiles(bench).Where(x => exts.Contains(Path.GetExtension(x).ToLowerInvariant())).OrderBy(x => x).ToList()
+                                                : new List<string>();
+            if (loaded && files.Count == 0) { _log.AppendLine("  FAIL  no clips to decode"); _failures++; }
+            const int MaxFrames = 600;
+            foreach (var path in files)
+            {
+                string name = Path.GetFileName(path), err;
+                TelegArm.Core.Media.Tgav.Info info;
+                using (var probe = TelegArm.Core.Media.MediaFile.Open(path, 0, out err))
+                {
+                    if (probe == null) { _log.AppendLine("  FAIL  " + name + ": " + err); _failures++; continue; }
+                    info = probe.Info;
+                }
+                if (info.HasVideo != 0)
+                {
+                    foreach (bool bare in new[] { false, true })
+                    {
+                        long best = long.MaxValue; int frames = 0; var runs = new List<long>();
+                        for (int run = 0; run < 3; run++)
+                        {
+                            using (var m = TelegArm.Core.Media.MediaFile.Open(path, TelegArm.Core.Media.Tgav.NoAudio | (bare ? TelegArm.Core.Media.Tgav.SingleThread : 0), out err))
+                            {
+                                if (m == null) { _log.AppendLine("  FAIL  " + name + ": " + err); _failures++; break; }
+                                int w = m.Info.Width, h = m.Info.Height, n = 0, pts;
+                                IntPtr buf = bare ? IntPtr.Zero : System.Runtime.InteropServices.Marshal.AllocHGlobal(w * h * 4);
+                                try
+                                {
+                                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                                    while (n < MaxFrames && m.ReadVideo(buf, w * 4, w, h, out pts) == 1) n++;
+                                    sw.Stop();
+                                    runs.Add(sw.ElapsedMilliseconds);
+                                    if (sw.ElapsedMilliseconds < best) { best = sw.ElapsedMilliseconds; frames = n; }
+                                }
+                                finally { if (buf != IntPtr.Zero) System.Runtime.InteropServices.Marshal.FreeHGlobal(buf); }
+                            }
+                        }
+                        if (runs.Count == 0) continue;
+                        double fps = best > 0 ? frames * 1000.0 / best : 0;
+                        _log.AppendLine("  info  " + name + " " + info.Width + "x" + info.Height + " codec " + info.VideoCodec + ", "
+                                        + (bare ? "bare decoder (one thread, no conversion)" : "as playback (threads, converted)") + ": " + frames
+                                        + " frames, best " + best + " ms = " + fps.ToString("0.0") + " fps (runs " + string.Join(", ", runs) + " ms)");
+                        if (frames == 0) { _log.AppendLine("  FAIL  " + name + ": no frame decoded"); _failures++; }
+                    }
+                }
+                if (info.HasAudio != 0)
+                {
+                    long best = long.MaxValue; long samples = 0; var runs = new List<long>();
+                    for (int run = 0; run < 3; run++)
+                    {
+                        using (var m = TelegArm.Core.Media.MediaFile.Open(path, TelegArm.Core.Media.Tgav.NoVideo, out err))
+                        {
+                            if (m == null) break;
+                            m.SetAudioFormat(48000, 2);
+                            var pcm = new short[4800 * 2]; long got = 0; int pts, r;
+                            var sw = System.Diagnostics.Stopwatch.StartNew();
+                            while ((r = m.ReadAudio(pcm, 4800, out pts)) > 0) got += r;
+                            sw.Stop();
+                            runs.Add(sw.ElapsedMilliseconds);
+                            if (sw.ElapsedMilliseconds < best) { best = sw.ElapsedMilliseconds; samples = got; }
+                        }
+                    }
+                    if (runs.Count > 0)
+                    {
+                        double secs = samples / 48000.0;
+                        _log.AppendLine("  info  " + name + " audio codec " + info.AudioCodec + ": " + secs.ToString("0.0") + " s decoded in " + best + " ms = "
+                                        + (best > 0 ? (secs * 1000 / best).ToString("0") : "-") + "x real time (runs " + string.Join(", ", runs) + " ms)");
+                    }
+                }
+            }
+            File.WriteAllText(Path.Combine(_dir, "shots.txt"), _log.ToString());
+            return _failures == 0 ? 0 : 1;
         }
 
         private static void LivePump(int ms)

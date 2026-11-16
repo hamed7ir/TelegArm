@@ -38,6 +38,6 @@ using System.Runtime.InteropServices;
 // 2.0.0 = the redesign line (MaterialSkin removed, per-monitor DPI). Device TEST builds keep the numeric
 // version at 2.0.0 (app_version must stay numeric) and say which test build they are in the informational
 // version, "2.0.0-alpha.N", which the package names and Copy diagnostics show. Drop the suffix to release.
-[assembly: AssemblyVersion("2.0.0.0")]
-[assembly: AssemblyFileVersion("2.0.0.0")]
-[assembly: AssemblyInformationalVersion("2.0.0-trip5")]   // device trip 5 (animations, resize, group menu): a TEST build. Drop the suffix to release.
+[assembly: AssemblyVersion("2.1.0.0")]
+[assembly: AssemblyFileVersion("2.1.0.0")]
+[assembly: AssemblyInformationalVersion("2.1.0")]   // 2.1.0 (owner 2026-11-16). A device TEST build adds a suffix ("2.1.0-trip6"); drop it to release.
