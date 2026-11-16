@@ -1842,15 +1842,22 @@ namespace TelegArm.Helpers
                 // a fade that ends visible: either it rose from nothing, or its first frame came too late and it was shown at once
                 Func<List<double>, bool> fadeEndsVisible = v => v[v.Count - 1] >= 0.99 && oneWay(v, 1)
                     && ((v[0] <= 0.05 && (v.Count >= few || Anim.LateStarts > 0)) || Anim.LateStarts > 0);
+                // Off the UI thread (2026-11-16): a window-sized capture took ~150 ms on the Surface, and a slide being measured
+                // stood still for it (the "long frame" in the middle of the drawer and the column slides).
+                var grabs = new List<System.Threading.Tasks.Task>();
                 Action<Rectangle, string> grab = (area, name) =>
                 {
                     area.Intersect(Screen.FromControl(f).Bounds);
                     if (area.Width <= 0 || area.Height <= 0) return;
-                    using (var bmp = new Bitmap(area.Width, area.Height))
+                    string path = Path.Combine(_dir, name + ".png");
+                    grabs.Add(System.Threading.Tasks.Task.Run(() =>
                     {
-                        using (var g = Graphics.FromImage(bmp)) g.CopyFromScreen(area.Location, Point.Empty, area.Size);
-                        bmp.Save(Path.Combine(_dir, name + ".png"), ImageFormat.Png);
-                    }
+                        using (var bmp = new Bitmap(area.Width, area.Height))
+                        {
+                            using (var g = Graphics.FromImage(bmp)) g.CopyFromScreen(area.Location, Point.Empty, area.Size);
+                            bmp.Save(path, ImageFormat.Png);
+                        }
+                    }));
                 };
 
                 // 1. a switch slides (Settings, Appearance, the Animations section)
@@ -1918,14 +1925,21 @@ namespace TelegArm.Helpers
                 check((slowStart() || (up.Count >= few - 1 && dn.Count >= few - 1)) && up[up.Count - 1] == 1 && oneWay(up, 1) && dn[dn.Count - 1] == 0 && oneWay(dn, -1) && Anim.Active == 0,
                       "a chat row's hover fades in (" + ends(up) + ") and out (" + ends(dn) + "); " + clock());
 
-                // 3. the drawer slides in as one frame, lands, and slides away
+                // 3. the drawer slides in as one frame, lands, and slides away. 2026-11-16: its picture is drawn ahead of time (a
+                // few seconds after start; here on demand) and reused by the open, and it stays on it when it lands
+                var ahead = System.Diagnostics.Stopwatch.StartNew();
+                Invoke(f, "PrepareDrawerPicture");
+                long aheadMs = ahead.ElapsedMilliseconds;
+                try { var pic = Field(f, "_drawerPic") as Bitmap; if (pic != null) pic.Save(Path.Combine(_dir, "anim-drawer-picture.png"), ImageFormat.Png); } catch { }   // what the slide shows
+                int hits0 = (int)Field(f, "DrawerPicHits");
                 Anim.ResetStats();
                 var open = System.Diagnostics.Stopwatch.StartNew();
                 Invoke(f, "ShowDrawer");
                 long openMs = open.ElapsedMilliseconds;
+                bool reused = (int)Field(f, "DrawerPicHits") == hits0 + 1;
                 var drawer = (Control)Field(f, "_drawer");
                 int dw = drawer.Width, x0 = drawer.Left;   // before any message is pumped: fully off the left edge
-                bool oneFrame = Field(drawer, "_slideFrame") != null;
+                bool oneFrame = Field(drawer, "_frame") != null;
                 var xs = new List<double> { drawer.Left };
                 EventHandler moved = (o, e2) => { if (!drawer.IsDisposed && !xs[xs.Count - 1].Equals((double)drawer.Left)) xs.Add(drawer.Left); };
                 drawer.LocationChanged += moved;
@@ -1933,11 +1947,13 @@ namespace TelegArm.Helpers
                 grab(f.Bounds, "anim-drawer-midway");
                 watch(500, () => drawer.Left);
                 drawer.LocationChanged -= moved;
-                bool landed = drawer.Left == 0 && Field(drawer, "_slideFrame") == null && Anim.Active == 0;
-                check(oneFrame && x0 == -dw && landed && oneWay(xs, 1) && (xs.Count >= few || slowStart()),
-                      "the drawer slides in: " + xs.Count + " positions from " + x0 + " to " + xs[xs.Count - 1] + " px (its width " + dw + "), drawn once (" + oneFrame
-                      + "), then painted live (" + landed + ": left " + drawer.Left + ", frame dropped " + (Field(drawer, "_slideFrame") == null) + ", moving " + Anim.Active + "); "
-                      + clock() + "; the open call took " + openMs + " ms");
+                bool sliding = (bool)drawer.GetType().GetProperty("Sliding").GetValue(drawer, null);
+                bool kept = Field(drawer, "_frame") != null;   // no full repaint at landing: it rests on its picture
+                bool landed = drawer.Left == 0 && !sliding && Anim.Active == 0;
+                check(oneFrame && x0 == -dw && landed && kept && reused && oneWay(xs, 1) && (xs.Count >= few || slowStart()),
+                      "the drawer slides in: " + xs.Count + " positions from " + x0 + " to " + xs[xs.Count - 1] + " px (its width " + dw + "), one picture (" + oneFrame
+                      + "), reused from the one drawn ahead (" + reused + ", that took " + aheadMs + " ms), landed (" + landed + ": left " + drawer.Left + ", moving "
+                      + Anim.Active + ") on its picture (" + kept + "); " + clock() + "; the open call took " + openMs + " ms");
                 settle(200);
                 grab(f.Bounds, "anim-drawer-open");
                 Anim.ResetStats();
@@ -1949,17 +1965,19 @@ namespace TelegArm.Helpers
                 watch(450, () => drawer.IsDisposed ? -99999 : drawer.Left);
                 check(detached && drawer.IsDisposed && (outX.Count >= few || slowStart()) && oneWay(outX, -1),
                       "the drawer slides away: closed at once for the app (" + detached + "), " + (outX.Count - 1) + " positions, then disposed; " + clock());
-                // an action row closes it at once (a dialog follows): no slide
+                // an action row closes it at once (a dialog follows): no slide. (The second open reuses the picture too.)
+                var open2 = System.Diagnostics.Stopwatch.StartNew();
                 Invoke(f, "ShowDrawer");
+                long open2Ms = open2.ElapsedMilliseconds;
                 watch(400, () => 0);
                 var d2 = (Control)Field(f, "_drawer");
                 Invoke(f, "CloseDrawer");
-                check(d2.IsDisposed && Field(f, "_drawer") == null, "a close that an action follows is immediate");
+                check(d2.IsDisposed && Field(f, "_drawer") == null, "a close that an action follows is immediate (that open took " + open2Ms + " ms)");
                 // the drawer's own switch off: it is simply there
                 AppSettings.Instance.AnimateDrawer = false;
                 Invoke(f, "ShowDrawer");
                 var d3 = (Control)Field(f, "_drawer");
-                bool there = d3.Left == 0 && Field(d3, "_slideFrame") == null && Anim.Active == 0;
+                bool there = d3.Left == 0 && !(bool)d3.GetType().GetProperty("Sliding").GetValue(d3, null) && Anim.Active == 0;
                 Invoke(f, "CloseDrawer", true);
                 check(there && d3.IsDisposed, "\"The menu slides in\" off: the drawer opens and closes at once");
                 AppSettings.Instance.AnimateDrawer = true;
@@ -2253,6 +2271,7 @@ namespace TelegArm.Helpers
                 check(drawerThere && d4.IsDisposed && pickerSolid && hoverAtOnce && hov.T == 0 && ticks == 0 && Anim.Active == 0,
                       "\"Animations\" off: the drawer, a popup and a hover are all instant, and the clock never starts (" + ticks + " ticks)");
                 settle(300);
+                try { System.Threading.Tasks.Task.WaitAll(grabs.ToArray(), 10000); } catch { }   // the captures still being saved
                 rigDone = true;
             }
             catch (Exception ex) { Fail("live-anim", ex); }

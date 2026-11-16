@@ -20,6 +20,14 @@ namespace TelegArm.UI
         private Tween _drawerSlide;                  // the open slide, so a close in the middle of it can take over
         private DrawerOutsideCloser _drawerCloser;   // HAMBURGER-SCRIM-FIX: closes the card-width drawer on an outside tap
 
+        // Owner 2026-11-16 (the drawer on the Surface): drawing the drawer is the slow part of opening it (about 170 ms on
+        // the Surface, and it was done twice: for the slide, then again live when it landed). Its picture is kept between
+        // opens and reused while nothing on it changed; it is also drawn once ahead of time, a few seconds after start.
+        private Bitmap _drawerPic;            // the drawer at rest (no hover), as last drawn
+        private string _drawerPicKey;         // what it shows (DrawerPictureKey)
+        private Palette _drawerPicPalette;    // the palette it was drawn with (a theme change builds a new one)
+        internal int DrawerPicHits;           // (the anim rig) opens that reused the picture
+
         /// <summary>Opens the Telegram-style left drawer (account header + full menu + Night Mode toggle).</summary>
         private void ShowDrawer()
         {
@@ -28,7 +36,92 @@ namespace TelegArm.UI
             // HAMBURGER-FIX: the drawer used to snapshot the WHOLE window (DrawToBitmap) each open for a dimmed
             // backdrop — a synchronous full-UI render that was the DOMINANT open-lag (esp. on RT ARM32). The
             // backdrop is now a solid scrim (DrawerMenu's null-snap path), so the open never blocks on a render.
+            List<KeyValuePair<DrawerMenu.Row, string>> pendingAv;
+            string key;
+            _drawer = BuildDrawer(out pendingAv, out key);
+            _drawer.CloseRequested += () => BeginInvoke((Action)(() => CloseDrawer(true)));
+            Content.Controls.Add(_drawer);
+            _drawer.BringToFront();
+            _drawer.Focus();
 
+            // The narrow drawer no longer covers the outside, so it can't catch the tap-to-close there. A pre-
+            // dispatch message filter closes it on any pointer/mouse down that lands OUTSIDE the card (it sees the
+            // tap before the content control does). Removed again in CloseDrawer.
+            if (_drawerCloser == null) { _drawerCloser = new DrawerOutsideCloser(this); Application.AddMessageFilter(_drawerCloser); }
+
+            // Its picture: the kept one when nothing on it changed, else drawn now (and kept for the next open).
+            Bitmap pic = DrawerPictureFor(key);
+            if (pic != null) DrawerPicHits++;
+            else
+            {
+                try { pic = _drawer.RenderPicture(); } catch (Exception ex) { Logger.Diag("[ANIM] drawer picture: " + ex.GetType().Name + ": " + ex.Message); }
+                if (pic != null) KeepDrawerPicture(pic, key);
+            }
+            if (pic != null) _drawer.UsePicture(pic);
+
+            // Decode the other-account avatars OFF the UI thread and swap them into the open drawer (letters →
+            // photos). Never blocks the open; guarded so a closed/replaced drawer can't get a stale image.
+            LoadDrawerAvatarsAsync(_drawer, pendingAv);
+            SlideDrawerIn(_drawer);
+        }
+
+        /// <summary>A copy of the kept picture when it shows exactly what <paramref name="key"/> describes, else null.</summary>
+        private Bitmap DrawerPictureFor(string key)
+        {
+            if (_drawerPic == null || key != _drawerPicKey || !ReferenceEquals(_drawerPicPalette, ThemeHelper.Palette)) return null;
+            try { return _drawerPic.Clone(new Rectangle(Point.Empty, _drawerPic.Size), _drawerPic.PixelFormat); } catch { return null; }
+        }
+
+        private void KeepDrawerPicture(Bitmap pic, string key)
+        {
+            try
+            {
+                var copy = pic.Clone(new Rectangle(Point.Empty, pic.Size), pic.PixelFormat);
+                if (_drawerPic != null) _drawerPic.Dispose();
+                _drawerPic = copy; _drawerPicKey = key; _drawerPicPalette = ThemeHelper.Palette;
+            }
+            catch { }
+        }
+
+        /// <summary>Draws the drawer's picture ahead of time (a few seconds after start, when nothing else runs), so the first
+        /// open slides at once too. Not over the window backdrop (its slice follows the window's position).</summary>
+        internal void PrepareDrawerPicture()
+        {
+            if (_drawer != null || _drawerPic != null || WindowBackdrop.Enabled || IsDisposed || WindowState == FormWindowState.Minimized) return;
+            List<KeyValuePair<DrawerMenu.Row, string>> pendingAv;
+            string key;
+            DrawerMenu d = null;
+            try
+            {
+                d = BuildDrawer(out pendingAv, out key);
+                var pic = d.RenderPicture();
+                if (pic != null) { KeepDrawerPicture(pic, key); pic.Dispose(); }
+            }
+            catch (Exception ex) { Logger.Diag("[ANIM] drawer picture ahead: " + ex.GetType().Name + ": " + ex.Message); }
+            finally { if (d != null) d.Dispose(); }
+        }
+
+        /// <summary>What the drawer's picture shows: its size, DPI, theme and accent, the account, every row (labels, switch
+        /// states, loaded avatars) and, over the window backdrop, the window's place.</summary>
+        private string DrawerPictureKey(string name, long meId, Image av, List<DrawerMenu.Row> rows, Size size)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.Append(size.Width).Append('x').Append(size.Height).Append('|').Append(WindowDpiValue).Append('|').Append(_dark).Append('|')
+              .Append(_accent.ToArgb()).Append('|').Append(name).Append('|').Append(meId).Append('|')
+              .Append(av == null ? 0 : System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(av));
+            if (WindowBackdrop.Enabled) sb.Append('|').Append(Location.X).Append(',').Append(Location.Y);
+            foreach (var r in rows)
+            {
+                sb.Append('|').Append(r.Label);
+                if (r.IsToggle && r.IsOn != null) sb.Append(r.IsOn() ? "+" : "-");
+                if (r.Avatar != null) sb.Append('@');
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>The drawer as it opens now (not added to the window), with the avatars still to decode and its picture key.</summary>
+        private DrawerMenu BuildDrawer(out List<KeyValuePair<DrawerMenu.Row, string>> pendingAvOut, out string keyOut)
+        {
             var me = _service.Me;
             string name = me != null ? string.Join(" ", new[] { me.first_name, me.last_name }).Trim() : "TelegArm";
 
@@ -78,24 +171,13 @@ namespace TelegArm.UI
             // so the app content to its right stays FULLY VISIBLE + UNDIMMED — no backdrop, no black screen. (A
             // full-window control would occlude the content; WinForms transparency renders the form bg black here.)
             // Step 3.4: the drawer is built per open at the window's DPI (CardW is logical).
-            _drawer = new DrawerMenu(null, _dark, _accent, name, letter, av, me?.id ?? 0, rows, Wrap(ShowProfile), WindowDpiValue)
+            var drawer = new DrawerMenu(null, _dark, _accent, name, letter, av, me?.id ?? 0, rows, Wrap(ShowProfile), WindowDpiValue)
             {
                 Bounds = new Rectangle(0, 0, Px(DrawerMenu.CardW), Content.ClientSize.Height)   // 2.7a: under the title bar
             };
-            _drawer.CloseRequested += () => BeginInvoke((Action)(() => CloseDrawer(true)));
-            Content.Controls.Add(_drawer);
-            _drawer.BringToFront();
-            _drawer.Focus();
-
-            // The narrow drawer no longer covers the outside, so it can't catch the tap-to-close there. A pre-
-            // dispatch message filter closes it on any pointer/mouse down that lands OUTSIDE the card (it sees the
-            // tap before the content control does). Removed again in CloseDrawer.
-            if (_drawerCloser == null) { _drawerCloser = new DrawerOutsideCloser(this); Application.AddMessageFilter(_drawerCloser); }
-
-            // Decode the other-account avatars OFF the UI thread and swap them into the open drawer (letters →
-            // photos). Never blocks the open; guarded so a closed/replaced drawer can't get a stale image.
-            LoadDrawerAvatarsAsync(_drawer, pendingAv);
-            SlideDrawerIn(_drawer);
+            pendingAvOut = pendingAv;
+            keyOut = DrawerPictureKey(name, me?.id ?? 0, av, rows, drawer.Size);
+            return drawer;
         }
 
         /// <summary>Owner 2026-11-13 (animations): the drawer slides in from the left edge. It is drawn ONCE into a bitmap
@@ -110,7 +192,7 @@ namespace TelegArm.UI
             d.Left = -w;
             _drawerSlide = Anim.Run(d, AnimKind.Drawer, Anim.DrawerInMs,
                 t => { if (!d.IsDisposed) d.Left = -w + (int)Math.Round(w * Anim.EaseOut(t)); },
-                () => { if (!d.IsDisposed) { d.Left = 0; d.EndSlide(); } });
+                () => { if (!d.IsDisposed) { d.Left = 0; d.EndSlide(); } });   // (it stays on its picture: no full repaint at landing)
         }
 
         /// <summary>HAMBURGER-FIX: off-thread account-avatar loader for the drawer. Each avatar is decoded on a
@@ -133,7 +215,7 @@ namespace TelegArm.UI
                     {
                         BeginInvoke((Action)(() =>
                         {
-                            if (_drawer == drawer && !drawer.IsDisposed) { row.Avatar = decoded; drawer.Invalidate(); }
+                            if (_drawer == drawer && !drawer.IsDisposed) { row.Avatar = decoded; drawer.ContentChanged(); }
                             else { try { decoded.Dispose(); } catch { } }   // drawer gone → don't leak the decode
                         }));
                     }
@@ -430,7 +512,11 @@ namespace TelegArm.UI
             private readonly Rectangle[] _rects;
             private int _hover = -2;           // -2 none, -1 header, >=0 row index
             private readonly FadeSet _hoverT;  // the highlight fades from row to row: [0] the header, [i + 1] row i
-            private Bitmap _slideFrame;        // the whole drawer drawn once: what a slide moves (BeginSlide)
+            private Bitmap _frame;             // the whole drawer drawn once: what a slide moves, and what shows at rest until something on it changes
+            private bool _changedWhileSliding;  // something changed under a sliding picture: live painting once it lands
+
+            /// <summary>True while it slides in or out (it shows its picture and nothing on it changes).</summary>
+            public bool Sliding { get; private set; }
 
             /// <summary>Set while the drawer slides away: it is closed already and no longer answers the pointer.</summary>
             public bool Leaving { get; set; }
@@ -457,7 +543,7 @@ namespace TelegArm.UI
             protected override void OnSizeChanged(EventArgs e)
             {
                 base.OnSizeChanged(e);
-                if (_slideFrame != null && _slideFrame.Size != Size) EndSlide(false);   // resized mid-slide (a DPI change): paint live again
+                if (_frame != null && _frame.Size != Size) DropFrame(false);   // resized (a DPI change): paint live again
                 Layout2();
                 Invalidate();
             }
@@ -504,7 +590,7 @@ namespace TelegArm.UI
                 if (_pressed)   // touch/mouse drag-scroll over the rows
                 {
                     if (Math.Abs(e.Y - _pressY) > _slop) _moved = true;
-                    if (_moved) { _scrollY = ClampScroll(_pressScroll - (e.Y - _pressY)); Invalidate(); }
+                    if (_moved) { _scrollY = ClampScroll(_pressScroll - (e.Y - _pressY)); ContentChanged(); }
                     return;
                 }
                 int h = HitTest(e.Location);
@@ -520,36 +606,66 @@ namespace TelegArm.UI
 
             private void InvalidateHover(int i)
             {
+                if (_frame != null && !Sliding) DropFrame(false);   // a hover highlight: the live painting takes over (the rest is the same pixels)
                 if (i == 0) { Invalidate(_headerRect); return; }
                 if (i - 1 >= _rects.Length) return;
                 var r = _rects[i - 1];
                 Invalidate(new Rectangle(r.X, r.Y - _scrollY, r.Width, r.Height));
             }
 
-            /// <summary>Draws the whole drawer once into a bitmap; until <see cref="EndSlide"/> every paint is that bitmap, so
-            /// a slide costs one blit per frame. Call it with the drawer at its resting place (the window backdrop under it
-            /// is sampled there).</summary>
-            public void BeginSlide()
+            /// <summary>The whole drawer at rest (no hover, the scroll where it is) in a new bitmap the caller owns. Call it with
+            /// the drawer at its resting place (the window backdrop under it is sampled there).</summary>
+            public Bitmap RenderPicture()
             {
-                // A close in the middle of the open slide keeps the frame it has: that one was drawn at the resting place,
-                // and the drawer is somewhere else now (the wallpaper slice under it would be the wrong one).
-                if (_slideFrame != null && _slideFrame.Size == Size) return;
-                EndSlide(false);
-                if (Width <= 0 || Height <= 0 || IsDisposed) return;
-                try
-                {
-                    var bmp = new Bitmap(Width, Height, System.Drawing.Imaging.PixelFormat.Format32bppRgb);   // no alpha: GDI text (TextRenderer) clears an alpha channel under it
-                    try { using (var g = Graphics.FromImage(bmp)) PaintAll(g); }
-                    catch { bmp.Dispose(); throw; }
-                    _slideFrame = bmp;
-                }
-                catch (Exception ex) { _slideFrame = null; Logger.Diag("[ANIM] drawer frame: " + ex.GetType().Name + ": " + ex.Message); }
+                if (Width <= 0 || Height <= 0 || IsDisposed) return null;
+                var bmp = new Bitmap(Width, Height, System.Drawing.Imaging.PixelFormat.Format32bppRgb);   // no alpha: GDI text (TextRenderer) clears an alpha channel under it
+                try { using (var g = Graphics.FromImage(bmp)) PaintAll(g); return bmp; }
+                catch { bmp.Dispose(); throw; }
             }
 
-            public void EndSlide(bool repaint = true)
+            /// <summary>Shows <paramref name="picture"/> (the drawer owns it now) instead of painting live, until something on it
+            /// changes.</summary>
+            public void UsePicture(Bitmap picture)
             {
-                var b = _slideFrame;
-                _slideFrame = null;
+                DropFrame(false);
+                _frame = picture;
+                Invalidate();
+            }
+
+            /// <summary>Every paint is the picture until <see cref="EndSlide"/>, so a slide costs one blit per frame. A close in
+            /// the middle of the open slide keeps the picture it has.</summary>
+            public void BeginSlide()
+            {
+                Sliding = true;
+                if (_frame != null && _frame.Size == Size) return;
+                DropFrame(false);
+                try { _frame = RenderPicture(); }
+                catch (Exception ex) { _frame = null; Logger.Diag("[ANIM] drawer frame: " + ex.GetType().Name + ": " + ex.Message); }
+            }
+
+            /// <summary>The slide is over. The picture stays (a full repaint at landing took about 170 ms on the Surface), unless
+            /// something changed under it on the way (the pointer on a row, a scroll, an avatar).</summary>
+            public void EndSlide()
+            {
+                Sliding = false;
+                if (_changedWhileSliding) DropFrame(true);   // an avatar or a scroll: the whole drawer
+                else if (_hover != -2) { DropFrame(false); InvalidateHover(_hover + 1); }   // the pointer on a row (or the header, -1): only it changes
+                _changedWhileSliding = false;
+            }
+
+            /// <summary>Something on the picture changed: the live painting takes over (after the slide, if it is sliding).</summary>
+            public void ContentChanged()
+            {
+                if (Sliding) { _changedWhileSliding = true; return; }
+                if (_frame != null) DropFrame(false);
+                if (!IsDisposed) Invalidate();
+            }
+
+            /// <summary>Back to live painting.</summary>
+            public void DropFrame(bool repaint = true)
+            {
+                var b = _frame;
+                _frame = null;
                 if (b == null) return;
                 try { b.Dispose(); } catch { }
                 if (repaint && !IsDisposed) Invalidate();
@@ -581,7 +697,7 @@ namespace TelegArm.UI
             {
                 base.OnMouseWheel(e);
                 int ns = ClampScroll(_scrollY - Math.Sign(e.Delta) * P(RowH));
-                if (ns != _scrollY) { _scrollY = ns; _hover = -2; _hoverT.Reset(_rows.Count + 1); Invalidate(); }
+                if (ns != _scrollY) { _scrollY = ns; _hover = -2; _hoverT.Reset(_rows.Count + 1); ContentChanged(); }
             }
 
             private int HitTest(Point p)
@@ -596,7 +712,7 @@ namespace TelegArm.UI
 
             protected override void OnPaint(PaintEventArgs e)
             {
-                var frame = _slideFrame;   // sliding: the one frame drawn at BeginSlide
+                var frame = _frame;   // sliding, or at rest on its picture
                 if (frame != null)
                 {
                     try { e.Graphics.DrawImageUnscaled(frame, 0, 0); return; } catch { }
@@ -607,6 +723,9 @@ namespace TelegArm.UI
             private void PaintAll(Graphics g)
             {
                 int dpi = _dpi, cardW = CardPx, headerH = P(HeaderH);
+                // 2026-11-16: what is to be painted. A hover repaints one row: the others are skipped, not drawn and clipped away
+                // (the whole drawer is about 170 ms on the Surface).
+                var vis = Rectangle.Ceiling(g.VisibleClipBounds);
                 // HAMBURGER-SCRIM-FIX: no backdrop. The drawer is card-width now, so there's no outside region to
                 // dim — the opaque card fill below IS the whole control. (Old full-window snapshot/scrim removed.)
 
@@ -615,6 +734,12 @@ namespace TelegArm.UI
 
                 // Header: avatar + name + subtitle. (Fonts below are shared FontCache fonts: never dispose.)
                 g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                if (vis.IntersectsWith(_headerRect)) PaintHeader(g, dpi);
+                PaintRows(g, dpi, cardW, headerH, vis);
+            }
+
+            private void PaintHeader(Graphics g, int dpi)
+            {
                 var avr = new Rectangle(P(20), P(22), P(52), P(52));
                 if (_avatar != null)
                 {
@@ -633,14 +758,19 @@ namespace TelegArm.UI
                 TextRenderer.DrawText(g, "View profile", FontHelper.UiAt(8.5f, dpi), new Rectangle(P(86), P(54), P(CardW - 96), P(18)),
                     ThemeHelper.PaletteFor(_dark).DrawerHeaderSub, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
 
+            }
+
+            private void PaintRows(Graphics g, int dpi, int cardW, int headerH, Rectangle vis)
+            {
                 // Rows (scroll under the fixed header).
                 var rowsClip = g.Clip;
-                g.SetClip(new Rectangle(0, headerH, cardW, Math.Max(0, Height - headerH)));
+                g.SetClip(new Rectangle(0, headerH, cardW, Math.Max(0, Height - headerH)), System.Drawing.Drawing2D.CombineMode.Intersect);
                 for (int i = 0; i < _rows.Count; i++)
                 {
                     var row = _rows[i];
                     var r = new Rectangle(_rects[i].X, _rects[i].Y - _scrollY, _rects[i].Width, _rects[i].Height);
                     if (r.Bottom < headerH || r.Y > Height) continue;   // scrolled offscreen
+                    if (!vis.IntersectsWith(r)) continue;               // not in this paint
                     if (row.Separator)
                     {
                         using (var p = new Pen(ThemeHelper.PaletteFor(_dark).DrawerHairline))   // 1 px hairline: not scaled
@@ -731,7 +861,7 @@ namespace TelegArm.UI
                 if (disposing)
                 {
                     if (_snap != null) { try { _snap.Dispose(); } catch { } }
-                    EndSlide(false);
+                    DropFrame(false);
                     foreach (var row in _rows) if (row.Avatar != null) { try { row.Avatar.Dispose(); } catch { } }
                 }
                 base.Dispose(disposing);

@@ -349,6 +349,12 @@ namespace TelegArm.UI
             // Tray: a real user close (X) hides to tray instead, once the tray exists.
             FormClosing += MainForm_FormClosing;
             Shown += (s, e) => StartUpdateChecks();   // 2026-11-15: the update check (MainForm.AppUpdate)
+            Shown += (s, e) =>   // 2026-11-16: the drawer's picture, drawn ahead of time once the start-up work is over
+            {
+                var t = new Timer { Interval = 4000 };
+                t.Tick += (s2, e2) => { t.Stop(); t.Dispose(); PrepareDrawerPicture(); };
+                t.Start();
+            };
             Activated += (s, e) => _isForeground = true;
             Deactivate += (s, e) => _isForeground = false;
 
