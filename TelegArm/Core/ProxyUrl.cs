@@ -50,7 +50,7 @@ namespace TelegArm.Core
             if (q < 0)
             {
                 // WTC would throw here (range on IndexOf == -1), inside ConnectAsync.
-                error = "That doesn't look like a proxy link — it has no \"?\" and no settings after it.";
+                error = "That doesn't look like a proxy link: it has no \"?\" and no settings after it.";
                 return false;
             }
 

@@ -37,7 +37,7 @@ namespace TelegArm.UI.Admin
             try
             {
                 if (!await service.SetDefaultPermissionsAsync(peer, new ChatBannedRights { flags = flags }))
-                { ThemedDialog.Show(owner, "Permissions", "Couldn't reach Telegram — make sure your VPN is on.", "OK"); return; }
+                { ThemedDialog.Show(owner, "Permissions", "Couldn't reach Telegram. Make sure your VPN is on.", "OK"); return; }
             }
             catch (Exception ex) { ThemedDialog.Show(owner, "Permissions", "Couldn't save: " + ex.Message, "OK"); return; }
             System.Diagnostics.Debug.WriteLine("[ADMIN] default perms updated flags=" + flags);

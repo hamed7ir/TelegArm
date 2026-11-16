@@ -233,7 +233,7 @@ namespace TelegArm.UI
             {
                 string m = ex.Message ?? "";
                 string why = m.IndexOf("PREMIUM", StringComparison.OrdinalIgnoreCase) >= 0 ? "Translation needs Telegram Premium on this account."
-                           : m.IndexOf("QUOTA", StringComparison.OrdinalIgnoreCase) >= 0 ? "The translation limit is reached for now — try again later."
+                           : m.IndexOf("QUOTA", StringComparison.OrdinalIgnoreCase) >= 0 ? "The translation limit is reached for now. Try again later."
                            : m.IndexOf("DISABLED", StringComparison.OrdinalIgnoreCase) >= 0 ? "Translation isn't available here."
                            : "Couldn't translate: " + m;
                 ThemedDialog.Show(this, "Translate", why, "OK");
@@ -758,7 +758,7 @@ namespace TelegArm.UI
             int ok = await ForwardToTargets(_selectedChat.Peer, ids, targets, hide, drop);
             if (ok > 0) ExitSelectionMode();
             ThemedDialog.Show(this, ok > 0 ? "Forwarded" : "Forward failed",
-                ok == 0 ? "Couldn't forward — make sure your VPN is on."
+                ok == 0 ? "Couldn't forward. Make sure your VPN is on."
                         : (ids.Length + (ids.Length == 1 ? " message" : " messages") + " forwarded to " + ok + (ok == 1 ? " chat." : " chats.")), "OK");
         }
 

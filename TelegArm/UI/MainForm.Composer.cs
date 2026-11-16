@@ -354,10 +354,10 @@ namespace TelegArm.UI
         {
             string m = ex?.Message ?? "";
             if (m.IndexOf("CHAT_ADMIN_REQUIRED", StringComparison.OrdinalIgnoreCase) >= 0)
-                return "Commenting is restricted on this channel — you can't comment here.";
+                return "Comments are restricted on this channel.";
             if (m.IndexOf("MSG_TOO_LONG", StringComparison.OrdinalIgnoreCase) >= 0) return "That comment is too long.";
             if (m.IndexOf("FLOOD_WAIT", StringComparison.OrdinalIgnoreCase) >= 0)
-                return "You're commenting too fast — wait a moment and try again.";
+                return "You're commenting too fast. Wait a moment and try again.";
             return "Couldn't post the comment:\n" + m;
         }
 
@@ -582,7 +582,7 @@ namespace TelegArm.UI
                     _pendingVoiceWave = waveform;
                     _voiceState = VoiceState.Ready;
                     _recordingBar.DotColor = ColorMath.Ink(_accent, ThemeHelper.PaletteFor(_dark).RecordingBarBg, 3.0);
-                    _recordingBar.Caption = "Voice  " + FormatDuration(durationSec) + "   — tap Send";
+                    _recordingBar.Caption = "Voice  " + FormatDuration(durationSec) + ", tap Send";
                     ApplyVoiceUi();
                 }));
             }

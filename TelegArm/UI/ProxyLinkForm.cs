@@ -116,7 +116,7 @@ namespace TelegArm.UI
 
             if (_alreadySaved)
                 PopulateBody(serverRow, portRow, secretRow, _statusRow,
-                    new NoteRow("This proxy is already in your list — connecting selects it instead of adding a "
+                    new NoteRow("This proxy is already in your list. Connecting selects it instead of adding a "
                               + "second copy.", 2));
             else
                 PopulateBody(serverRow, portRow, secretRow, _statusRow);

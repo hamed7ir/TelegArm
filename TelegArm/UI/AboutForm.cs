@@ -56,11 +56,11 @@ namespace TelegArm.UI
             // ── FEATURED — WTelegramClient / Wizou (accent-tinted, emphasized) ──
             var wtc = new Block(BlockStyle.Feature, "Built on WTelegramClient", 16, 14, 10, 14)
                 .Add(Part.Line("Built on WTelegramClient", 12f, FontStyle.Bold, LabelRole.Accent, 0))
-                .Add(Part.Line("TelegArm is built entirely on WTelegramClient — the pure-C# MTProto library by Wizou (wiz0u), developed and maintained by one person. Please consider supporting his work.",
+                .Add(Part.Line("TelegArm is built entirely on WTelegramClient, the pure C# MTProto library by Wizou (wiz0u), made and maintained by one person. Please consider supporting Wizou's work.",
                                9f, FontStyle.Regular, LabelRole.Body, 6))
                 .Add(Part.Link("github.com/wiz0u/WTelegramClient", GlyphKind.Arrow, () => OpenUrl(WtcUrl), 8))
-                .Add(Part.Link("@WTelegramClient — Telegram group", GlyphKind.Arrow, () => OpenInApp(WtcGroupUrl), 0))
-                .Add(Part.Link("Support Wizou — GitHub Sponsors", GlyphKind.Heart, () => OpenUrl(SponsorUrl), 0));
+                .Add(Part.Link("@WTelegramClient (Telegram group)", GlyphKind.Arrow, () => OpenInApp(WtcGroupUrl), 0))
+                .Add(Part.Link("Support Wizou on GitHub Sponsors", GlyphKind.Heart, () => OpenUrl(SponsorUrl), 0));
 
             // ── Source + license ──
             var meta = new Block(BlockStyle.Card, "Source code and license", 16, 0, 0, 14)

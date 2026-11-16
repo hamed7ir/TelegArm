@@ -134,7 +134,7 @@ namespace TelegArm.UI
             };
             _connectingDetail = new Label
             {
-                Text = "Waiting for network — make sure your VPN is on.",
+                Text = "Waiting for the network. Make sure your VPN is on.",
                 AutoSize = false, Size = new Size(Px(428), Px(46)), Location = new Point(Px(16), Px(58)),
                 TextAlign = ContentAlignment.MiddleCenter, BackColor = Color.Transparent,
                 Font = FontCache.Get("Segoe UI", 9.75f, FontStyle.Regular, WindowDpiValue),   // shared: never dispose

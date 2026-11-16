@@ -910,7 +910,7 @@ namespace TelegArm.UI
 
         private static string ForwardResultText(int ok, int total)
         {
-            if (ok == 0) return "Couldn't forward — make sure your VPN is on.";
+            if (ok == 0) return "Couldn't forward. Make sure your VPN is on.";
             if (ok == total) return "Forwarded to " + ok + (ok == 1 ? " chat." : " chats.");
             return "Forwarded to " + ok + " of " + total + " chats (the rest couldn't be reached).";
         }

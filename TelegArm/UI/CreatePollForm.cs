@@ -283,8 +283,8 @@ namespace TelegArm.UI
         {
             string q = (_question.Text ?? "").Trim();
             var opts = _optionBoxes.Select(t => (t.Text ?? "").Trim()).Where(t => t.Length > 0).ToList();
-            if (q.Length == 0) { ThemedDialog.Show(this, "Create Poll", "Please enter a question.", "OK"); return; }
-            if (opts.Count < 2) { ThemedDialog.Show(this, "Create Poll", "Please enter at least two options.", "OK"); return; }
+            if (q.Length == 0) { ThemedDialog.Show(this, "Create Poll", "Enter a question.", "OK"); return; }
+            if (opts.Count < 2) { ThemedDialog.Show(this, "Create Poll", "Enter at least two options.", "OK"); return; }
 
             // T18: the picked option, counted among the NON-EMPTY options (the ones that are sent)
             int correct = -1;

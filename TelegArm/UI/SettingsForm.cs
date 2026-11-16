@@ -200,7 +200,7 @@ namespace TelegArm.UI
                 if (reverting) return;
                 if (!StartupSetEnabled(start.On))
                 {
-                    Say("Startup", "Couldn't update the Windows startup setting — your account may not allow it.", "OK");
+                    Say("Startup", "Couldn't change the Windows startup setting. Your account may not allow it.", "OK");
                     reverting = true;
                     try { start.On = StartupIsEnabled(); }   // back to the TRUE state, without re-running this handler
                     finally { reverting = false; }
@@ -714,7 +714,7 @@ namespace TelegArm.UI
 
             _animateWebm = new ToggleRow("Animate WebM stickers", s.AnimateWebmStickers) { Subtitle = "Off shows the static sticker emoji" };
             bool rl = RLottie.Available;
-            var engine = new ActionRow("Sticker engine") { Subtitle = rl ? "Animated (.tgs) stickers available" : "Animated stickers unavailable — tap for details" };
+            var engine = new ActionRow("Sticker engine") { Subtitle = rl ? "Animated (.tgs) stickers available" : "Animated stickers unavailable. Tap for details" };
             engine.Click += (snd, ev) => Say("Animated sticker engine (rlottie)", RLottie.Diagnose(), "OK");
             page.Section("Stickers", _animateWebm, engine);
         }
@@ -847,7 +847,7 @@ namespace TelegArm.UI
             if (s.WsTunnelEnabled) return "WebSocket tunnel";
             if (active != null) return "Using " + (TelegArm.Core.ProxyUrl.IsSocks(active) ? "SOCKS5 " : "") + TelegArm.Core.ProxyUrl.SafeForLog(active);
             if (n > 0) return "Off · " + n + " saved";
-            return "Off — set one up if Telegram is blocked on your network";
+            return "Off. Set one up if Telegram is blocked on your network";
         }
 
         // ── Privacy ───────────────────────────────────────────────────────────────────────────────────────────
@@ -1019,7 +1019,7 @@ namespace TelegArm.UI
             bool on = _passwordState != null && _passwordState.flags.HasFlag(Account_Password.Flags.has_password);
             var rows = new List<Control>
             {
-                new NoteRow(on ? "Status: ON — a cloud password is set." : "Status: OFF") { Role = LabelRole.Body },
+                new NoteRow(on ? "Status: on. A cloud password is set." : "Status: off") { Role = LabelRole.Body },
                 new NoteRow(on ? "This password is required (with the SMS code) to log in on a new device."
                                : "Add an extra layer of security: a password asked when logging in on a new device."),
             };
@@ -1058,7 +1058,7 @@ namespace TelegArm.UI
                     await _service.SetPasswordAsync(np, hint, email);
                     await ReloadSecurityAsync();
                     Say("Set Password", string.IsNullOrEmpty(email)
-                        ? "Two-Step Verification is now ON."
+                        ? "Two-Step Verification is on."
                         : "Password set. Check your email and confirm the recovery address.", "OK");
                 }
                 catch (Exception ex) { Say("Set Password", FriendlyPwdError(ex), "OK"); }
@@ -1097,7 +1097,7 @@ namespace TelegArm.UI
                 {
                     await _service.DisablePasswordAsync(cur);
                     await ReloadSecurityAsync();
-                    Say("Disable Password", "Two-Step Verification is now OFF.", "OK");
+                    Say("Disable Password", "Two-Step Verification is off.", "OK");
                 }
                 catch (Exception ex) { Say("Disable Password", FriendlyPwdError(ex), "OK"); }
             }
@@ -1124,10 +1124,10 @@ namespace TelegArm.UI
         private static string FriendlyPwdError(Exception ex)
         {
             var msg = (ex.Message ?? "").ToUpperInvariant();
-            if (msg.Contains("PASSWORD_HASH_INVALID")) return "Incorrect current password. Please try again.";
-            if (msg.Contains("SRP_ID_INVALID") || msg.Contains("SRP_PASSWORD_CHANGED")) return "Session expired — please try again.";
+            if (msg.Contains("PASSWORD_HASH_INVALID")) return "Wrong current password. Try again.";
+            if (msg.Contains("SRP_ID_INVALID") || msg.Contains("SRP_PASSWORD_CHANGED")) return "The session expired. Try again.";
             if (msg.Contains("EMAIL_INVALID")) return "That email address looks invalid.";
-            if (msg.Contains("CODE_INVALID") || msg.Contains("EMAIL_HASH")) return "Incorrect code. Please try again.";
+            if (msg.Contains("CODE_INVALID") || msg.Contains("EMAIL_HASH")) return "Wrong code. Try again.";
             if (msg.Contains("TOO_FRESH") || msg.Contains("FLOOD_WAIT")) return "Telegram asks you to wait a while before doing this again.";
             return "Couldn't complete: " + ex.Message;
         }
@@ -1242,7 +1242,7 @@ namespace TelegArm.UI
             catch (Exception ex)
             {
                 string msg = (ex.Message != null && ex.Message.IndexOf("FRESH_RESET_AUTHORISATION_FORBIDDEN", StringComparison.OrdinalIgnoreCase) >= 0)
-                    ? "This session is too new to terminate — sessions can't be reset within 24 hours of signing in."
+                    ? "This session is too new to end. Sessions can't be ended in the first 24 hours after signing in."
                     : ex.Message;
                 Say("Terminate session", msg, "OK");
                 return;
@@ -1317,7 +1317,7 @@ namespace TelegArm.UI
             keys.Click += (snd, ev) =>
             {
                 var sb = new System.Text.StringBuilder();
-                foreach (var k in MainForm.Shortcuts) sb.Append(k[0]).Append("  —  ").Append(k[1]).Append(Environment.NewLine);
+                foreach (var k in MainForm.Shortcuts) sb.Append(k[0]).Append(":  ").Append(k[1]).Append(Environment.NewLine);
                 Say("Keyboard shortcuts", sb.ToString().TrimEnd(), "OK");
             };
             page.Section("Keyboard", keys);
@@ -1398,7 +1398,7 @@ namespace TelegArm.UI
             var frame = new SegmentedRow("Window frame", new[] { "TelegArm", "Windows" }, native ? 1 : 0) { Subtitle = "Takes effect after restart" };
             frame.SelectedIndexChanged += (snd, ev) => { s.ChromeMode = frame.SelectedIndex == 1 ? "Native" : ""; s.Save(); };
             // STEP 1.1 — how the process is actually scaled. Tap for the full probe summary.
-            var scale = new ActionRow("Display scaling") { Subtitle = Dpi.Mode + " · " + Dpi.SystemDpi + " dpi · " + Dpi.Request + " — tap for details" };
+            var scale = new ActionRow("Display scaling") { Subtitle = Dpi.Mode + " · " + Dpi.SystemDpi + " dpi · " + Dpi.Request + ". Tap for details" };
             scale.Click += (snd, ev) => Say("Display scaling", Dpi.ProbeSummary.Replace(" request=", "\nrequest=")
                 .Replace(" call=", "\ncall=").Replace(" mode=", "\nmode=").Replace(" monitors=", "\nmonitors="), "OK");
             page.Section("Display & window", compSw, dpiSw, frame, scale);

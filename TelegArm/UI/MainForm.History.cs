@@ -654,7 +654,7 @@ namespace TelegArm.UI
                 }
                 else // Channels_SponsoredMessageReportResultReported
                 {
-                    ThemedDialog.Show(this, "Reported", "Thank you — this ad has been reported.", "OK");
+                    ThemedDialog.Show(this, "Reported", "Thank you. This ad has been reported.", "OK");
                     RemoveSponsoredCard();
                 }
             }

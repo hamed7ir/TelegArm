@@ -211,7 +211,7 @@ namespace TelegArm.UI
                 _retryNowCts = new System.Threading.CancellationTokenSource();   // "Retry now" cancels this (attempt + backoff)
                 var token = _retryNowCts.Token;
 
-                ShowConnecting(attempt == 1 ? firstMsg : "Waiting for network — make sure your VPN is on.");
+                ShowConnecting(attempt == 1 ? firstMsg : "Waiting for the network. Make sure your VPN is on.");
                 Logger.Diag("[CONN] connect attempt " + attempt);
                 // TA-16b/B1+B2 — report into the shared proxy state. This loop is UNBOUNDED by design, so
                 // ProxyStatus decides "failed" on WALL CLOCK, not on this attempt counter (see its remarks:
@@ -287,7 +287,7 @@ namespace TelegArm.UI
                 }
 
                 int secs = Math.Max(1, backoffMs / 1000);
-                SetConnectingDetail("Waiting for network — make sure your VPN is on.\nRetrying in " + secs + "s… (or tap Retry now)");
+                SetConnectingDetail("Waiting for the network. Make sure your VPN is on.\nRetrying in " + secs + "s… (or tap Retry now)");
                 Logger.Diag("[CONN] backoff " + secs + "s before next attempt");
                 try { await System.Threading.Tasks.Task.Delay(backoffMs, token); }
                 catch (OperationCanceledException) { Logger.Diag("[CONN] Retry-now → retrying immediately"); }

@@ -124,12 +124,12 @@ namespace TelegArm.UI.Admin
             if (_discussionBtn == null || IsDisposed) return;
             if (_linkedChatId != 0)
             {
-                _discussionState.Set("Comments ON — linked to \"" + (_linkedName ?? "group") + "\".", Tone.Normal);
+                _discussionState.Set("Comments on, linked to \"" + (_linkedName ?? "group") + "\".", Tone.Normal);
                 _discussionBtn.Text = "Remove discussion group";
             }
             else
             {
-                _discussionState.Set("No discussion group — comments are off.", Tone.Normal);
+                _discussionState.Set("No discussion group, so comments are off.", Tone.Normal);
                 _discussionBtn.Text = "Link a discussion group";
             }
             _discussionBtn.Enabled = true;
@@ -175,7 +175,7 @@ namespace TelegArm.UI.Admin
             {
                 bool ok = await _service.SetDiscussionGroupAsync(_channel, group);
                 Logger.Diag("[ADMIN] link channel=" + _channel.id + " group=" + group.id + " " + (ok ? "ok" : "fail"));
-                if (!ok) { ThemedDialog.Show(this, "Discussion group", "Couldn't link — check your VPN and that the group is eligible.", "OK"); _discussionBtn.Enabled = true; return; }
+                if (!ok) { ThemedDialog.Show(this, "Discussion group", "Couldn't link. Check your VPN, and that the group can be linked.", "OK"); _discussionBtn.Enabled = true; return; }
                 await LoadDiscussionStateAsync();   // refresh → now shows "linked" + Remove
             }
             catch (Exception ex) { ThemedDialog.Show(this, "Discussion group", "Couldn't link: " + ex.Message, "OK"); _discussionBtn.Enabled = true; }
@@ -191,7 +191,7 @@ namespace TelegArm.UI.Admin
             {
                 bool ok = await _service.SetDiscussionGroupAsync(_channel, null);   // null → inputChannelEmpty (unlink)
                 Logger.Diag("[ADMIN] unlink channel=" + _channel.id + " " + (ok ? "ok" : "fail"));
-                if (!ok) { ThemedDialog.Show(this, "Discussion group", "Couldn't remove — check your VPN and permissions.", "OK"); _discussionBtn.Enabled = true; return; }
+                if (!ok) { ThemedDialog.Show(this, "Discussion group", "Couldn't remove. Check your VPN and your permissions.", "OK"); _discussionBtn.Enabled = true; return; }
                 await LoadDiscussionStateAsync();   // refresh → now shows "Link a discussion group"
             }
             catch (Exception ex) { ThemedDialog.Show(this, "Discussion group", "Couldn't remove: " + ex.Message, "OK"); _discussionBtn.Enabled = true; }
@@ -216,7 +216,7 @@ namespace TelegArm.UI.Admin
             try
             {
                 bool ok = await _service.UpdateUsernameAsync(_channel, _username.Value.Trim());
-                if (!ok) { _avail.Set("Couldn't save — username taken, or VPN is off.", Tone.Bad); return; }
+                if (!ok) { _avail.Set("Couldn't save. The username is taken, or the VPN is off.", Tone.Bad); return; }
                 _avail.Set("Saved", Tone.Ok);
                 Logger.Diag("[ADMIN] username updated");
             }
@@ -232,7 +232,7 @@ namespace TelegArm.UI.Admin
             {
                 if (!await _service.ToggleSignaturesAsync(_channel, want))
                 {
-                    ThemedDialog.Show(this, "Sign messages", "Couldn't reach Telegram — make sure your VPN is on.", "OK");
+                    ThemedDialog.Show(this, "Sign messages", "Couldn't reach Telegram. Make sure your VPN is on.", "OK");
                     _suppress = true; _sign.On = !want; _suppress = false;
                     return;
                 }

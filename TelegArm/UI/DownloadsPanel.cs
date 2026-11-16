@@ -516,8 +516,8 @@ namespace TelegArm.UI
                     TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
                 string status = st == DownloadHandle.DState.Downloading ? "downloading"
                               : st == DownloadHandle.DState.Paused ? "paused"
-                              : st == DownloadHandle.DState.Done ? "done — tap to open"
-                              : st == DownloadHandle.DState.Cancelled ? "cancelled" : "failed — tap ▶ to retry";
+                              : st == DownloadHandle.DState.Done ? "done, tap to open"
+                              : st == DownloadHandle.DState.Cancelled ? "cancelled" : "failed, tap ▶ to retry";
                 // ‎ (LRM) pins the size run LTR — an RTL chat title before it otherwise bidi-reorders
                 // the "x MB / y MB" segment into garbled glyph soup (DOWNLOAD-RESUME Part 3, artifact fix).
                 string line = (_ti.ChatTitle != null ? _ti.ChatTitle + "‎  •  " : "")

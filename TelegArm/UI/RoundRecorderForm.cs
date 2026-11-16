@@ -150,7 +150,7 @@ namespace TelegArm.UI
                 _rec.Failed += ex => { try { BeginInvoke((Action)(() => _hint.Text = "Camera error: " + ex.Message)); } catch { } };
                 _hasPreview = _rec.TryAttachPreview(_previewHost);
                 _flipBtn.Visible = _rec.Cameras.Count > 1;
-                _hint.Text = _hasPreview ? "Tap Record to start." : "Live preview unavailable — tap Record.";
+                _hint.Text = _hasPreview ? "Tap Record to start." : "Live preview unavailable. Tap Record.";
                 _state = St.Idle;
             }
             catch (Exception ex) { _hint.Text = "Camera init failed: " + ex.Message; Logger.Diag("[ROUND-REC] init failed: " + ex.Message); }

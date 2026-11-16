@@ -93,7 +93,7 @@ namespace TelegArm.UI
 
         private void BuildUi()
         {
-            Text = "TelegArm — Media";
+            Text = "TelegArm - Media";
             Size = new Size(Px(900), Px(680));
             LogicalMinimumSize = new Size(560, 420);
             StartPosition = FormStartPosition.CenterScreen;
@@ -457,7 +457,7 @@ namespace TelegArm.UI
                     if (h.State != Core.DownloadHandle.DState.Done)
                     {
                         if (!IsDisposed) _videoControl.ShowStatus(h.State == Core.DownloadHandle.DState.Cancelled
-                            ? "Download cancelled." : "Download failed — tap to retry.");
+                            ? "Download cancelled." : "Download failed. Tap to retry.");
                         return;
                     }
                 }
@@ -479,7 +479,7 @@ namespace TelegArm.UI
 
         private static string StubText(MediaItem item)
         {
-            string size = item.FileSize > 0 ? " — " + (item.FileSize / 1024.0 / 1024.0).ToString("0.0") + " MB" : "";
+            string size = item.FileSize > 0 ? " · " + (item.FileSize / 1024.0 / 1024.0).ToString("0.0") + " MB" : "";
             string kind = char.ToUpper(item.Type[0]) + item.Type.Substring(1);
             return kind + size + "\n\n" + (item.FileName ?? "") +
                    "\n\nPreview for this type is coming in the next phase.";

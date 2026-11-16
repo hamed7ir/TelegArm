@@ -350,7 +350,7 @@ namespace TelegArm.UI
                 Channel ch;
                 try { ch = await _service.CreateSupergroupAsync(f.ChatTitle, ""); }
                 catch (Exception ex) { ThemedDialog.Show(this, "New Group", "Couldn't create the group:\n" + ex.Message, "OK"); return; }
-                if (ch == null) { ThemedDialog.Show(this, "New Group", "Couldn't reach Telegram — make sure your VPN is on.", "OK"); return; }
+                if (ch == null) { ThemedDialog.Show(this, "New Group", "Couldn't reach Telegram. Make sure your VPN is on.", "OK"); return; }
                 if (f.Members.Count > 0) await _service.InviteToChannelAsync(ch, f.Members);
                 System.Diagnostics.Debug.WriteLine("[PEOPLE] open new supergroup id=" + ch.id);
                 await OpenChat(new ChatEntry { Peer = ch.ToInputPeer(), PeerId = ch.id, Title = ch.title, IsGroup = true }, 0);
@@ -365,7 +365,7 @@ namespace TelegArm.UI
                 Channel ch;
                 try { ch = await _service.CreateBroadcastAsync(f.ChatTitle, f.ChatAbout); }
                 catch (Exception ex) { ThemedDialog.Show(this, "New Channel", "Couldn't create the channel:\n" + ex.Message, "OK"); return; }
-                if (ch == null) { ThemedDialog.Show(this, "New Channel", "Couldn't reach Telegram — make sure your VPN is on.", "OK"); return; }
+                if (ch == null) { ThemedDialog.Show(this, "New Channel", "Couldn't reach Telegram. Make sure your VPN is on.", "OK"); return; }
                 if (f.Members.Count > 0) await _service.InviteToChannelAsync(ch, f.Members);
                 System.Diagnostics.Debug.WriteLine("[PEOPLE] open new channel id=" + ch.id);
                 await OpenChat(new ChatEntry { Peer = ch.ToInputPeer(), PeerId = ch.id, Title = ch.title, IsGroup = false }, 0);

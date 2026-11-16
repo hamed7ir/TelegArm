@@ -241,7 +241,7 @@ namespace TelegArm.UI
         private int _readOutboxMaxId;   // peer has read my messages up to this id (read ✓✓)
 
         // Connection watchdog UI hint (see TelegramService.ReconnectingChanged).
-        private const string ReconnectingTitle = "TelegArm — Reconnecting…";
+        private const string ReconnectingTitle = "TelegArm - Reconnecting…";
         private string _titleBeforeReconnect;
 
         // Startup "Connecting… / Waiting for network" overlay (never exit on a missing VPN).

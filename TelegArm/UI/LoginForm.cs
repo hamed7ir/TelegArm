@@ -82,7 +82,7 @@ namespace TelegArm.UI
 
         private void BuildUi()
         {
-            Text = "TelegArm v" + Program.Version + " — Sign in";   // taskbar / Alt-Tab identity
+            Text = "TelegArm v" + Program.Version + " - Sign in";   // taskbar / Alt-Tab identity
             Bar.Title = "Sign in to Telegram";                         // what the bar shows (after Text, which also sets it)
             Bar.LeftClick += (s, e) => OnBack();
             Size = new Size(Px(480), Px(600));
@@ -392,7 +392,7 @@ namespace TelegArm.UI
             {
                 case View.Phone:
                     Center(_bigTitle, 66); _bigTitle.Text = "Your Phone Number";
-                    _subtitle.Visible = true; Center(_subtitle, 104); _subtitle.Text = "Please confirm your country code\nand enter your phone number.";
+                    _subtitle.Visible = true; Center(_subtitle, 104); _subtitle.Text = "Confirm your country code\nand enter your phone number.";
                     _countryRow.Visible = true; Center(_countryRow, 164);
                     _phoneRow.Visible = true; Center(_phoneRow, 222);
                     _submitButton.Visible = true; _submitButton.Text = "Next"; Center(_submitButton, 296);
@@ -467,7 +467,7 @@ namespace TelegArm.UI
         private void StartPhoneLogin()
         {
             string dial = DigitsOf(_dialBox.Text), national = DigitsOf(_phoneBox.Text);
-            if (dial.Length == 0 || national.Length < 4) { _statusLabel.Text = "Please enter a valid phone number."; return; }
+            if (dial.Length == 0 || national.Length < 4) { _statusLabel.Text = "Enter a valid phone number."; return; }
             string full = "+" + dial + national;
             AuthManager.PhoneNumber = full;
             _pwdAsks = 0;
@@ -522,10 +522,10 @@ namespace TelegArm.UI
                 if (msg.IndexOf("PHONE_CODE_INVALID", StringComparison.OrdinalIgnoreCase) >= 0) { ShowView(View.Code); _statusLabel.Text = "That code was incorrect. Try again."; }
                 else if (msg.IndexOf("PASSWORD_HASH_INVALID", StringComparison.OrdinalIgnoreCase) >= 0) { ShowView(View.Password); _statusLabel.Text = "Incorrect password. Try again."; }
                 else if (msg.IndexOf("PHONE_NUMBER_INVALID", StringComparison.OrdinalIgnoreCase) >= 0) { ShowView(View.Phone); _statusLabel.Text = "That phone number isn't valid."; }
-                else if (msg.IndexOf("PHONE_NUMBER_UNOCCUPIED", StringComparison.OrdinalIgnoreCase) >= 0) { ShowView(View.Phone); _statusLabel.Text = "This number isn't registered. Sign-up isn't supported here yet — register on your phone first."; }
+                else if (msg.IndexOf("PHONE_NUMBER_UNOCCUPIED", StringComparison.OrdinalIgnoreCase) >= 0) { ShowView(View.Phone); _statusLabel.Text = "This number isn't registered. Sign-up isn't supported here yet. Register on your phone first."; }
                 else
                 {
-                    _statusLabel.Text = "Couldn't reach Telegram — make sure your VPN is on, then tap again.\n(" + msg + ")";
+                    _statusLabel.Text = "Couldn't reach Telegram. Make sure your VPN is on, then tap again.\n(" + msg + ")";
                     // TA-16b/B1 — ONLY this branch is a transport failure. The four cases above (bad code,
                     // bad password, bad/unregistered number) all mean we REACHED Telegram and it answered,
                     // which is positive evidence the proxy works — counting them would eventually accuse a
@@ -574,7 +574,7 @@ namespace TelegArm.UI
             if (task.IsFaulted)
             {
                 var ex = task.Exception != null ? task.Exception.GetBaseException() : null;
-                _statusLabel.Text = "QR login failed — make sure your VPN is on. (" + (ex != null ? ex.Message : "error") + ")";
+                _statusLabel.Text = "QR login failed. Make sure your VPN is on. (" + (ex != null ? ex.Message : "error") + ")";
                 System.Diagnostics.Debug.WriteLine("[QR] faulted: " + (ex != null ? ex.Message : "?"));
                 return;
             }

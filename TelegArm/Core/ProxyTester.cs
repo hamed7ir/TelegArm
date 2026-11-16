@@ -271,7 +271,7 @@ namespace TelegArm.Core
             // gets, and it is worth naming because "wrong secret" is the single most likely user error.
             if (m.IndexOf("payload length", StringComparison.OrdinalIgnoreCase) >= 0
                 || m.IndexOf("Connection shut down", StringComparison.OrdinalIgnoreCase) >= 0)
-                return "The server closed the connection — the secret is probably wrong for it.";
+                return "The server closed the connection. The secret is probably wrong for it.";
             if (m.IndexOf("OBFUSCATION", StringComparison.OrdinalIgnoreCase) >= 0) return "This build can't use MTProto proxies.";
             // Anything else: the type is more useful than a long MTProto message, and can't leak a link.
             return "Couldn't connect (" + ex.GetType().Name + ").";

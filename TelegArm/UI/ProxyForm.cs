@@ -357,9 +357,9 @@ namespace TelegArm.UI
         {
             if (_hint == null) return;
             if (_tunnel) _hint.Text = _tunnelResult ?? ("Using the WebSocket tunnel" + (_list.Count > 0 ? " · " + _list.Count + " proxies saved" : ""));
-            else if (_list.Count == 0) _hint.Text = "No proxies yet — paste a t.me/proxy or t.me/socks link below.";
+            else if (_list.Count == 0) _hint.Text = "No proxies yet. Paste a t.me/proxy or t.me/socks link below.";
             else if (!_enabled) _hint.Text = _list.Count + " saved · proxy is off";
-            else if (_active < 0 || _active >= _list.Count) _hint.Text = _list.Count + " saved · none selected — tap one to use it";
+            else if (_active < 0 || _active >= _list.Count) _hint.Text = _list.Count + " saved · none selected. Tap one to use it";
             else _hint.Text = _list.Count + " saved · using " + ProxyUrl.SafeForLog(_list[_active]);
         }
 

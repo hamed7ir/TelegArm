@@ -137,7 +137,7 @@ namespace TelegArm.UI.Admin
                 try { res = await _service.GetParticipantsAsync(_channel, Filter(), _users.Count, PageSize); }
                 catch (Exception ex) { ShowError(ex); return; }
                 if (IsDisposed) return;   // the dialog was closed while the page was on its way
-                if (res == null) { ShowMessage("Couldn't load — make sure your VPN is on."); return; }
+                if (res == null) { ShowMessage("Couldn't load. Make sure your VPN is on."); return; }
 
                 int added = 0;
                 foreach (var p in res.participants)
@@ -338,7 +338,7 @@ namespace TelegArm.UI.Admin
             if (_users.Count == 0) ShowMessage(EmptyText());
         }
 
-        private void Vpn() { ThemedDialog.Show(this, Text, "Couldn't reach Telegram — make sure your VPN is on.", "OK"); }
+        private void Vpn() { ThemedDialog.Show(this, Text, "Couldn't reach Telegram. Make sure your VPN is on.", "OK"); }
         private void Err(Exception ex) { ThemedDialog.Show(this, Text, "Couldn't complete: " + ex.Message, "OK"); }
 
         private static string DisplayName(User u)

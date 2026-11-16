@@ -301,12 +301,12 @@ namespace TelegArm
             Application.ThreadException += (s, e) =>
             {
                 CrashLog.Record("Application.ThreadException (UI thread)", e.Exception);
-                MessageBox.Show(e.Exception.ToString(), "TelegArm — unexpected error",
+                MessageBox.Show(e.Exception.ToString(), "TelegArm: unexpected error",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             };
             AppDomain.CurrentDomain.UnhandledException += (s, e) =>
                 MessageBox.Show((e.ExceptionObject as Exception)?.ToString() ?? "Unknown error",
-                    "TelegArm — fatal error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    "TelegArm: fatal error", MessageBoxButtons.OK, MessageBoxIcon.Error);
 
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);

@@ -123,7 +123,7 @@ namespace TelegArm.UI.Admin
         private void Vpn(string what)
         {
             _save.Enabled = true;
-            ThemedDialog.Show(this, "Edit info", "Couldn't update the " + what + " — make sure your VPN is on.", "OK");
+            ThemedDialog.Show(this, "Edit info", "Couldn't update the " + what + ". Make sure your VPN is on.", "OK");
         }
 
         // ── rows ─────────────────────────────────────────────────────────────────────────────────────────────

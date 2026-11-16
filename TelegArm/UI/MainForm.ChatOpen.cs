@@ -351,7 +351,7 @@ namespace TelegArm.UI
                                             : "You can't send messages here";
                     isButton = false; break;
                 case ComposerKind.SlowmodeWait:
-                    label = "Slow mode — wait " + FormatComposerUntil(st.Until);
+                    label = "Slow mode: wait " + FormatComposerUntil(st.Until);
                     isButton = false; break;
                 default: ShowComposeFooter(); return;
             }
@@ -393,7 +393,7 @@ namespace TelegArm.UI
             }
             if (_footerBar == null) return;
             _footerBar.SetLabel(_countdownState.Kind == ComposerKind.SlowmodeWait
-                ? "Slow mode — wait " + FormatComposerUntil(_countdownState.Until)
+                ? "Slow mode: wait " + FormatComposerUntil(_countdownState.Until)
                 : "You can send again in " + FormatComposerUntil(_countdownState.Until));
         }
 
@@ -569,7 +569,7 @@ namespace TelegArm.UI
             foreach (var c in _currentBotInfo.commands)
             {
                 string cmd = c.command;
-                string label = "/" + cmd + (string.IsNullOrEmpty(c.description) ? "" : "   —   " + c.description);
+                string label = "/" + cmd + (string.IsNullOrEmpty(c.description) ? "" : "  ·  " + c.description);
                 AddMenuItem(menu, label, () => SendBotCommand(cmd));
             }
             if (_botMenuButton != null && _botMenuButton.Visible)

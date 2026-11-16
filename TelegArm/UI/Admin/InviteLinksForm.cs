@@ -105,7 +105,7 @@ namespace TelegArm.UI.Admin
             try { res = await _service.GetInvitesAsync(_peer, false); }
             catch (Exception ex) { ShowStatus("Couldn't load: " + ex.Message); return; }
             if (IsDisposed) return;   // the dialog was closed while the links were on their way
-            if (res == null) { ShowStatus("Couldn't load — make sure your VPN is on."); return; }
+            if (res == null) { ShowStatus("Couldn't load. Make sure your VPN is on."); return; }
             _invites.Clear();
             if (res.invites != null)
                 foreach (var inv in res.invites) { var ci = inv as ChatInviteExported; if (ci != null) _invites.Add(ci); }
@@ -124,7 +124,7 @@ namespace TelegArm.UI.Admin
             ChatInviteExported inv;
             try { inv = await _service.ExportInviteAsync(_peer, expire, limit); }
             catch (Exception ex) { ThemedDialog.Show(this, "Invite links", "Couldn't create: " + ex.Message, "OK"); return; }
-            if (inv == null) { ThemedDialog.Show(this, "Invite links", "Couldn't reach Telegram — make sure your VPN is on.", "OK"); return; }
+            if (inv == null) { ThemedDialog.Show(this, "Invite links", "Couldn't reach Telegram. Make sure your VPN is on.", "OK"); return; }
             _invites.Insert(0, inv);
             ShowList();
             Logger.Diag("[ADMIN] invite created");   // the link itself is a secret: never logged
@@ -182,7 +182,7 @@ namespace TelegArm.UI.Admin
         private async void RevokeFlow(ChatInviteExported inv)
         {
             if (ThemedDialog.Show(this, "Revoke link", "Revoke this invite link? It will stop working.", "Revoke", "Cancel") != 0) return;
-            try { if (!await _service.RevokeInviteAsync(_peer, inv.link)) { ThemedDialog.Show(this, "Invite links", "Couldn't reach Telegram — make sure your VPN is on.", "OK"); return; } }
+            try { if (!await _service.RevokeInviteAsync(_peer, inv.link)) { ThemedDialog.Show(this, "Invite links", "Couldn't reach Telegram. Make sure your VPN is on.", "OK"); return; } }
             catch (Exception ex) { ThemedDialog.Show(this, "Invite links", "Couldn't revoke: " + ex.Message, "OK"); return; }
             _invites.Remove(inv);
             _list.SetItems(_invites.Count);

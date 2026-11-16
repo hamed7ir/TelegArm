@@ -343,7 +343,7 @@ namespace TelegArm.UI
             UpdateStartTile(unreadLoud);
 
             if (_notifyIcon == null) return;
-            _notifyIcon.Text = unread > 0 ? "TelegArm — " + unread + " unread" : "TelegArm";
+            _notifyIcon.Text = unread > 0 ? "TelegArm: " + unread + " unread" : "TelegArm";
             // Swap the tray icon on the 0↔nonzero boundary (unread → unread icon; none → normal). Only assign
             // when it changes (avoids redundant handle churn). Falls back gracefully if an icon is missing.
             var want = unread > 0 ? (_trayIconUnread ?? _trayIconNormal) : _trayIconNormal;

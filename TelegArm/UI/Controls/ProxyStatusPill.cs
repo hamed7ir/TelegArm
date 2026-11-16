@@ -152,7 +152,7 @@ namespace TelegArm.UI.Controls
             {
                 case ProxyConnectState.Connecting: return _viaProxy ? "Connecting via proxy…" : "Connecting…";
                 case ProxyConnectState.Connected: return "Proxy connected";
-                case ProxyConnectState.Failed: return _viaProxy ? "Proxy not working" : "Can't connect — add a proxy";
+                case ProxyConnectState.Failed: return _viaProxy ? "Proxy not working" : "Can't connect: add a proxy";
                 default: return "Connect via proxy";
             }
         }
@@ -185,7 +185,7 @@ namespace TelegArm.UI.Controls
                 case ProxyConnectState.Connected: return "Connected to Telegram through your proxy." + d;
                 case ProxyConnectState.Failed:
                     return _viaProxy ? "Couldn't reach Telegram through your proxy.\nClick to change or turn it off." + d
-                                     : "Couldn't reach Telegram.\nIt may be blocked on your network — click to set up a proxy.";
+                                     : "Couldn't reach Telegram.\nIt may be blocked on your network. Click to set up a proxy.";
                 default: return "Set up a proxy or the WebSocket tunnel if Telegram is blocked on your network.";
             }
         }

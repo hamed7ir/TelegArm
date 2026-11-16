@@ -114,7 +114,7 @@ namespace TelegArm.UI
             if (mi == null) return;
             System.Diagnostics.Debug.WriteLine("[SAVE] save requested type=" + mi.Type + " id=" + mi.Id);
             string full = await EnsureFullMediaAsync(msg, mi);
-            if (string.IsNullOrEmpty(full) || !File.Exists(full)) { ThemedDialog.Show(this, "Save", "Couldn't download this item — try again.", "OK"); return; }
+            if (string.IsNullOrEmpty(full) || !File.Exists(full)) { ThemedDialog.Show(this, "Save", "Couldn't download this item. Try again.", "OK"); return; }
             try
             {
                 string target = CopyToSaveFolder(mi, full);

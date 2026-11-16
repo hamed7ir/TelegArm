@@ -73,7 +73,7 @@ namespace TelegArm.UI
         public event Action<int, string> AlbumFailed;
 
         public SendMediaDialog(WTelegram.Client client, TL.InputPeer peer, IList<string> paths)
-            : base("TelegArm — Send " + paths.Count + (paths.Count == 1 ? " file" : " files"), 520, 520)
+            : base("TelegArm - Send " + paths.Count + (paths.Count == 1 ? " file" : " files"), 520, 520)
         {
             _client = client;
             _peer = peer;

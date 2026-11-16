@@ -171,11 +171,11 @@ namespace TelegArm.Core
             if (accounts != null)
             {
                 if (string.Equals(f, accounts, StringComparison.OrdinalIgnoreCase))
-                    return "it IS the accounts root — session files live there";
+                    return "it is the accounts folder, where your sessions are stored";
                 if (accounts.StartsWith(f, StringComparison.OrdinalIgnoreCase))
-                    return "it CONTAINS the accounts root (" + AccountContext.AccountsRoot + ") — a recursive sweep would reach session files";
+                    return "it contains the accounts folder (" + AccountContext.AccountsRoot + "), where your sessions are stored";
                 if (f.StartsWith(accounts, StringComparison.OrdinalIgnoreCase))
-                    return "it sits INSIDE the accounts root — session files live there";
+                    return "it is inside the accounts folder, where your sessions are stored";
             }
             if (!Directory.Exists(folder)) return "the folder does not exist";
             return null;

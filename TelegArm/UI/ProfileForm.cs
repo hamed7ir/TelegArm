@@ -750,7 +750,7 @@ namespace TelegArm.UI
             try { ok = await _service.MuteUntilAsync(_entry.Peer, until); }
             catch (Exception ex) { ThemedDialog.Show(this, "Mute", "Couldn't change mute: " + ex.Message, "OK"); return; }
             if (Logger.Enabled) Logger.Diag("[NOTIFY] mute write peer=" + (_entry?.PeerId ?? 0) + " mute=" + target + (ok ? " ok" : " FAILED (server returned false)"));
-            if (!ok) { ThemedDialog.Show(this, "Mute", "Telegram didn't accept the change — try again.", "OK"); return; }
+            if (!ok) { ThemedDialog.Show(this, "Mute", "Telegram didn't accept the change. Try again.", "OK"); return; }
             _muted = target;
             if (_entry != null) { _entry.Muted = target; _entry.MuteUntil = until; }
             if (_muteTile != null && !_muteTile.IsDisposed)
@@ -891,7 +891,7 @@ namespace TelegArm.UI
             bool ok;
             try { ok = await _service.EditContactAsync(u, newFirst, newLast); }
             catch (Exception ex) { ThemedDialog.Show(this, "Edit contact", "Couldn't rename the contact: " + ex.Message, "OK"); return; }
-            if (!ok) { ThemedDialog.Show(this, "Edit contact", "Couldn't rename — make sure your VPN is on and try again.", "OK"); return; }
+            if (!ok) { ThemedDialog.Show(this, "Edit contact", "Couldn't rename. Make sure your VPN is on and try again.", "OK"); return; }
 
             // Reflect the rename optimistically: the User (== _entry.PeerInfo, shared ref), this ChatEntry's title,
             // and the on-screen header label. The server's updateUserName reconciles the rest on next sync.
@@ -907,11 +907,11 @@ namespace TelegArm.UI
         {
             var u = OtherUser;
             if (u == null) { ThemedDialog.Show(this, "Delete contact", "Only a saved user can be deleted.", "OK"); return; }
-            if (ThemedDialog.Show(this, "Delete contact", "Delete this contact? Your chat history stays — they're just removed from your contacts.", "Delete", "Cancel") != 0) return;   // 0 = destructive primary
+            if (ThemedDialog.Show(this, "Delete contact", "Delete this contact? Your chat history stays. They are only removed from your contacts.", "Delete", "Cancel") != 0) return;   // 0 = destructive primary
             bool ok;
             try { ok = await _service.DeleteContactAsync(u); }
             catch (Exception ex) { ThemedDialog.Show(this, "Delete contact", "Couldn't delete: " + ex.Message, "OK"); return; }
-            if (!ok) { ThemedDialog.Show(this, "Delete contact", "Couldn't delete — make sure your VPN is on and try again.", "OK"); return; }
+            if (!ok) { ThemedDialog.Show(this, "Delete contact", "Couldn't delete. Make sure your VPN is on and try again.", "OK"); return; }
             Logger.Diag("[CONTACT] deleted id=" + u.id);
             ThemedDialog.Show(this, "Delete contact", "Contact deleted.", "OK");
         }
@@ -1454,7 +1454,7 @@ namespace TelegArm.UI
                     try { await _service.UpdateSelfUsernameAsync(newUn); }   // only after CheckUsername said available
                     catch (Exception ux)
                     {
-                        _usernameOk = false; SetUsernameStatus("Taken — pick another", StatusTone.Bad);
+                        _usernameOk = false; SetUsernameStatus("Taken, pick another", StatusTone.Bad);
                         ThemedDialog.Show(this, "Username", "Couldn't set that username (it may have just been taken): " + ux.Message, "OK");
                         return;   // race (USERNAME_OCCUPIED) → don't save the rest, don't claim success
                     }
@@ -1485,11 +1485,11 @@ namespace TelegArm.UI
             string cur = SelfUser?.MainUsername ?? "";
             if (u.Length == 0) { SetUsernameStatus("", StatusTone.Neutral); _usernameOk = true; return; }                 // empty = no change
             if (u == cur)      { SetUsernameStatus("This is your current username.", StatusTone.Neutral); _usernameOk = true; return; }
-            if (!IsValidUsernameFormat(u)) { SetUsernameStatus("Invalid — 5–32 letters/digits/_ , starting with a letter.", StatusTone.Bad); _usernameOk = false; return; }
+            if (!IsValidUsernameFormat(u)) { SetUsernameStatus("Not valid: 5 to 32 letters, digits or _, starting with a letter.", StatusTone.Bad); _usernameOk = false; return; }
             SetUsernameStatus("Checking…", StatusTone.Neutral);
             bool free;
             try { free = await _service.CheckSelfUsernameAsync(u); }
-            catch { SetUsernameStatus("Couldn't check — is your VPN on?", StatusTone.Neutral); _usernameOk = false; return; }
+            catch { SetUsernameStatus("Couldn't check. Is your VPN on?", StatusTone.Neutral); _usernameOk = false; return; }
             if (IsDisposed || (_username.Value ?? "").Trim() != u) return;   // stale: the user kept typing
             _usernameOk = free;
             SetUsernameStatus(free ? "Available" : "Taken or unavailable", free ? StatusTone.Good : StatusTone.Bad);
@@ -1534,7 +1534,7 @@ namespace TelegArm.UI
             try { ok = await _service.SetProfilePhotoAsync(path); }
             catch (Exception ex) { _titleLbl.Text = keep; ThemedDialog.Show(this, "Profile photo", "Couldn't set the photo: " + ex.Message, "OK"); return; }
             _titleLbl.Text = keep;
-            if (!ok) { ThemedDialog.Show(this, "Profile photo", "Couldn't set the photo — is your VPN on?", "OK"); return; }
+            if (!ok) { ThemedDialog.Show(this, "Profile photo", "Couldn't set the photo. Is your VPN on?", "OK"); return; }
             RefreshSelfAvatar();
         }
 
@@ -1546,7 +1546,7 @@ namespace TelegArm.UI
                 var photos = await _service.GetSelfPhotosAsync(1);
                 var p = photos?.photos?.OfType<Photo>().FirstOrDefault();
                 if (p == null) { ThemedDialog.Show(this, "Remove photo", "There's no profile photo to remove.", "OK"); return; }
-                if (!await _service.DeleteProfilePhotoAsync(p)) { ThemedDialog.Show(this, "Remove photo", "Couldn't remove — is your VPN on?", "OK"); return; }
+                if (!await _service.DeleteProfilePhotoAsync(p)) { ThemedDialog.Show(this, "Remove photo", "Couldn't remove. Is your VPN on?", "OK"); return; }
                 RefreshSelfAvatar();
             }
             catch (Exception ex) { ThemedDialog.Show(this, "Remove photo", "Couldn't remove: " + ex.Message, "OK"); }
@@ -2322,7 +2322,7 @@ namespace TelegArm.UI
                 {
                     var audio = doc.attributes?.OfType<DocumentAttributeAudio>().FirstOrDefault();
                     if (audio != null && !string.IsNullOrEmpty(audio.title))
-                        return audio.title + (string.IsNullOrEmpty(audio.performer) ? "" : " — " + audio.performer);
+                        return audio.title + (string.IsNullOrEmpty(audio.performer) ? "" : " · " + audio.performer);
                     var fn = doc.attributes?.OfType<DocumentAttributeFilename>().FirstOrDefault();
                     if (fn != null) return fn.file_name;
                     if (audio != null) return (audio.flags & DocumentAttributeAudio.Flags.voice) != 0 ? "Voice message" : "Audio";

@@ -752,7 +752,7 @@ namespace TelegArm.UI
                 ThemedDialog.Show(this, "Mute", "Couldn't change mute: " + ex.Message, "OK"); return;
             }
             if (Logger.Enabled) Logger.Diag("[NOTIFY] mute write peer=" + entry.PeerId + " mute=" + target + (ok ? " ok" : " FAILED (server returned false)"));   // R7 (BATCH-TA-6/P1)
-            if (!ok) { ThemedDialog.Show(this, "Mute", "Telegram didn't accept the change — try again.", "OK"); return; }
+            if (!ok) { ThemedDialog.Show(this, "Mute", "Telegram didn't accept the change. Try again.", "OK"); return; }
             // Keep the explicit-setting mirror consistent for the notify gate until the server echo lands.
             entry.MuteUntil = until;
             entry.Muted = target;

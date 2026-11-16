@@ -147,7 +147,7 @@ namespace TelegArm.UI
             List<User> users = null;
             try { users = await _fetch(); } catch { users = null; }
             if (IsDisposed) return;   // the dialog was closed while the contacts were on their way
-            if (users == null) { _status.Hint = "Couldn't load contacts — make sure your VPN is on."; return; }
+            if (users == null) { _status.Hint = "Couldn't load contacts. Make sure your VPN is on."; return; }
             _all = users.OrderBy(u => PersonName(u), StringComparer.CurrentCultureIgnoreCase).ToList();
             if (_all.Count == 0) { _status.Hint = "No contacts."; return; }
             _status.Visible = false; _list.Visible = true;
