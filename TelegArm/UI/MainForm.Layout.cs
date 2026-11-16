@@ -74,6 +74,7 @@ namespace TelegArm.UI
                 FontPoints = 10.5f
             });
             _searchBox.TextChanged += (s, e) => OnSearchTextChanged();
+            _searchBox.Control.Leave += (s, e) => SetKeyRow(null);   // R6: the keyboard's row belongs to the search box
             PerfLog.Boot("    BuildLeftPanel: search box constructed");
 
             _searchDebounce = new Timer { Interval = 500 };

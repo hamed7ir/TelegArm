@@ -70,6 +70,15 @@ namespace TelegArm.UI.Controls
             if (_hover != null) _hover.Set(false);
         }
 
+        private bool _keyCursor;
+        /// <summary>R6: the row the arrow keys point at (Up / Down in the search box): the hover tint at full and a focus
+        /// ring, so a keyboard user sees where Enter goes.</summary>
+        public bool KeyCursor
+        {
+            get { return _keyCursor; }
+            set { if (_keyCursor != value) { _keyCursor = value; Invalidate(); } }
+        }
+
         /// <summary>Right-click / touch-and-hold on the row (screen point) — for the chat menu.</summary>
         public event EventHandler<Point> ContextMenuRequested;
 
@@ -138,7 +147,7 @@ namespace TelegArm.UI.Controls
             Color bg = ThemeHelper.PaletteFor(IsDark).ListBg;
             Color nameColor = ThemeHelper.PaletteFor(IsDark).ListName;
             Color subColor = ThemeHelper.PaletteFor(IsDark).ListSub;
-            float hov = _hover != null && !_selected ? _hover.T : 0f;   // 0 for nearly every row: nothing below runs for it
+            float hov = _selected ? 0f : Math.Max(_hover != null ? _hover.T : 0f, _keyCursor ? 1f : 0f);   // 0 for nearly every row: nothing below runs for it
             if (_selected)
                 bg = ThemeHelper.PaletteFor(IsDark).AccentSoft;   // step 5.1: the selection follows the accent (was ListSelected)
             else if (hov > 0f)
@@ -151,6 +160,10 @@ namespace TelegArm.UI.Controls
                 else if (hov > 0f) using (var hb = new SolidBrush(ColorMath.WithAlpha(nameColor, (int)Math.Round(18 * hov)))) g.FillRectangle(hb, ClientRectangle);
             }
             else g.Clear(bg);
+            if (_keyCursor)   // R6: the keyboard's row (one row at most, so the pen is made only for it)
+                using (var pen = new Pen(ThemeHelper.PaletteFor(IsDark).AccentGlyph, P(2)))
+                using (var ring = DrawHelper.RoundedRect(new Rectangle(P(2), P(2), Width - P(4) - 1, Height - P(4) - 1), P(6)))
+                    g.DrawPath(pen, ring);
 
             int d = P(48), ax = P(8), ay = P(8);
             var avatarRect = new Rectangle(ax, ay, d, d);

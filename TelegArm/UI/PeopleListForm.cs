@@ -69,7 +69,7 @@ namespace TelegArm.UI
                 if (page != null) _rows.AddRange(page.Rows);
                 _nextOffset = page != null ? page.NextOffset : null;
                 _done = string.IsNullOrEmpty(_nextOffset);
-                _list.SetItems(_rows.Count);
+                _list.SetItems(_rows.Count, true);   // a page more: keep the place
                 _status.Visible = _rows.Count == 0;
                 if (_rows.Count == 0) _status.Text = _empty;
             }

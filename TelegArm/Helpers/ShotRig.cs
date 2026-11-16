@@ -2337,6 +2337,7 @@ namespace TelegArm.Helpers
                     if (!noStops) _failures++;
                 }
                 BidiCheck();
+                ListKeysCheck(f);
                 // 2026-10-16: a group with a voice chat on - the header's call button becomes the voice chat button (shot) and
                 // the ⋮ menu offers to join; an admin's group without one offers to start one
                 {
@@ -2883,6 +2884,115 @@ namespace TelegArm.Helpers
                     }
                 host.Close();
             }
+        }
+
+        /// <summary>
+        /// 2026-11-16 (R6): the keyboard in the chat list and in a dialog list. In the search box Down / Up move a ring
+        /// through the chat list (the focus stays in the box) and Enter opens that chat; while searching, Enter opens the
+        /// first result. A dialog list is reached from its search box with Down, its arrows move the ring, Space picks,
+        /// Up on the first row goes back to the box, and a tap on a row picks it WITHOUT taking the focus (the touch
+        /// keyboard's case). Keys and the tap are POSTED, so they take WinForms' ordinary path. No account here, so
+        /// Enter's chat goes to MainForm.OpenFromKeysHook instead of opening.
+        /// </summary>
+        private static void ListKeysCheck(MainForm f)
+        {
+            Action<bool, string> check = (ok, what) => { _log.AppendLine("  " + (ok ? "PASS  " : "FAIL  ") + "keys: " + what); if (!ok) _failures++; };
+            var search = Field(f, "_searchBox");
+            var box = (Control)search.GetType().GetProperty("Control").GetValue(search, null);
+            var opened = new List<ChatEntry>();
+            MainForm.OpenFromKeysHook = e => opened.Add(e);
+            try
+            {
+                f.Activate(); LivePump(300);
+                box.Focus(); LivePump(200);
+                Func<List<UI.Controls.ChatListItemControl>> rows = () => ((IEnumerable)Invoke(f, "ShownRows")).Cast<UI.Controls.ChatListItemControl>().ToList();
+                Func<int> ring = () => rows().FindIndex(r => r.KeyCursor);
+                PostKey(f, Keys.Down); int k1 = ring();
+                PostKey(f, Keys.Down); int k2 = ring();
+                PostKey(f, Keys.Up); int k3 = ring();
+                check(box.ContainsFocus && k1 >= 0 && k2 == k1 + 1 && k3 == k1,
+                      "Down / Up in the search box move a ring through the chat list, the focus stays in the box (rows " + k1 + ", " + k2 + ", " + k3 + ")");
+                var list = (Control)Field(f, "_chatListPanel");
+                var lr = list.RectangleToScreen(list.ClientRectangle);
+                lr.Intersect(Screen.FromControl(f).Bounds);
+                if (lr.Width > 0 && lr.Height > 0)
+                    using (var bmp = new Bitmap(lr.Width, lr.Height))
+                    {
+                        using (var g = Graphics.FromImage(bmp)) g.CopyFromScreen(lr.Location, Point.Empty, lr.Size);
+                        bmp.Save(Path.Combine(_dir, "keys-chat-ring.png"), ImageFormat.Png);
+                    }
+                var want = k3 >= 0 ? rows()[k3].Entry : null;
+                PostKey(f, Keys.Enter);
+                check(opened.Count == 1 && want != null && ReferenceEquals(opened[0], want) && ring() < 0,
+                      "Enter opens the chat under the ring (" + (opened.Count > 0 ? opened[0].Title : "none") + ")");
+                var text = search.GetType().GetProperty("Text");
+                text.SetValue(search, "Ada", null); LivePump(150);
+                PostKey(f, Keys.Enter);
+                var first = opened.Count > 1 ? opened[1] : null;
+                text.SetValue(search, "", null); LivePump(150);   // (cleared before the message search's half-second wait ends)
+                check(first != null && first.PeerId == AdaId, "while searching, Enter opens the first result (" + (first != null ? first.Title : "none") + ")");
+            }
+            catch (Exception ex) { check(false, "the chat list check threw " + ex.GetType().Name + ": " + ex.Message); }
+            finally { MainForm.OpenFromKeysHook = null; }
+
+            UI.CountryPickerForm cp = null;
+            try
+            {
+                cp = new UI.CountryPickerForm(ThemeHelper.IsDark, ThemeHelper.Palette.Accent) { StartPosition = FormStartPosition.Manual };
+                cp.Location = new Point(f.Left + 40, f.Top + 40);
+                cp.Show(f); LivePump(700);
+                var cs = (Control)Field(cp, "_search");
+                var list = (UI.Controls.ThemedListBox)Field(cp, "_list");
+                var shown = (IList)Field(cp, "_shown");
+                cs.Focus(); LivePump(200);
+                PostKey(cp, Keys.Down); bool inList = list.ContainsFocus; int c0 = list.KeyCursor;
+                PostKey(cp, Keys.Down); int c1 = list.KeyCursor;
+                var shot = cp.Bounds; shot.Intersect(Screen.FromControl(cp).Bounds);
+                if (shot.Width > 0 && shot.Height > 0)
+                    using (var bmp = new Bitmap(shot.Width, shot.Height))
+                    {
+                        using (var g = Graphics.FromImage(bmp)) g.CopyFromScreen(shot.Location, Point.Empty, shot.Size);
+                        bmp.Save(Path.Combine(_dir, "keys-list-ring.png"), ImageFormat.Png);
+                    }
+                PostKey(cp, Keys.Space);
+                bool picked = cp.DialogResult == DialogResult.OK && ReferenceEquals(cp.SelectedCountry, shown[1]);
+                check(inList && c0 == 0 && c1 == 1 && picked, "a dialog list: Down from its search box moves in, Down moves the ring, Space picks (in list: " + inList + ", rows " + c0 + ", " + c1 + ", picked row 1: " + picked + ")");
+                cp.DialogResult = DialogResult.None;
+                PostKey(cp, Keys.Up); PostKey(cp, Keys.Up);
+                check(cs.ContainsFocus, "Up on the list's first row goes back to the search box");
+                var canvas = (Control)Field(list, "_canvas");
+                PostTap(canvas, new Point(canvas.Width / 2, 2 * list.RowHeight + list.RowHeight / 2));
+                bool tapPicked = cp.DialogResult == DialogResult.OK && ReferenceEquals(cp.SelectedCountry, shown[2]);
+                check(cs.ContainsFocus && tapPicked, "a tap on a row picks it and the focus stays in the search box (focus in box: " + cs.ContainsFocus + ", picked row 2: " + tapPicked + ")");
+            }
+            catch (Exception ex) { check(false, "the dialog list check threw " + ex.GetType().Name + ": " + ex.Message); }
+            finally { if (cp != null) { try { cp.Close(); cp.Dispose(); } catch { } } }
+            try { f.ActiveControl = null; } catch { }
+            LivePump(300);
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool PostMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern IntPtr GetFocus();
+
+        /// <summary>A key as the keyboard sends it: posted to the window with the focus (WinForms' ordinary path).</summary>
+        private static void PostKey(Form f, Keys k)
+        {
+            IntPtr target = GetFocus();
+            if (target == IntPtr.Zero) target = f.Handle;
+            PostMessage(target, 0x0100, (IntPtr)(int)k, (IntPtr)1);                           // WM_KEYDOWN
+            PostMessage(target, 0x0101, (IntPtr)(int)k, (IntPtr)unchecked((int)0xC0000001));  // WM_KEYUP
+            LivePump(250);
+        }
+
+        /// <summary>A left click at a client point, posted (a finger's tap arrives as the same two messages).</summary>
+        private static void PostTap(Control c, Point p)
+        {
+            var lp = (IntPtr)((p.Y << 16) | (p.X & 0xFFFF));
+            PostMessage(c.Handle, 0x0201, (IntPtr)1, lp);   // WM_LBUTTONDOWN (MK_LBUTTON)
+            PostMessage(c.Handle, 0x0202, IntPtr.Zero, lp); // WM_LBUTTONUP
+            LivePump(300);
         }
 
         private static void LivePump(int ms)

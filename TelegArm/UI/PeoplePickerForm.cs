@@ -72,6 +72,7 @@ namespace TelegArm.UI
             _list = new ThemedListBox(p.Dark, p.Accent) { Dock = DockStyle.Fill, RowHeight = Px(RowLogical), CanvasBackColor = p.Window, Visible = false };
             _list.DrawRow += DrawRow;
             _list.ItemClicked += OnRowClicked;
+            _list.AttachSearchBox(_search);   // R6: Down in the search box moves into the list
 
             _status = new EmptyState { Dock = DockStyle.Fill, Hint = "Loading contacts…" };
 

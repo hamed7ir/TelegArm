@@ -158,7 +158,7 @@ namespace TelegArm.UI.Admin
                 if (added < PageSize) _exhausted = true;
 
                 if (_users.Count == 0) { ShowMessage(EmptyText()); }
-                else { _status.Visible = false; _list.Visible = true; _list.SetItems(_users.Count); }
+                else { _status.Visible = false; _list.Visible = true; _list.SetItems(_users.Count, true); }   // a page more: keep the place
             }
             finally { _loading = false; }
         }

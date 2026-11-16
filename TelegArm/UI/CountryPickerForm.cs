@@ -45,6 +45,7 @@ namespace TelegArm.UI
             _list = new ThemedListBox(p.Dark, p.Accent) { RowHeight = Px(RowLogical), CanvasBackColor = p.Window };
             _list.DrawRow += DrawRow;
             _list.ItemClicked += Choose;
+            _list.AttachSearchBox(_search);   // R6: Down in the search box moves into the list
 
             _picker = new PickerBody(_search, _list) { BackColor = p.Window };
             UseOwnBody(_picker);

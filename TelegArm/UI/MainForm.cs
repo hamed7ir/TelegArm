@@ -402,6 +402,7 @@ namespace TelegArm.UI
 
         protected override bool ProcessCmdKey(ref System.Windows.Forms.Message msg, Keys keyData)
         {
+            if (TrySearchListKey(keyData)) return true;   // R6: the arrows and Enter in the search box (MainForm.Shortcuts.cs)
             if (TryShortcut(keyData)) return true;   // R5: MainForm.Shortcuts.cs
             switch (keyData)
             {

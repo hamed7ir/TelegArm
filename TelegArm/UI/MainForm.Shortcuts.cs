@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Windows.Forms;
 using TelegArm.Core;
@@ -21,7 +22,8 @@ namespace TelegArm.UI
         internal static readonly string[][] Shortcuts =
         {
             new[] { "Ctrl+F", "Search chats" },
-            new[] { "Alt+Up / Alt+Down", "Previous / next chat" },
+            new[] { "Up / Down, Enter (in the search box)", "Move through the chat list, open that chat (while searching, Enter opens the first result)" },
+            new[] { "Alt+Up / Alt+Down, Ctrl+PageUp / Ctrl+PageDown", "Previous / next chat" },
             new[] { "Ctrl+Tab / Ctrl+Shift+Tab", "Next / previous folder" },
             new[] { "Ctrl+1 … Ctrl+9", "Folder 1 to 9 (1 = All)" },
             new[] { "Esc", "Clear the search, cancel the reply or edit, close the side panel, then close the chat" },
@@ -39,8 +41,10 @@ namespace TelegArm.UI
         {
             switch (keyData)
             {
-                case Keys.Alt | Keys.Up: CycleChat(-1); return true;
-                case Keys.Alt | Keys.Down: CycleChat(+1); return true;
+                case Keys.Alt | Keys.Up:
+                case Keys.Control | Keys.PageUp: CycleChat(-1); return true;
+                case Keys.Alt | Keys.Down:
+                case Keys.Control | Keys.PageDown: CycleChat(+1); return true;
                 case Keys.Control | Keys.Tab: CycleFolder(+1); return true;
                 case Keys.Control | Keys.Shift | Keys.Tab: CycleFolder(-1); return true;
                 case Keys.Control | Keys.E: return EditLastOwnMessage();
@@ -63,7 +67,7 @@ namespace TelegArm.UI
         /// <summary>Alt+Up / Alt+Down: the previous / next row of the list as it is shown (folder and search applied).</summary>
         private async void CycleChat(int dir)
         {
-            var rows = _chatListPanel.Controls.OfType<ChatListItemControl>().Where(r => r.Visible).ToList();
+            var rows = ShownRows();
             if (rows.Count == 0) return;
             int at = _selectedItem != null ? rows.IndexOf(_selectedItem) : -1;
             int next = at < 0 ? (dir > 0 ? 0 : rows.Count - 1) : at + dir;
@@ -72,6 +76,81 @@ namespace TelegArm.UI
             try { _chatListPanel.ScrollControlIntoView(row); } catch { }
             if (LogOn) Logger.Diag("[KEYS] " + (dir > 0 ? "next" : "previous") + " chat → peer=" + row.Entry.PeerId);
             await OpenChat(row.Entry, 0);
+        }
+
+        // ── the chat list from the search box (R6) ─────────────────────────────────────────────────────────────────
+
+        /// <summary>The row the arrow keys point at while the search box has the focus (drawn with a focus ring).</summary>
+        private ChatListItemControl _keyRow;
+
+        private List<ChatListItemControl> ShownRows()
+        {
+            return _chatListPanel.Controls.OfType<ChatListItemControl>().Where(r => r.Visible).ToList();
+        }
+
+        private bool KeyRowShown { get { return _keyRow != null && !_keyRow.IsDisposed && _keyRow.Parent == _chatListPanel && _keyRow.Visible; } }
+
+        /// <summary>R6: in the search box, Up / Down / PageUp / PageDown move through the chat list as it is shown and Enter
+        /// opens that chat; while searching, Enter with no row picked opens the first result. The composer keeps its own
+        /// arrows: only the search box has these.</summary>
+        private bool TrySearchListKey(Keys keyData)
+        {
+            if (_searchBox == null || !_searchBox.Control.ContainsFocus || _inChatSearchEntry != null) return false;
+            switch (keyData)
+            {
+                case Keys.Down: return MoveKeyRow(+1);
+                case Keys.Up: return MoveKeyRow(-1);
+                case Keys.PageDown: return MoveKeyRow(+PageOfRows());
+                case Keys.PageUp: return MoveKeyRow(-PageOfRows());
+                case Keys.Enter: return OpenKeyRow();
+            }
+            return false;
+        }
+
+        private int PageOfRows()
+        {
+            var first = ShownRows().FirstOrDefault();
+            return first == null || first.Height <= 0 ? 1 : Math.Max(1, _chatListPanel.ClientSize.Height / first.Height - 1);
+        }
+
+        private bool MoveKeyRow(int by)
+        {
+            var rows = ShownRows();
+            if (rows.Count == 0) return true;   // (a one-line box has no use for the arrows)
+            int at = KeyRowShown ? rows.IndexOf(_keyRow) : (_selectedItem != null ? rows.IndexOf(_selectedItem) : -1);
+            int next = at < 0 ? (by > 0 ? 0 : rows.Count - 1) : Math.Max(0, Math.Min(rows.Count - 1, at + by));
+            SetKeyRow(rows[next]);
+            return true;
+        }
+
+        private void SetKeyRow(ChatListItemControl row)
+        {
+            if (_keyRow != null && !_keyRow.IsDisposed) _keyRow.KeyCursor = false;
+            _keyRow = row;
+            if (row == null) return;
+            row.KeyCursor = true;
+            try { _chatListPanel.ScrollControlIntoView(row); } catch { }
+        }
+
+        /// <summary>Rig hook (TELEGARM_LIVE=keys has no account): receives the chat Enter would open, instead of opening it.</summary>
+        internal static Action<ChatEntry> OpenFromKeysHook;
+
+        private bool OpenKeyRow()
+        {
+            var row = KeyRowShown ? _keyRow : null;
+            if (row == null && !string.IsNullOrWhiteSpace(_searchBox.Text)) row = ShownRows().FirstOrDefault();
+            if (row == null) return false;
+            SetKeyRow(null);
+            if (OpenFromKeysHook != null) OpenFromKeysHook(row.Entry);
+            else OpenFromKeys(row.Entry);
+            return true;
+        }
+
+        private async void OpenFromKeys(ChatEntry entry)
+        {
+            if (LogOn) Logger.Diag("[KEYS] open from the search box → peer=" + entry.PeerId);
+            await OpenChat(entry, 0);
+            if (_selectedChat == entry && _messageInput.Enabled) _messageInput.Focus();   // type right away
         }
 
         /// <summary>Ctrl+E: edit my newest editable message in the open chat (what Up does in Telegram Desktop).</summary>

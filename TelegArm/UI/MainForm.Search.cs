@@ -88,6 +88,7 @@ namespace TelegArm.UI
         private void OnSearchTextChanged()
         {
             _searchDebounce.Stop();
+            SetKeyRow(null);   // R6: new results; Enter now opens the first one
             // INCHAT-SEARCH: while scoped to an open chat, typing searches THAT chat (not the global list). The
             // results re-render in DoInChatSearch after the debounce; here we just keep the scope chip shown.
             if (_inChatSearchEntry != null)

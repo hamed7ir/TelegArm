@@ -82,6 +82,7 @@ namespace TelegArm.UI
             _list = new ThemedListBox(p.Dark, p.Accent) { Dock = DockStyle.Fill, RowHeight = Px(RowLogical), CanvasBackColor = p.Window };
             _list.DrawRow += DrawRow;
             _list.ItemClicked += OnRowClicked;
+            _list.AttachSearchBox(_search);   // R6: Down in the search box moves into the list (Space ticks a row, Enter forwards)
 
             _host = new Panel { BackColor = p.Window };
             _host.Controls.Add(_list);
