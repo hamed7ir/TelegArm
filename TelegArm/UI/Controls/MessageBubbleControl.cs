@@ -878,8 +878,10 @@ namespace TelegArm.UI.Controls
         /// <summary>Supplies the message's TL entities; switches the body to the inline engine if needed.</summary>
         public void SetEntities(TL.MessageEntity[] entities)
         {
+            // A Persian line and an English line in one message need the inline engine too: the plain drawing gives the
+            // whole message one direction, so the English line would sit on the right with its "!" moved to the front.
             bool need = _text.Length > 0 &&
-                        ((entities != null && entities.Length > 0) || EmojiRenderer.ContainsEmoji(_text));
+                        ((entities != null && entities.Length > 0) || EmojiRenderer.ContainsEmoji(_text) || TextDirection.MixedParagraphs(_text));
             _rich?.Dispose();
             _useRich = need;
             _rich = need ? new InlineText(_text, entities, CustomEmojiResolver) { LayoutDpi = CurDpi } : null;   // step 3.2: its pixel font's DPI

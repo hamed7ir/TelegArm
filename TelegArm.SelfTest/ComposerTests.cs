@@ -55,6 +55,24 @@ namespace TelegArm.SelfTest
             };
             foreach (var c in cases)
                 Check.True(TelegArm.Helpers.TextDirection.FirstStrongIsRtl(c.Key) == c.Value, "\"" + c.Key + "\" -> " + (c.Value ? "RTL" : "LTR"));
+
+            // the tri-state: no letter at all is "none", not LTR
+            Check.True(TelegArm.Helpers.TextDirection.FirstStrong("😀 123") == 0, "emoji and digits: no direction");
+            Check.True(TelegArm.Helpers.TextDirection.FirstStrong("سلام") == 1 && TelegArm.Helpers.TextDirection.FirstStrong("abc") == -1, "RTL 1, LTR -1");
+
+            // a Persian line and an English line in one message (each line then gets its own direction)
+            var mixed = new[]
+            {
+                new KeyValuePair<string, bool>("Hello there\nسلام", true),
+                new KeyValuePair<string, bool>("سلام\nHello", true),
+                new KeyValuePair<string, bool>("سلام Hello\nدوست", false),   // both lines start Persian
+                new KeyValuePair<string, bool>("Hello سلام", false),                              // one line: no mix
+                new KeyValuePair<string, bool>("Hello\n😀😀\n123", false),                        // emoji / digit lines count for neither
+                new KeyValuePair<string, bool>("😀\nسلام\n\nhi", true),
+                new KeyValuePair<string, bool>("", false),
+            };
+            foreach (var c in mixed)
+                Check.True(TelegArm.Helpers.TextDirection.MixedParagraphs(c.Key) == c.Value, "mixed \"" + c.Key.Replace("\n", "\\n") + "\" -> " + c.Value);
         }
 
         private static void Privacy()

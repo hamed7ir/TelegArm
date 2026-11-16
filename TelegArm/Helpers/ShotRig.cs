@@ -2336,6 +2336,7 @@ namespace TelegArm.Helpers
                     if (!named) _failures++;
                     if (!noStops) _failures++;
                 }
+                BidiCheck();
                 // 2026-10-16: a group with a voice chat on - the header's call button becomes the voice chat button (shot) and
                 // the ⋮ menu offers to join; an admin's group without one offers to start one
                 {
@@ -2762,6 +2763,126 @@ namespace TelegArm.Helpers
                 if (fi != null) return fi.GetValue(o);
             }
             return null;
+        }
+
+        /// <summary>
+        /// 2026-11-15 (polish): mixed Persian and English in one bubble. Each paragraph takes the direction of its first
+        /// letter, English words keep their order inside a Persian line and Persian ones inside an English line
+        /// (InlineText.ResolveLevels), and a plain message with a Persian and an English line goes through the inline
+        /// engine. Read from the laid-out words (reflection); keys-bidi.png shows the bubbles.
+        /// </summary>
+        private static void BidiCheck()
+        {
+            var samples = new[]
+            {
+                "Hello there my friend, how are you?\nسلام دوست من\n😀😀",
+                "سلام دوست من\nHello there my friend!",
+                "من از Windows RT استفاده می‌کنم 😀",
+                "I put TelegArm روی سرفیس today 😀",   // (an emoji: one plain line is drawn by Windows' own bidi, not the inline engine)
+                "سلام! 😀",
+                "سلام!",                              // plain: the reference for the mark's side in the shot
+                "من iPhone, iPad دارم 😀",
+            };
+            var p = ThemeHelper.Palette;
+            var wa = Screen.PrimaryScreen.WorkingArea;
+            using (var host = new Form { FormBorderStyle = FormBorderStyle.None, StartPosition = FormStartPosition.Manual, ShowInTaskbar = false, TopMost = true, BackColor = Color.White })
+            {
+                host.Bounds = new Rectangle(wa.Left + 20, wa.Top + 20, Math.Min(640, wa.Width - 40), Math.Min(620, wa.Height - 40));
+                var bubbles = new List<UI.Controls.MessageBubbleControl>();
+                int y = 8;
+                for (int i = 0; i < samples.Length; i++)
+                {
+                    bool outgoing = i % 2 == 1;
+                    var b = new UI.Controls.MessageBubbleControl(samples[i], null, outgoing, DateTime.Now)
+                    { AccentColor = p.Accent, IsDark = p.Dark, Location = new Point(8, y), Width = host.ClientSize.Width - 16, Read = outgoing };
+                    b.SetEntities(null);   // as CreateBubble does: the bubble picks the inline engine itself
+                    host.Controls.Add(b);
+                    b.Measure();
+                    y += b.Height + 6;
+                    bubbles.Add(b);
+                }
+                host.Show();
+                LivePump(600);
+
+                Func<object, string> text = t => (string)Field(t, "Text");
+                Func<object, int> x = t => ((Rectangle)Field(t, "Rect")).X;
+                Func<int, IList> lines = i => { var rich = Field(bubbles[i], "_rich"); return rich == null ? null : (IList)Field(rich, "_lines"); };
+                Func<int, string> dirs = i => { var ls = lines(i); return ls == null ? "(plain)" : string.Join(",", ls.Cast<object>().Select(l => (bool)Field(l, "R") ? "RTL" : "LTR")); };
+                Func<int, int, List<object>> toks = (i, li) => ((IList)Field(lines(i)[li], "Toks")).Cast<object>().ToList();
+                Func<List<object>, string, object> find = (ts, s) => ts.FirstOrDefault(t => text(t) == s);
+                Action<bool, string> check = (ok, what) => { _log.AppendLine("  " + (ok ? "PASS  " : "FAIL  ") + "bidi: " + what); if (!ok) _failures++; };
+                string order = "";
+                try
+                {
+                    var rich0 = Field(bubbles[0], "_rich");
+                    int w0 = (int)rich0.GetType().GetProperty("Width").GetValue(rich0, null);
+                    var fa0 = toks(0, 1);
+                    int faRight = fa0.Max(t => x(t) + (int)Field(t, "W"));
+                    check(dirs(0) == "LTR,RTL,LTR" && toks(0, 0).Min(x) == 0 && faRight == w0,
+                          "an English, a Persian and an emoji line each read their own way, the Persian one on the right (" + dirs(0) + "; right edge " + faRight + " of " + w0 + ")");
+                    var l1 = toks(1, 1);
+                    order = string.Join(" ", l1.OrderBy(x).Select(text));
+                    check(dirs(1) == "RTL,LTR" && x(find(l1, "Hello")) < x(find(l1, "friend!")) && l1.Min(x) == 0,
+                          "a plain Persian line then an English one: the English line sits left, in order (" + dirs(1) + "; " + order + ")");
+                    var l2 = toks(2, 0);
+                    order = string.Join(" ", l2.OrderBy(x).Select(text));
+                    check(x(find(l2, "Windows")) < x(find(l2, "RT")) && x(find(l2, "من")) == l2.Max(x),
+                          "\"Windows RT\" keeps its order inside a Persian line (" + order + ")");
+                    var l3 = toks(3, 0);
+                    order = string.Join(" ", l3.OrderBy(x).Select(text));
+                    check(x(find(l3, "I")) == l3.Min(x) && x(find(l3, "سرفیس")) < x(find(l3, "روی")) && x(find(l3, "روی")) < x(find(l3, "today")),
+                          "two Persian words inside an English line read right to left (" + order + ")");
+                    var l4 = toks(4, 0);
+                    check(x(find(l4, "😀")) < x(find(l4, "سلام!")), "an emoji after a Persian word sits on its left");
+                    // the punctuation at a word's edge: with the paragraph after a Persian word ("سلام!" drawn right to left: the
+                    // mark on the left), with the next word inside an English run ("iPhone," drawn left to right: "iPhone, iPad")
+                    var l6 = toks(6, 0);
+                    var iphone = find(l6, "iPhone,");
+                    bool drawOk = (bool)Field(find(l4, "سلام!"), "DrawR") && !(bool)Field(iphone, "DrawR") && x(iphone) < x(find(l6, "iPad"));
+                    order = string.Join(" ", l6.OrderBy(x).Select(text));
+                    check(drawOk, "a word's edge punctuation sides with its neighbours (\"سلام!\" right to left, \"iPhone, iPad\" left to right: " + order + ")");
+                    // the selection follows the screen: the word under the pointer is the word copied
+                    var rich2 = Field(bubbles[2], "_rich");
+                    var win = find(l2, "Windows"); var man = find(l2, "من");
+                    var rw = (Rectangle)Field(win, "Rect"); var rm = (Rectangle)Field(man, "Rect");
+                    int iw = (int)Invoke(rich2, "HitChar", new Point(rw.X + 1, rw.Y + 2));
+                    int im = (int)Invoke(rich2, "HitChar", new Point(rm.Right - 1, rm.Y + 2));
+                    string sw = (string)Invoke(rich2, "GetRangeText", iw, iw + 7), sm = (string)Invoke(rich2, "GetRangeText", im, im + 2);
+                    check(sw == "Windows" && sm == "من", "a press at a word's start selects from that word (\"" + sw + "\", \"" + sm + "\")");
+                    // the highlight follows the screen too: a selected word is lit where it sits, and a selection from an English
+                    // line into a Persian one runs to the end of the first and in from the right edge of the second
+                    Func<object, int, int, Bitmap> paintSel = (rich, a, b) =>
+                    {
+                        var bm = new Bitmap((int)rich.GetType().GetProperty("Width").GetValue(rich, null), (int)rich.GetType().GetProperty("Height").GetValue(rich, null));
+                        using (var g = Graphics.FromImage(bm)) { g.Clear(Color.White); Invoke(rich, "PaintSelectionHighlight", g, 0, 0, a, b, Color.Black); }
+                        return bm;
+                    };
+                    Func<Bitmap, int, string> lit = (bm, row) => { int lo = -1, hi = -1; for (int i = 0; i < bm.Width; i++) if (bm.GetPixel(i, row).R < 128) { if (lo < 0) lo = i; hi = i; } return lo + ".." + hi; };
+                    using (var bm = paintSel(rich2, iw, iw + 7))
+                    {
+                        string got = lit(bm, rw.Y + 2), want = rw.X + ".." + (rw.Right - 1);
+                        check(got == want, "a selected English word in a Persian line is lit where it sits (" + got + ", the word " + want + ")");
+                    }
+                    var my = find(toks(0, 0), "my"); var dust = find(fa0, "دوست");
+                    var rMy = (Rectangle)Field(my, "Rect"); var rDust = (Rectangle)Field(dust, "Rect");
+                    using (var bm = paintSel(rich0, (int)Field(my, "SelStart"), (int)Field(dust, "SelStart") + 4))
+                    {
+                        string top = lit(bm, rMy.Y + 2), bottom = lit(bm, rDust.Y + 2);
+                        check(top == rMy.X + ".." + (w0 - 1) && bottom == rDust.X + ".." + (w0 - 1),
+                              "a selection from an English line into a Persian one: to the end of the first, in from the right of the second (" + top + " / " + bottom + ")");
+                    }
+                }
+                catch (Exception ex) { check(false, "the check threw " + ex.GetType().Name + ": " + ex.Message + " (" + order + ")"); }
+                var shot = host.Bounds;
+                shot.Intersect(Screen.FromControl(host).Bounds);
+                if (shot.Width > 0 && shot.Height > 0)
+                    using (var bmp = new Bitmap(shot.Width, shot.Height))
+                    {
+                        using (var g = Graphics.FromImage(bmp)) g.CopyFromScreen(shot.Location, Point.Empty, shot.Size);
+                        bmp.Save(Path.Combine(_dir, "keys-bidi.png"), ImageFormat.Png);
+                    }
+                host.Close();
+            }
         }
 
         private static void LivePump(int ms)

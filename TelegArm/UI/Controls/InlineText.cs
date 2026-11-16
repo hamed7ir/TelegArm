@@ -35,8 +35,10 @@ namespace TelegArm.UI.Controls
     /// (bold/italic/underline/strike/code/pre/spoiler/blockquote) by carrying a style mask on each
     /// token — styles compose, and a styled link is both styled and clickable. Entity offsets are
     /// UTF-16 code units used directly as .NET string indices. Text draws via TextRenderer (script
-    /// fallback); italic is a GDI+ shear (the embedded families ship no italic face). RTL lays runs
-    /// right→left and puts decorations (quote bar, indent) on the right.
+    /// fallback); italic is a GDI+ shear (the embedded families ship no italic face). Each paragraph takes the
+    /// direction of its first letter (ResolveLevels: a simplified Unicode bidi over whole words), so a Persian line and
+    /// an English line can share a bubble and English words keep their order inside a Persian line; a right-to-left
+    /// paragraph lays its runs right→left and puts its decorations (quote bar, indent) on the right.
     /// </summary>
     public sealed class InlineText : IDisposable
     {
@@ -57,15 +59,22 @@ namespace TelegArm.UI.Controls
             public long DocId;
             public int SelStart;   // offset of this token's text in the selectable string
             public int SelLen;     // length of this token's selectable text (emoji = its source codepoints)
+            public int Bidi;       // its own direction: 1 right to left, -1 left to right (its first letter), 2 a number, 0 neutral
+            public bool Glue;      // the rest of the word before it, after a change of script ("RTرو"): no line break before it unless it can't fit
+            public int Lvl;        // its bidi level in the line (Position): even runs left to right, odd right to left
+            public bool DrawR;     // drawn right to left: puts the punctuation at its edges on that side (Position)
         }
 
         private sealed class Line
         {
-            public readonly List<Tok> Toks = new List<Tok>();
+            public readonly List<Tok> Toks = new List<Tok>();   // reading (logical) order
+            public readonly List<Tok> Vis = new List<Tok>();    // screen order, left to right (Position)
             public int Y;
             public int Indent;
             public bool Quote;
             public bool Pre;
+            public int Para;       // the paragraph it belongs to (the text's lines between newlines)
+            public bool R;         // that paragraph reads right to left (Position)
             public int SelStart;   // selectable-string range covered by this line's chars
             public int SelEnd;
         }
@@ -76,8 +85,8 @@ namespace TelegArm.UI.Controls
         private readonly List<Line> _lines = new List<Line>();
         private readonly Func<long, Image> _resolver;
         private int _lineH = 16, _emojiSz = 14;
-        private bool _rtl;
         private bool _spoilerRevealed;
+        private readonly List<Tok> _paraToks = new List<Tok>();   // Position's scratch: one paragraph's tokens
 
         // Selection model (built after Position): one linear "selectable string" + per-token offsets, so the
         // shared InlineTextSelection engine can char-hit-test, highlight a [start,end] range, and copy its text.
@@ -213,9 +222,42 @@ namespace TelegArm.UI.Controls
                         _toks.Add(new Tok { Image = run.Emoji, Text = run.Text, Kind = kind, Style = st, Url = url, Username = username, UserId = userId, Data = data });
                     else
                         foreach (var w in SplitWords(run.Text))
-                            _toks.Add(new Tok { Text = w.text, Space = w.space, Kind = kind, Style = st, Url = url, Username = username, UserId = userId, Data = data });
+                        {
+                            if (w.space) { _toks.Add(new Tok { Text = w.text, Space = true, Kind = kind, Style = st, Url = url, Username = username, UserId = userId, Data = data }); continue; }
+                            bool glue = false;   // a word that changes script: one token per direction, the later ones glued on
+                            foreach (var part in SplitScripts(w.text))
+                            {
+                                _toks.Add(new Tok { Text = part, Bidi = ClassOf(part), Glue = glue, Kind = kind, Style = st, Url = url, Username = username, UserId = userId, Data = data });
+                                glue = true;
+                            }
+                        }
                 }
             }
+        }
+
+        /// <summary>Splits a word where its letters change direction ("RTرو" → "RT" + "رو"), so each part can take its
+        /// place in mixed Persian and English. Digits, marks and punctuation stay with the part before them.</summary>
+        private static IEnumerable<string> SplitScripts(string w)
+        {
+            int start = 0, dir = 0;
+            for (int i = 0; i < w.Length; i++)
+            {
+                int d = TextDirection.StrongOf(w[i]);
+                if (d == 0) continue;
+                if (dir != 0 && d != dir) { yield return w.Substring(start, i - start); start = i; }
+                dir = d;
+            }
+            yield return w.Substring(start);
+        }
+
+        /// <summary>A token's own direction: its first letter's (1 right to left, -1 left to right), else 2 for a number,
+        /// else 0 (punctuation, spaces).</summary>
+        private static int ClassOf(string s)
+        {
+            int d = TextDirection.FirstStrong(s);
+            if (d != 0) return d;
+            foreach (char c in s) if (char.IsDigit(c)) return 2;
+            return 0;
         }
 
         private static IEnumerable<(string text, bool space)> SplitWords(string s)
@@ -321,10 +363,10 @@ namespace TelegArm.UI.Controls
 
             _lines.Clear();
             var cur = new Line();
-            int x = 0, maxLine = 0, y = 0;
+            int x = 0, maxLine = 0, y = 0, para = 0;
 
             int quoteIndent = L(QuoteIndent);
-            void BreakLine() { cur.Y = y; Finalize(cur, quoteIndent); _lines.Add(cur); y += _lineH; cur = new Line(); x = 0; }
+            void BreakLine() { cur.Y = y; Finalize(cur, quoteIndent); _lines.Add(cur); y += _lineH; cur = new Line { Para = para }; x = 0; }
 
             // Measured width of s[a..b) in a given face (+ the italic slant overhang).
             int SegW(string s, int a, int b, Font f, bool italic)
@@ -366,7 +408,7 @@ namespace TelegArm.UI.Controls
 
                     var sub = new Tok
                     {
-                        Text = s.Substring(start, best - start), W = bestW,
+                        Text = s.Substring(start, best - start), W = bestW, Bidi = t.Bidi,
                         Kind = t.Kind, Style = t.Style, Url = t.Url, Username = t.Username, UserId = t.UserId, Data = t.Data
                     };
                     sub.Rect = new Rectangle(0, y, bestW, _lineH);
@@ -377,9 +419,10 @@ namespace TelegArm.UI.Controls
                 }
             }
 
-            foreach (var t in _toks)
+            for (int ti = 0; ti < _toks.Count; ti++)
             {
-                if (t.Newline) { BreakLine(); continue; }
+                var t = _toks[ti];
+                if (t.Newline) { BreakLine(); para++; cur.Para = para; continue; }
                 int indent = (t.Style & InlineStyle.Blockquote) != 0 ? quoteIndent : 0;
                 bool isPre = (t.Style & InlineStyle.Pre) != 0;
                 int avail = Math.Max(L(8), maxWidth - indent);
@@ -391,7 +434,11 @@ namespace TelegArm.UI.Controls
                     continue;
                 }
 
-                if (!t.Space && cur.Toks.Count > 0 && x + t.W > avail)        // wrap before this word
+                // Wrap before this word. A word split where its script changes moves as one; it breaks at the change only
+                // when the part would not fit.
+                int wordW = t.W;
+                if (!t.Glue) for (int k = ti + 1; k < _toks.Count && _toks[k].Glue; k++) wordW += _toks[k].W;
+                if (!t.Space && cur.Toks.Count > 0 && x + wordW > avail)
                     BreakLine();
                 t.Rect = new Rectangle(0, y, t.W, _lineH);
                 cur.Toks.Add(t); x += t.W;
@@ -420,23 +467,108 @@ namespace TelegArm.UI.Controls
             if (pkey == _positionKey) return;   // cache hit — X positions + selection model unchanged, skip
             PerfLog.Inc(PerfLog.P.Position);    // real (re)position (only on a width/direction/text change)
             _positionKey = pkey;
-            _rtl = rtl;
             Width = width;
+            ResolveLevels(rtl);
             foreach (var line in _lines)
             {
-                if (!rtl)
-                {
-                    int x = line.Indent;
-                    foreach (var t in line.Toks) { t.Rect.X = x; x += t.W; }
-                }
-                else
-                {
-                    int x = width - line.Indent;
-                    foreach (var t in line.Toks) { x -= t.W; t.Rect.X = x; }
-                }
+                // L1: the spaces at the end of a line take the paragraph's own level (they sit at its far edge)
+                for (int k = line.Toks.Count - 1; k >= 0 && line.Toks[k].Space; k--) line.Toks[k].Lvl = line.R ? 1 : 0;
+                // L2: screen order. From the highest level down to the lowest odd one, reverse every run at that level or above
+                var vis = line.Vis;
+                vis.Clear(); vis.AddRange(line.Toks);
+                int hi = 0, lo = int.MaxValue, lineW = 0;
+                foreach (var t in vis) { hi = Math.Max(hi, t.Lvl); lo = Math.Min(lo, t.Lvl); lineW += t.W; }
+                if ((lo & 1) == 0) lo++;
+                for (int lv = hi; lv >= lo; lv--)
+                    for (int i = 0; i < vis.Count;)
+                    {
+                        if (vis[i].Lvl < lv) { i++; continue; }
+                        int j = i; while (j < vis.Count && vis[j].Lvl >= lv) j++;
+                        vis.Reverse(i, j - i);
+                        i = j;
+                    }
+                // a right-to-left paragraph's lines hug the right edge (the quote indent on that side too)
+                int x = line.R ? width - line.Indent - lineW : line.Indent;
+                foreach (var t in vis) { t.Rect.X = x; x += t.W; }
             }
             BuildSelectionModel();
         }
+
+        /// <summary>
+        /// Mixed Persian and English (the Unicode bidi algorithm, simplified to whole words): each paragraph reads in the
+        /// direction of its first letter, and one with no letter at all (emoji, digits) in the message's (<paramref name="rtl"/>).
+        /// Inside it every word gets a level: English words in a Persian line form left-to-right runs (so "Windows RT" keeps
+        /// its order) and Persian words in an English line form right-to-left ones. Numbers after English go with it; a space
+        /// or punctuation between two words of the same direction joins them, otherwise it takes the paragraph's.
+        /// </summary>
+        private void ResolveLevels(bool rtl)
+        {
+            for (int i = 0; i < _lines.Count;)
+            {
+                int para = _lines[i].Para, j = i;
+                while (j < _lines.Count && _lines[j].Para == para) j++;
+                var toks = _paraToks;
+                toks.Clear();
+                for (int k = i; k < j; k++) toks.AddRange(_lines[k].Toks);
+                int dir = 0;
+                foreach (var t in toks) if (t.Bidi == 1 || t.Bidi == -1) { dir = t.Bidi; break; }
+                bool r = dir == 0 ? rtl : dir == 1;
+                for (int k = i; k < j; k++) _lines[k].R = r;
+                int e = r ? 1 : -1;   // the paragraph's own direction (also what lies before and after it)
+
+                // the strong types: a number after English counts as English, otherwise it stays a number (and joins
+                // neighbours like a right-to-left letter does); Lvl holds the type for now
+                int last = e;
+                foreach (var t in toks)
+                {
+                    if (t.Image != null || t.Space) { t.Lvl = 0; continue; }
+                    if (t.Bidi == 1 || t.Bidi == -1) { t.Lvl = last = t.Bidi; continue; }
+                    t.Lvl = t.Bidi == 2 ? (last == -1 ? -1 : 2) : 0;
+                }
+                // the punctuation at a word's edge ("iPhone," "سلام!"): it goes with the word when the next word (the previous
+                // one, for a mark in front) reads the same way, otherwise with the paragraph. The word is drawn in that
+                // direction, and Windows puts the mark on that side.
+                for (int a = 0; a < toks.Count; a++)
+                {
+                    var t = toks[a];
+                    t.DrawR = r;
+                    int own = t.Lvl;
+                    if ((own != 1 && own != -1) || string.IsNullOrEmpty(t.Text)) continue;
+                    bool tail = EdgeMark(t.Text[t.Text.Length - 1]);
+                    if (!tail && !EdgeMark(t.Text[0])) continue;
+                    int side = e;
+                    for (int k = tail ? a + 1 : a - 1; k >= 0 && k < toks.Count; k += tail ? 1 : -1)
+                        if (toks[k].Lvl != 0) { side = toks[k].Lvl == 2 ? 1 : toks[k].Lvl; break; }
+                    t.DrawR = (side == own ? own : e) == 1;
+                }
+                // neutrals between two of the same direction take it; otherwise the paragraph's
+                for (int a = 0; a < toks.Count;)
+                {
+                    if (toks[a].Lvl != 0) { a++; continue; }
+                    int b = a; while (b < toks.Count && toks[b].Lvl == 0) b++;
+                    int before = a > 0 ? toks[a - 1].Lvl : e, after = b < toks.Count ? toks[b].Lvl : e;
+                    if (before == 2) before = 1;
+                    if (after == 2) after = 1;
+                    int d = before == after ? before : e;
+                    for (int k = a; k < b; k++) toks[k].Lvl = d;
+                    a = b;
+                }
+                // the levels: 0 left to right, 1 right to left, 2 left to right inside a right-to-left run
+                foreach (var t in toks)
+                {
+                    int ty = t.Lvl;
+                    t.Lvl = r ? (ty == 1 ? 1 : 2) : (ty == -1 ? 0 : ty == 1 ? 1 : 2);
+                }
+                i = j;
+            }
+            _paraToks.Clear();
+        }
+
+        /// <summary>Punctuation or a symbol (not a letter, digit or space): its side depends on the words around it.</summary>
+        private static bool EdgeMark(char c) { return TextDirection.StrongOf(c) == 0 && !char.IsDigit(c) && !char.IsWhiteSpace(c); }
+
+        /// <summary>The token's glyphs run right to left (odd level): its text starts at its right edge.</summary>
+        private static bool Rtl(Tok t) { return (t.Lvl & 1) == 1; }
 
         // ── Selection: char hit-testing, range highlight, copy-text (RTL-aware) ──────────────────
         // The shared engine over BOTH chat bubbles and the profile label. Tokens are word-granular, so a point
@@ -483,16 +615,17 @@ namespace TelegArm.UI.Controls
             if (line == null) return _selLen;            // below the last line → end
             if (line.Toks.Count == 0) return line.SelStart;
 
-            for (int i = 0; i < line.Toks.Count; i++)
+            Tok near = null; int nearD = int.MaxValue; bool nearLeft = false;
+            foreach (var t in line.Toks)
             {
-                var t = line.Toks[i];
                 int left = t.Rect.X, right = t.Rect.X + t.W;
                 if (p.X >= left && p.X <= right) return t.SelStart + CharInToken(t, p.X - left);
-                bool beforeThis = _rtl ? (p.X > right) : (p.X < left);   // gap before this token in reading order
-                if (beforeThis) return t.SelStart;
+                int d = p.X < left ? left - p.X : p.X - right;
+                if (d < nearD) { nearD = d; near = t; nearLeft = p.X < left; }
             }
-            var last = line.Toks[line.Toks.Count - 1];
-            return last.SelStart + last.SelLen;
+            // beside the text (the indent, the empty side of a short line): the nearest word's edge on that side, read in
+            // the word's own direction (the left edge of an English word is its start, of a Persian word its end)
+            return nearLeft != Rtl(near) ? near.SelStart : near.SelStart + near.SelLen;
         }
 
         // dx = pixels from the token's LEFT edge → logical char index within the token (RTL measures from right).
@@ -501,7 +634,7 @@ namespace TelegArm.UI.Controls
             if (t.Image != null) return dx > t.W / 2 ? t.SelLen : 0;   // emoji is atomic: snap to start/end
             if (string.IsNullOrEmpty(t.Text)) return 0;
             var f = FontFor(t.Style);
-            int target = _rtl ? (t.W - dx) : dx;
+            int target = Rtl(t) ? (t.W - dx) : dx;
             if (target <= 0) return 0;
             if (target >= t.W) return t.Text.Length;
             int prevW = 0;
@@ -522,35 +655,20 @@ namespace TelegArm.UI.Controls
             return _selText.ToString(a, b - a);
         }
 
-        // x of a selectable index on a line (the boundary before that char), RTL-aware. idx is CLAMPED to the
-        // line's [SelStart..SelEnd]; idx == SelEnd is the valid "after the last char" position (the line's end
-        // edge), NOT an out-of-range access. An empty line (a blank line — zero tokens) has no glyphs, so it
-        // returns the line's start edge and the caller's edge-extension fills it.
-        private int XOfIndex(Line line, int idx)
+        // x of the boundary before character `within` of a token, in the token's own direction (a Persian word's text
+        // starts at its right edge). An emoji is atomic: anything inside it is its end.
+        private int XInToken(Tok t, int within)
         {
-            if (line.Toks.Count == 0) return _rtl ? Width : 0;   // empty (blank) line — no tokens to index
-            var first = line.Toks[0];
-            var last = line.Toks[line.Toks.Count - 1];
-            if (idx <= line.SelStart) return _rtl ? first.Rect.X + first.W : first.Rect.X;   // line start (reading edge)
-            if (idx >= line.SelEnd) return _rtl ? last.Rect.X : last.Rect.X + last.W;          // line end (after last char)
-
-            foreach (var t in line.Toks)
-            {
-                if (idx <= t.SelStart) return _rtl ? t.Rect.X + t.W : t.Rect.X;
-                if (idx <= t.SelStart + t.SelLen)
-                {
-                    int within = idx - t.SelStart;
-                    if (t.Image != null || string.IsNullOrEmpty(t.Text))
-                        return _rtl ? (within > 0 ? t.Rect.X : t.Rect.X + t.W) : (within > 0 ? t.Rect.X + t.W : t.Rect.X);
-                    int w = MeasW(t.Text.Substring(0, Math.Min(within, t.Text.Length)), FontFor(t.Style));
-                    return _rtl ? (t.Rect.X + t.W - w) : (t.Rect.X + w);
-                }
-            }
-            return _rtl ? last.Rect.X : last.Rect.X + last.W;   // safe fallback (idx within range was handled above)
+            bool r = Rtl(t);
+            if (within <= 0) return r ? t.Rect.X + t.W : t.Rect.X;
+            if (within >= t.SelLen || t.Image != null || string.IsNullOrEmpty(t.Text)) return r ? t.Rect.X : t.Rect.X + t.W;
+            int w = MeasW(t.Text.Substring(0, Math.Min(within, t.Text.Length)), FontFor(t.Style));
+            return r ? t.Rect.X + t.W - w : t.Rect.X + w;
         }
 
-        /// <summary>Draws the selection highlight behind chars [a,b) — one rect per line, RTL-correct, with
-        /// middle lines filled edge-to-edge so a multi-line selection reads continuously.</summary>
+        /// <summary>Draws the selection highlight behind chars [a,b): the selected part of each word (in mixed Persian and
+        /// English one stretch of text can be several pieces on screen), middle lines filled edge to edge and the first and
+        /// last lines out to the edge the selection comes from or goes on to, so a multi-line selection reads continuously.</summary>
         public void PaintSelectionHighlight(Graphics g, int ox, int oy, int a, int b, Color col)
         {
             if (a < 0) a = 0;
@@ -561,12 +679,29 @@ namespace TelegArm.UI.Controls
                 {
                     int ls = line.SelStart, le = line.SelEnd;
                     if (b <= ls || a > le) continue;            // selection doesn't touch this line
+                    bool fromAbove = a < ls, toBelow = b > le;
+                    if (fromAbove && toBelow) { g.FillRectangle(brush, ox, oy + line.Y, Width, _lineH); continue; }
                     int sa = Math.Max(a, ls), sb = Math.Min(b, le);   // selected sub-range ON this line (clamped)
-                    int xA = XOfIndex(line, sa), xB = XOfIndex(line, sb);
-                    int xLeft = Math.Min(xA, xB), xRight = Math.Max(xA, xB);
-                    if (a < ls) { if (_rtl) xRight = Width; else xLeft = 0; }   // started on a previous line
-                    if (b > le) { if (_rtl) xLeft = 0; else xRight = Width; }   // continues to the next line
-                    if (xRight > xLeft) g.FillRectangle(brush, ox + xLeft, oy + line.Y, xRight - xLeft, _lineH);
+                    int minX = int.MaxValue, maxX = int.MinValue, textL = int.MaxValue, textR = int.MinValue;
+                    foreach (var t in line.Toks)
+                    {
+                        textL = Math.Min(textL, t.Rect.X); textR = Math.Max(textR, t.Rect.X + t.W);
+                        int ps = Math.Max(sa, t.SelStart), pe = Math.Min(sb, t.SelStart + t.SelLen);
+                        if (pe <= ps) continue;
+                        int x1 = XInToken(t, ps - t.SelStart), x2 = XInToken(t, pe - t.SelStart);
+                        int l = Math.Min(x1, x2), r = Math.Max(x1, x2);
+                        if (r > l) g.FillRectangle(brush, ox + l, oy + line.Y, r - l, _lineH);
+                        minX = Math.Min(minX, l); maxX = Math.Max(maxX, r);
+                    }
+                    if (minX > maxX)   // nothing selected on it: the selection starts at its end (or it is a blank line)
+                    {
+                        if (line.Toks.Count == 0) textL = textR = line.R ? Width : 0;
+                        minX = maxX = line.R ? textL : textR;
+                    }
+                    if (fromAbove) { if (line.R) Fill(maxX, Width); else Fill(0, minX); }   // from the line above: its start edge
+                    if (toBelow) { if (line.R) Fill(0, minX); else Fill(maxX, Width); }     // on to the line below: its end edge
+
+                    void Fill(int l, int r) { if (r > l) g.FillRectangle(brush, ox + l, oy + line.Y, r - l, _lineH); }
                 }
         }
 
@@ -650,15 +785,15 @@ namespace TelegArm.UI.Controls
                 using (var p = DrawHelper.RoundedRect(pr, L(6))) g.FillPath(b, p);
                 i = j;
             }
-            // Pass B — Blockquote bar + faint tint (group consecutive quote lines); bar on the leading edge.
+            // Pass B — Blockquote bar + faint tint (group consecutive quote lines); bar on the leading edge (of that paragraph).
             for (int i = 0; i < _lines.Count;)
             {
                 if (!_lines[i].Quote) { i++; continue; }
-                int j = i; while (j < _lines.Count && _lines[j].Quote) j++;
+                int j = i; while (j < _lines.Count && _lines[j].Quote && _lines[j].R == _lines[i].R) j++;
                 int y0 = _lines[i].Y + oy, y1 = _lines[j - 1].Y + _lineH + oy;
                 using (var bg = new SolidBrush(quoteBg)) g.FillRectangle(bg, ox, y0, Width, y1 - y0);
                 int barW = L(BarW);
-                int barX = _rtl ? ox + Width - barW : ox;
+                int barX = _lines[i].R ? ox + Width - barW : ox;
                 using (var bb = new SolidBrush(barColor)) g.FillRectangle(bb, barX, y0, barW, y1 - y0);
                 i = j;
             }
@@ -668,7 +803,11 @@ namespace TelegArm.UI.Controls
             if (!_spoilerRevealed)
                 foreach (var line in _lines) PaintRunBg(g, line, ox, oy, InlineStyle.Spoiler, spoilerBg, L(4), false);
 
-            // Pass E — the tokens.
+            // Pass E — the tokens. Each is drawn in the direction ResolveLevels chose (DrawR), so the punctuation at a word's
+            // edge lands on the reading side ("سلام!" shows the mark on the left in a Persian line, "iPhone, iPad" keeps its
+            // comma inside a Persian line). The box is the word's measured width (Windows may align right-to-left text to
+            // the box's right edge).
+            var rtlFlags = flags | TextFormatFlags.RightToLeft | TextFormatFlags.NoClipping;
             foreach (var line in _lines)
                 foreach (var t in line.Toks)
                 {
@@ -681,6 +820,7 @@ namespace TelegArm.UI.Controls
                     Color c = link ? linkColor : textColor;
                     Font f = FontFor(t.Style);
                     if ((t.Style & InlineStyle.Italic) != 0) DrawItalic(g, t.Text, f, x, y, c);
+                    else if (t.DrawR) TextRenderer.DrawText(g, t.Text, f, new Rectangle(x, y, t.W, _lineH), c, rtlFlags);
                     else TextRenderer.DrawText(g, t.Text, f, new Point(x, y), c, flags);
 
                     if (link || (t.Style & InlineStyle.Underline) != 0)
@@ -695,7 +835,7 @@ namespace TelegArm.UI.Controls
         private void PaintRunBg(Graphics g, Line line, int ox, int oy, InlineStyle style, Color fill, int radius, bool tight)
         {
             int i = 0;
-            var toks = line.Toks;
+            var toks = line.Vis;   // screen order: a run is what sits side by side
             while (i < toks.Count)
             {
                 if ((toks[i].Style & style) == 0) { i++; continue; }
