@@ -1631,11 +1631,18 @@ namespace TelegArm.Helpers
                     double exit = sw.Elapsed.TotalMilliseconds;
                     sw.Restart();
                     LivePump(700);   // anything deferred to the end of the drag
+                    // 2026-11-16: the bubbles the steps skipped are measured in slices after the drag: wait for the last one
+                    var running = f.GetType().GetProperty("StaleFixRunning", BindingFlags.NonPublic | BindingFlags.Instance);
+                    for (int k = 0; k < 100 && (bool)running.GetValue(f, null); k++) LivePump(100);
                     sameAsRepaint("after-" + (watched == null ? "bottom" : "middle"));
                     int ups = (int)f.GetType().GetProperty("DragCatchUps", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(f, null);
                     string held = ups > catchUps ? "; content held, caught up " + (ups - catchUps) + " times" : "; live";
                     catchUps = ups;
-                    return "frame " + stat(sync) + "; paint " + stat(paint) + "; per step " + (sync.Average() + paint.Average()).ToString("0.0") + " ms; the end of the drag " + exit.ToString("0.0") + " ms" + held;
+                    string last = (string)f.GetType().GetProperty("LastStalePass", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(f, null);
+                    return "frame " + stat(sync) + "; paint " + stat(paint) + "; per step " + (sync.Average() + paint.Average()).ToString("0.0") + " ms; the end of the drag " + exit.ToString("0.0") + " ms" + held
+                           + " (the release " + f.GetType().GetProperty("LastReleaseMs", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(f, null) + " ms"
+                           + (last != null ? "; the pass over the skipped bubbles: " + last : "")
+                           + "; then the skipped bubbles in slices: " + f.GetType().GetProperty("LastStaleFix", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(f, null) + ")";
                 };
                 Func<List<Rectangle>> boundsNow = () => panel.Controls.Cast<Control>().Select(c => c.Bounds).ToList();
 

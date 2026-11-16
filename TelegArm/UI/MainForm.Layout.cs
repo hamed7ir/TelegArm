@@ -1136,6 +1136,7 @@ namespace TelegArm.UI
         protected override void OnSizeMoveBegin()
         {
             base.OnSizeMoveBegin();
+            StopStaleFix(false);   // (the list as it is: this drag's end starts the slices again)
             _dragPinned = _messagePanel != null && AtBottom(AtBottomThreshold);
             _dragSlowSteps = 0;
             if (DragLayoutMode == "hold") HoldDragLayout();
@@ -1144,9 +1145,124 @@ namespace TelegArm.UI
         protected override void OnSizeMoveEnd()
         {
             base.OnSizeMoveEnd();
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             ReleaseDragLayout();   // the content at the final size, first
+            LastReleaseMs = sw.ElapsedMilliseconds;
             if (!_bubblesStale || _messagePanel == null || Dpi.Busy || _dpiRelayoutPending) return;
-            RelayoutBubbles(ContentWidth(_messagePanel), false, true);
+            StartStaleFix();   // the bubbles the drag steps skipped: in slices, not in one go
+        }
+
+        // ── the end of a drag, in slices (2026-11-16) ─────────────────────────────────────────────────────────────────
+        // Measured on the Surface with 208 messages: the pass over the bubbles the drag steps skipped (far from the view) took
+        // 417-590 ms right when the finger lifted (1.6-1.8 ms a bubble, then a ~100 ms layout). Now they are measured in
+        // slices of ~25 ms between other messages, the nearest to the view first, with the list's layout held: nothing on
+        // screen moves (the bubbles in view were laid out at the release), and one layout at the end keeps the reading
+        // position. Anything that needs the list as it is ends the slices first (the user scrolling, a message added or
+        // removed, another drag, a DPI change); the rest is picked up again when it has been quiet for a moment.
+
+        private const int StaleSliceMs = 25;
+        private System.Windows.Forms.Timer _staleTimer, _staleRestart;
+        private List<Control> _staleQueue;   // non-null while the slices run; the nearest to the view first
+        private int _staleNext, _staleWidth, _staleAnchorTop;
+        private Control _staleAnchor;
+        private bool _stalePinned, _staleHeld, _staleHooked;
+
+        /// <summary>The rig reads them: the slices are running; and the last run's slices, longest slice and final layout.</summary>
+        internal bool StaleFixRunning { get { return _staleQueue != null; } }
+        internal string LastStaleFix { get; private set; }
+        private int _staleSlices; private long _staleLongest; private System.Diagnostics.Stopwatch _staleClock;
+
+        private void StartStaleFix()
+        {
+            var panel = _messagePanel;
+            if (panel == null || panel.IsDisposed || InSizeMove || Dpi.Busy || _dpiRelayoutPending) return;
+            StopStaleFix(false);
+            if (!_staleHooked)
+            {
+                _staleHooked = true;
+                _staleTimer = new System.Windows.Forms.Timer { Interval = 10 };
+                _staleTimer.Tick += (s, e) => StaleSlice();
+                _staleRestart = new System.Windows.Forms.Timer { Interval = 800 };
+                _staleRestart.Tick += (s, e) => { _staleRestart.Stop(); if (_bubblesStale) StartStaleFix(); };
+                panel.ControlAdded += (s, e) => StopStaleFix(true);
+                panel.ControlRemoved += (s, e) => StopStaleFix(true);
+                Action<ScrollableControl> input = sc =>
+                {
+                    if (!ReferenceEquals(sc, _messagePanel)) return;
+                    StopStaleFix(true);
+                    if (_staleRestart.Enabled) { _staleRestart.Stop(); _staleRestart.Start(); }   // still scrolling: later again
+                };
+                TouchScroller.UserInput += input;
+                FormClosed += (s, e) => { TouchScroller.UserInput -= input; try { _staleTimer.Dispose(); _staleRestart.Dispose(); } catch { } };
+            }
+            int w = ContentWidth(panel), mid = panel.ClientSize.Height / 2;
+            var list = new List<Control>();
+            foreach (Control c in panel.Controls)
+            {
+                var b = c as MessageBubbleControl;
+                if (c.Width != w || (b != null && b.MeasuredAtWidth != w)) list.Add(c);
+            }
+            if (list.Count == 0) { _bubblesStale = false; _bubbleLayoutWidth = w; return; }
+            list.Sort((a, b) => Math.Abs(a.Top + a.Height / 2 - mid).CompareTo(Math.Abs(b.Top + b.Height / 2 - mid)));
+            _stalePinned = _dragPinned;
+            _staleAnchor = null;
+            if (!_stalePinned)
+                foreach (Control c in panel.Controls)   // in flow order: the first one still in view
+                    if (c.Visible && c.Bottom > 0) { _staleAnchor = c; _staleAnchorTop = c.Top; break; }
+            _staleQueue = list; _staleNext = 0; _staleWidth = w;
+            _staleSlices = 0; _staleLongest = 0; _staleClock = System.Diagnostics.Stopwatch.StartNew();
+            panel.SuspendLayout();
+            _staleHeld = true;
+            _staleTimer.Start();
+        }
+
+        private void StaleSlice()
+        {
+            var panel = _messagePanel;
+            if (_staleQueue == null) { _staleTimer.Stop(); return; }
+            if (panel == null || panel.IsDisposed || InSizeMove || Dpi.Busy || _dpiRelayoutPending) { StopStaleFix(false); return; }
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            int w = _staleWidth;
+            while (_staleNext < _staleQueue.Count && sw.ElapsedMilliseconds < StaleSliceMs)
+            {
+                var c = _staleQueue[_staleNext++];
+                if (c.IsDisposed || c.Parent != panel) continue;
+                c.Width = w;
+                var b = c as MessageBubbleControl;
+                if (b != null) { if (b.MeasuredAtWidth != w) b.Measure(); }
+                else (c as SponsoredCardControl)?.Measure();   // step 3.2: the card measures from its width too
+            }
+            _staleSlices++;
+            _staleLongest = Math.Max(_staleLongest, sw.ElapsedMilliseconds);
+            if (_staleNext >= _staleQueue.Count) StopStaleFix(false);   // all measured: the one layout
+        }
+
+        /// <summary>Ends the slices: the held layout is done now and the reading position kept. What was not measured yet stays
+        /// stale; <paramref name="later"/> picks it up again after a quiet moment.</summary>
+        private void StopStaleFix(bool later)
+        {
+            if (_staleQueue == null) return;
+            if (_staleTimer != null) _staleTimer.Stop();
+            bool done = _staleNext >= _staleQueue.Count;
+            _staleQueue = null;
+            var panel = _messagePanel;
+            if (_staleHeld)
+            {
+                _staleHeld = false;
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                if (panel != null && !panel.IsDisposed)
+                {
+                    panel.ResumeLayout(true);
+                    if (_stalePinned) panel.AutoScrollPosition = new Point(0, panel.VerticalScroll.Maximum);
+                    else if (_staleAnchor != null && !_staleAnchor.IsDisposed && _staleAnchor.Parent == panel && _staleAnchor.Top != _staleAnchorTop)
+                        panel.AutoScrollPosition = new Point(0, -panel.AutoScrollPosition.Y + (_staleAnchor.Top - _staleAnchorTop));
+                }
+                LastStaleFix = _staleSlices + " slices, the longest " + _staleLongest + " ms, then the layout " + sw.ElapsedMilliseconds + " ms; "
+                               + (_staleClock != null ? _staleClock.ElapsedMilliseconds : 0) + " ms in all" + (done ? "" : " (stopped early: the rest later)");
+            }
+            _staleAnchor = null;
+            if (done) { _bubblesStale = false; _bubbleLayoutWidth = _staleWidth; }
+            else if (later && _staleRestart != null) { _staleRestart.Stop(); _staleRestart.Start(); }
         }
 
         // ── a slow drag: the frame follows the pointer, the content catches up (device trip 5, 2026-11-15) ───────────
@@ -1237,6 +1353,7 @@ namespace TelegArm.UI
         /// <param name="staleOnly">The end of a drag: re-measure only the bubbles a step left at another width.</param>
         private void RelayoutBubbles(int w, bool nearViewOnly, bool staleOnly)
         {
+            StopStaleFix(false);   // the slices hold the list's layout: this pass needs it
             var panel = _messagePanel;
             bool pinned = nearViewOnly || staleOnly ? _dragPinned : AtBottom(AtBottomThreshold);
             Control anchor = null;
@@ -1247,6 +1364,8 @@ namespace TelegArm.UI
             int reach = panel.ClientSize.Height / 2;   // "near" = the view and half a screen above and below it
             int viewBottom = panel.ClientSize.Height;
             bool stale = false;
+            var sw = staleOnly ? System.Diagnostics.Stopwatch.StartNew() : null;   // (the rig reads where an end-of-drag pass goes)
+            int measured = 0; long tMeasure = 0;
             panel.SuspendLayout();
             try
             {
@@ -1263,17 +1382,28 @@ namespace TelegArm.UI
                     }
                     c.Width = w;
                     var b = c as MessageBubbleControl;
-                    if (b != null) { if (!staleOnly || b.MeasuredAtWidth != w) b.Measure(); }
+                    if (b != null) { if (!staleOnly || b.MeasuredAtWidth != w) { b.Measure(); measured++; } }
                     else (c as SponsoredCardControl)?.Measure();   // step 3.2: the card measures from its width too
                 }
+                if (sw != null) tMeasure = sw.ElapsedMilliseconds;
             }
             finally { panel.ResumeLayout(true); }
+            long tLayout = sw != null ? sw.ElapsedMilliseconds : 0;
             _bubbleLayoutWidth = w;
             _bubblesStale = stale;
             if (pinned) panel.AutoScrollPosition = new Point(0, panel.VerticalScroll.Maximum);
             else if (anchor != null && !anchor.IsDisposed && anchor.Top != anchorTop)
                 panel.AutoScrollPosition = new Point(0, -panel.AutoScrollPosition.Y + (anchor.Top - anchorTop));
+            if (sw != null)
+                LastStalePass = panel.Controls.Count + " controls, " + measured + " re-measured: widths + measuring " + tMeasure + " ms, layout "
+                                + (tLayout - tMeasure) + " ms, scroll " + (sw.ElapsedMilliseconds - tLayout) + " ms";
         }
+
+        /// <summary>The rig reads it: how long the last release of a held drag layout took (the content at the final size).</summary>
+        internal long LastReleaseMs { get; private set; }
+
+        /// <summary>The rig reads it: where the last end-of-drag pass over the bubbles a drag step skipped spent its time.</summary>
+        internal string LastStalePass { get; private set; }
 
         /// <summary>The list is within 40 px of its loaded top: page older (tick-limited: this runs per pan tick).</summary>
         private void MaybeLoadOlderNearTop()
