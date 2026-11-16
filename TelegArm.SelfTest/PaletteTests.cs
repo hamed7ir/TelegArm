@@ -30,6 +30,31 @@ namespace TelegArm.SelfTest
             Add(t, "theme: SetBase rebuilds the palette of that mode (current and other), and null restores it", SetBaseRebuilds);
             Add(t, "bubble: a custom out-bubble colour fills the bubble and inks it by ITS contrast (yellow accent + graphite = white ink)", OutBubbleCustom);
             Add(t, "bubble: a white accent's bubbles stay apart from a light chat (>= 1.2:1); a dark-mode custom bubble is softened", OutBubbleSeparation);
+            Add(t, "high contrast (R6): every chrome token is one of the scheme's colours; content colours stay", HighContrastTokens);
+        }
+
+        /// <summary>R6: High Contrast Black, White and a yellow-on-black scheme (as Windows' "High Contrast #1").</summary>
+        private static void HighContrastTokens()
+        {
+            var normal = Palette.Build(true, Color.FromArgb(0, 120, 215));
+            var yellow = new Palette.HcScheme { Window = Color.FromArgb(0, 0, 0), WindowText = Color.FromArgb(255, 255, 0), Highlight = Color.FromArgb(0, 128, 0),
+                                                HighlightText = Color.FromArgb(255, 255, 255), GrayText = Color.FromArgb(0, 255, 0), HotTrack = Color.FromArgb(128, 128, 255) };
+            foreach (var s in new[] { Palette.HcScheme.Black, Palette.HcScheme.White, yellow })
+            {
+                var p = Palette.BuildHighContrast(s);
+                string k = s == Palette.HcScheme.Black ? "black" : s == Palette.HcScheme.White ? "white" : "yellow";
+                Check.True(p.HighContrast && p.Dark == (s.Window.R < 128), k + ": a high-contrast palette on the scheme's side");
+                Same(s.Window, p.Window, k + " Window"); Same(s.Window, p.ChatBg, k + " ChatBg"); Same(s.Window, p.BubbleIn, k + " BubbleIn");
+                Same(s.Window, p.ListBg, k + " ListBg"); Same(s.Window, p.Card, k + " Card");
+                Same(s.WindowText, p.Text, k + " Text"); Same(s.WindowText, p.TextDim, k + " TextDim"); Same(s.WindowText, p.BubbleInText, k + " BubbleInText");
+                Same(s.WindowText, p.ListName, k + " ListName"); Same(s.WindowText, p.ListSub, k + " ListSub"); Same(s.WindowText, p.Divider, k + " Divider");
+                Same(s.Highlight, p.Accent, k + " Accent"); Same(s.Highlight, p.BubbleOut, k + " BubbleOut"); Same(s.Highlight, p.TitleBar, k + " TitleBar");
+                Same(s.HighlightText, p.OnAccent, k + " OnAccent"); Same(s.HighlightText, p.BubbleOutText, k + " BubbleOutText");
+                Same(s.HotTrack, p.LinkIn, k + " LinkIn"); Same(s.GrayText, p.TextDisabled, k + " TextDisabled");
+                Same(s.Window, p.RoundedBtnDisabledFill, k + " a disabled button's fill"); Same(s.GrayText, p.RoundedBtnDisabledText, k + " its label");
+                Same(normal.Danger, p.Danger, k + " Danger kept"); Same(normal.OnlineDot, p.OnlineDot, k + " OnlineDot kept");
+                Check.True(p.Hover.A == normal.Hover.A && p.Hover.R == s.Highlight.R && p.Hover.G == s.Highlight.G, k + ": a translucent overlay keeps its alpha");
+            }
         }
 
         private static void PaletteForModes()

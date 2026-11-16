@@ -733,6 +733,97 @@ namespace TelegArm.Helpers
             AccentSoft = ColorMath.Mix(Surface, accent, 0.18f);
         }
 
+        // ── R6 (2026-11-16): Windows' high contrast ────────────────────────────────────────────────────────────
+
+        /// <summary>The few colours Windows gives in high contrast (SystemColors), or a sample scheme for the rig.</summary>
+        public sealed class HcScheme
+        {
+            public Color Window, WindowText, Highlight, HighlightText, GrayText, HotTrack;
+            /// <summary>Windows' "High Contrast Black" and "High Contrast White" (TELEGARM_HC=black / white simulates them).</summary>
+            public static readonly HcScheme Black = new HcScheme
+            {
+                Window = Color.FromArgb(0, 0, 0), WindowText = Color.FromArgb(255, 255, 255), Highlight = Color.FromArgb(26, 235, 255),
+                HighlightText = Color.FromArgb(0, 0, 0), GrayText = Color.FromArgb(63, 242, 63), HotTrack = Color.FromArgb(255, 255, 0)
+            };
+            public static readonly HcScheme White = new HcScheme
+            {
+                Window = Color.FromArgb(255, 255, 255), WindowText = Color.FromArgb(0, 0, 0), Highlight = Color.FromArgb(55, 0, 110),
+                HighlightText = Color.FromArgb(255, 255, 255), GrayText = Color.FromArgb(96, 0, 0), HotTrack = Color.FromArgb(0, 0, 159)
+            };
+        }
+
+        /// <summary>True for a palette made by <see cref="BuildHighContrast"/>: every chrome colour is one of Windows' own.</summary>
+        public bool HighContrast { get; private set; }
+
+        /// <summary>R6 — the palette in Windows' high contrast: the normal palette of the mode the scheme's window colour
+        /// belongs to, then every token moved onto the scheme (<see cref="ApplyHighContrast"/>).</summary>
+        public static Palette BuildHighContrast(HcScheme s)
+        {
+            bool dark = ColorMath.Luminance(s.Window) < 0.5;
+            var p = BuildCore(dark, s.Highlight, null, null);
+            p.ApplyHighContrast(s);
+            p.HighContrast = true;
+            return p;
+        }
+
+        // Colours that are content, not chrome: status, avatar hues, the accent swatches, recording red, and what is drawn
+        // over pictures (media and story overlays, the chat pill's scrim).
+        private static bool KeepInHighContrast(string n)
+        {
+            return n == "Danger" || n == "Success" || n == "Warning" || n == "AlertRed" || n == "RecordRed" || n == "RecordingDot"
+                || n == "OnlineDot" || n == "ListDraft" || n == "RepliesAvatar" || n == "Base" || n == "ChatPillScrim" || n == "ChatPillText"
+                || n.StartsWith("AccentSwatch") || n.StartsWith("SponsorPeerColor") || n.StartsWith("ProxyDot") || n.StartsWith("Media")
+                || n.StartsWith("Story");
+        }
+
+        private static readonly System.Collections.Generic.HashSet<string> HcHighlight = new System.Collections.Generic.HashSet<string>
+        {
+            "Accent", "AccentHover", "AccentPressed", "TitleBar", "BubbleOut", "ScrollThumbActive", "SelectionIn", "Hover", "AccentGlyph",
+            "PillDefaultAccent",
+        };
+        private static readonly System.Collections.Generic.HashSet<string> HcLink = new System.Collections.Generic.HashSet<string> { "LinkIn", "AccentFg" };
+        private static readonly System.Collections.Generic.HashSet<string> HcSoft = new System.Collections.Generic.HashSet<string> { "AccentSoft", "Selected", "ListSelected", "ChatSelectTint" };
+
+        /// <summary>
+        /// Moves every token onto the scheme: the inks on the accent take HighlightText, the accent tokens Highlight, links
+        /// HotTrack, a selected row a wash of Highlight (its text stays WindowText), lines (dividers, borders, tracks) full
+        /// WindowText so they show, disabled tokens GrayText, and every other NEUTRAL token (a grey: channels within 12)
+        /// Window or WindowText by which side of the mode's middle it is on. Translucent overlays keep their alpha. Saturated
+        /// colours that are content (status, avatars, media) stay as they are.
+        /// </summary>
+        private void ApplyHighContrast(HcScheme s)
+        {
+            bool dark = Dark;
+            var onAccent = new System.Collections.Generic.HashSet<string>(OnAccentInks) { "OnAccent", "OnBubbleOut" };
+            var soft = ColorMath.Mix(s.Window, s.Highlight, 0.35f);
+            foreach (var prop in typeof(Palette).GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+            {
+                if (prop.PropertyType != typeof(Color) || !prop.CanWrite) continue;
+                string n = prop.Name;
+                if (KeepInHighContrast(n)) continue;
+                var c = (Color)prop.GetValue(this, null);
+                Color to; int a = c.A;
+                if (onAccent.Contains(n) || (n.StartsWith("BubbleOut") && n != "BubbleOut")) to = s.HighlightText;
+                else if (HcHighlight.Contains(n)) to = s.Highlight;
+                else if (HcLink.Contains(n)) to = s.HotTrack;
+                else if (HcSoft.Contains(n)) { to = soft; a = 255; }
+                else if (n.Contains("Disabled") || n.EndsWith("Off"))
+                    to = n.EndsWith("Fill") || n.EndsWith("Bg") ? s.Window : s.GrayText;   // a disabled button: ground, and its label GrayText
+                else if (!n.Contains("Placeholder")
+                         && (n.Contains("Divider") || n.Contains("Line") || n.Contains("Hairline") || n.Contains("Border") || n.Contains("Separator")
+                             || n.Contains("Outline") || n.Contains("Track") || n.Contains("Rim") || n.Contains("Ring") || n.Contains("Thumb")))
+                { to = s.WindowText; a = 255; }
+                else
+                {
+                    int hi = Math.Max(c.R, Math.Max(c.G, c.B)), lo = Math.Min(c.R, Math.Min(c.G, c.B));
+                    if (hi - lo > 12) continue;   // a saturated colour the lists above do not name: left as it is
+                    double l = ColorMath.Luminance(c);
+                    to = (dark ? l > 0.18 : l < 0.45) ? s.WindowText : s.Window;   // ink, or ground
+                }
+                prop.SetValue(this, Color.FromArgb(a, to.R, to.G, to.B), null);
+            }
+        }
+
         private static int Paper(int c, int b) { return (int)Math.Round(c * b / 255.0); }
 
         private static int Ground(int c, int b)

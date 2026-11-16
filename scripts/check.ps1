@@ -205,7 +205,7 @@ $gates = @(
     @{ From = '7.6'; Name = 'painted controls have a name or role for screen readers (R6)'; Test = {
         @(ClassBodies $ui 'Control|UserControl|Panel' | Where-Object { $_.Body -match '\bOnPaint\b' -and $_.Body -notmatch 'AccessibleName|AccessibleRole|CreateAccessibilityInstance|a11y-ok' } |
           ForEach-Object { $_.At + ': class ' + $_.Name }) } }
-    @{ From = '7.6'; Name = 'no SystemColors / HighContrast reads outside the theme layer (R6 high contrast; rule 13b)'; Test = {
+    @{ From = '5.1'; Name = 'no SystemColors / HighContrast reads outside the theme layer (R6 high contrast; rule 13b)'; Test = {
         Hits $all 'SystemInformation\.HighContrast|SystemColors\.' '^(Palette|ThemeHelper|WindowBackdrop)\.cs$' } }
 )
 

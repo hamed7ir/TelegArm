@@ -111,9 +111,56 @@ namespace TelegArm.Helpers
             get
             {
                 var p = _palette;
-                if (p == null) { bool d = IsDark; _palette = p = Helpers.Palette.Build(d, GetWindowsAccentColor(), BaseFor(d), _outBubble); }
+                if (p == null) _palette = p = BuildFor(IsDark);
                 return p;
             }
+        }
+
+        /// <summary>The palette of a mode, or (R6) the high-contrast one, whatever the mode, while Windows' high contrast is on.</summary>
+        private static Palette BuildFor(bool dark)
+        {
+            if (HighContrast) return Helpers.Palette.BuildHighContrast(HcSchemeNow());
+            return Helpers.Palette.Build(dark, GetWindowsAccentColor(), BaseFor(dark), _outBubble);
+        }
+
+        // ── R6 (2026-11-16): Windows' high contrast ──
+        // TELEGARM_HC=black / white: the rig's stand-in for the real switch (no system setting is changed to test it).
+        private static readonly Palette.HcScheme _hcSim = ReadHcSim();
+
+        private static Palette.HcScheme ReadHcSim()
+        {
+            string v = Environment.GetEnvironmentVariable("TELEGARM_HC");
+            return v == "black" ? Palette.HcScheme.Black : v == "white" ? Palette.HcScheme.White : null;
+        }
+
+        private static bool? _hcSys;   // Windows' switch: read once, and again on each Accessibility / Color change
+
+        /// <summary>Windows' high contrast is on (or the rig simulates it): the palette is made of Windows' own colours.</summary>
+        public static bool HighContrast
+        {
+            get
+            {
+                if (_hcSim != null) return true;
+                if (!_hcSys.HasValue) _hcSys = ReadSysHighContrast();
+                return _hcSys.Value;
+            }
+        }
+
+        private static bool ReadSysHighContrast()
+        {
+            try { return System.Windows.Forms.SystemInformation.HighContrast; } catch { return false; }
+        }
+
+        /// <summary>Windows' high-contrast colours now, as fixed values (SystemColors resolve on every read).</summary>
+        private static Palette.HcScheme HcSchemeNow()
+        {
+            if (_hcSim != null) return _hcSim;
+            Func<Color, Color> fix = c => ColorMath.WithAlpha(c, 255);   // a plain ARGB value, read now
+            return new Palette.HcScheme
+            {
+                Window = fix(SystemColors.Window), WindowText = fix(SystemColors.WindowText), Highlight = fix(SystemColors.Highlight),
+                HighlightText = fix(SystemColors.HighlightText), GrayText = fix(SystemColors.GrayText), HotTrack = fix(SystemColors.HotTrack)
+            };
         }
 
         private static Palette _otherMode;
@@ -125,7 +172,7 @@ namespace TelegArm.Helpers
         public static Palette PaletteFor(bool dark)
         {
             var p = Palette;
-            if (p.Dark == dark) return p;
+            if (p.Dark == dark || p.HighContrast) return p;   // R6: high contrast has one palette
             var o = _otherMode;
             if (o == null || o.Dark != dark || o.Accent != p.Accent) _otherMode = o = Helpers.Palette.Build(dark, p.Accent, BaseFor(dark), _outBubble);
             return o;
@@ -135,7 +182,7 @@ namespace TelegArm.Helpers
         private static void Raise()
         {
             _otherMode = null;   // step 5.2: a base change must rebuild the other mode too
-            try { bool d = IsDark; _palette = Helpers.Palette.Build(d, GetWindowsAccentColor(), BaseFor(d), _outBubble); } catch { _palette = null; }
+            try { _palette = null; _palette = BuildFor(IsDark); } catch { _palette = null; }
             ThemeChanged?.Invoke();
         }
 
@@ -144,7 +191,8 @@ namespace TelegArm.Helpers
         /// Dark/Light are fixed; System reads the OS preference (<see cref="IsDarkMode"/>).
         /// </summary>
         public static bool IsDark =>
-            _mode == ThemeMode.Dark || (_mode == ThemeMode.System && IsDarkMode());
+            HighContrast ? (_palette != null && _palette.HighContrast ? _palette.Dark : ColorMath.Luminance(HcSchemeNow().Window) < 0.5)   // R6: the scheme's side
+                         : _mode == ThemeMode.Dark || (_mode == ThemeMode.System && IsDarkMode());
 
         /// <summary>
         /// The single accent-resolution entry point for the whole app. Platform-branched because the user's
@@ -158,6 +206,7 @@ namespace TelegArm.Helpers
         /// </summary>
         public static Color GetWindowsAccentColor()
         {
+            if (HighContrast) return HcSchemeNow().Highlight;              // R6: high contrast is Windows' colours only
             if (_accentOverride.HasValue) return _accentOverride.Value;   // step 1.2: the user's accent wins
             return ReadWindowsAccent();
         }
@@ -285,6 +334,14 @@ namespace TelegArm.Helpers
             // Accent color always follows the OS. The OS light/dark switch (General)
             // only affects the app while we're following the system (Mode == System);
             // a manual Light/Dark override is left untouched.
+            // R6: high contrast turned on or off, or its colours changed: rebuild (a picked accent does not stop this one)
+            if (e.Category == UserPreferenceCategory.Accessibility || e.Category == UserPreferenceCategory.Color) _hcSys = ReadSysHighContrast();
+            bool hcNow = HighContrast, hcWas = _palette != null && _palette.HighContrast;
+            if ((e.Category == UserPreferenceCategory.Accessibility || e.Category == UserPreferenceCategory.Color) && (hcNow || hcWas))
+            {
+                Raise();
+                return;
+            }
             if (e.Category == UserPreferenceCategory.Color)
                 NotifyAccentChanged();   // route through the debounce so it coalesces with the WM_DWMCOLORIZATION path (2.2/2.3)
             else if (e.Category == UserPreferenceCategory.General && _mode == ThemeMode.System)

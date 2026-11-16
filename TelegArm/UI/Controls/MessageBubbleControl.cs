@@ -544,7 +544,7 @@ namespace TelegArm.UI.Controls
             Color textColor = _outgoing ? ThemeHelper.PaletteFor(IsDark).BubbleOutText : (ThemeHelper.PaletteFor(IsDark).BubbleInText);
             using (var b = new SolidBrush(bubbleColor))
             using (var path = DrawHelper.RoundedRect(rect, P(14)))
-                g.FillPath(b, path);
+                { g.FillPath(b, path); HcOutline(g, path); }
 
             int innerX = bx + Pad;
             int ty = by + Pad;
@@ -1237,6 +1237,19 @@ namespace TelegArm.UI.Controls
             }
         }
 
+        /// <summary>R6: in high contrast an incoming bubble has the chat's own colour (Windows' window colour), so it gets a
+        /// one-pixel outline in the text colour; an outgoing one is filled with Windows' highlight and needs none.</summary>
+        private void HcOutline(Graphics g, GraphicsPath path)
+        {
+            if (_outgoing) return;
+            var p = ThemeHelper.PaletteFor(IsDark);
+            if (!p.HighContrast) return;
+            var old = g.SmoothingMode;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            using (var pen = new Pen(p.BubbleInText, 1f)) g.DrawPath(pen, path);
+            g.SmoothingMode = old;
+        }
+
         /// <summary>Builds a wrapping StringFormat with the correct text direction.</summary>
         private StringFormat MakeFormat()
         {
@@ -1429,7 +1442,7 @@ namespace TelegArm.UI.Controls
             Color sub = _outgoing ? ThemeHelper.PaletteFor(IsDark).BubbleOutSub : (ThemeHelper.PaletteFor(IsDark).BubbleInSub);
             using (var b = new SolidBrush(bubbleColor))
             using (var path = DrawHelper.RoundedRect(rect, P(14)))
-                g.FillPath(b, path);
+                { g.FillPath(b, path); HcOutline(g, path); }
 
             int innerX = bx + Pad, ty = by + Pad;
             if (_sender != null) { DrawSenderName(g, innerX, ty, contentW); ty += SenderH; }
@@ -1872,7 +1885,7 @@ namespace TelegArm.UI.Controls
 
                 using (var b = new SolidBrush(bubbleColor))
                 using (var path = DrawHelper.RoundedRect(rect, P(14)))
-                    g.FillPath(b, path);
+                    { g.FillPath(b, path); HcOutline(g, path); }
 
                 int innerX = bx + Pad;
                 int ty = by + Pad;
@@ -1999,7 +2012,7 @@ namespace TelegArm.UI.Controls
 
             using (var b = new SolidBrush(bubbleColor))
             using (var path = DrawHelper.RoundedRect(rect, P(12)))
-                g.FillPath(b, path);
+                { g.FillPath(b, path); HcOutline(g, path); }
 
             bool dlActive = _fileHandle != null && _fileHandle.State == DownloadHandle.DState.Downloading;
             var iconRect = new Rectangle(bx + P(12), rect.Y + P(12), P(48), P(48));
@@ -2046,7 +2059,7 @@ namespace TelegArm.UI.Controls
             if (!IsSticker && !IsRoundVideo)   // stickers + round video notes have no bubble background
                 using (var b = new SolidBrush(bubbleColor))
                 using (var path = DrawHelper.RoundedRect(rect, P(14)))
-                    g.FillPath(b, path);
+                    { g.FillPath(b, path); HcOutline(g, path); }
 
             int innerX = bx + Pad;
             int ty = by + Pad;

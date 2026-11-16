@@ -266,7 +266,9 @@ namespace TelegArm.UI.Controls
                     using (var b = new SolidBrush(Entry.Muted ? mutedGrey : AccentColor))
                     using (var path = DrawHelper.RoundedRect(badge, bh / 2))
                         g.FillPath(b, path);
-                    TextRenderer.DrawText(g, cnt, badgeFont, badge, Entry.Muted ? Color.White : ColorMath.OnColor(AccentColor),
+                    // (in high contrast the muted grey is Windows' text colour: the count takes the colour that reads on it)
+                    Color mutedInk = ThemeHelper.PaletteFor(IsDark).HighContrast ? ColorMath.OnColor(mutedGrey) : Color.White;
+                    TextRenderer.DrawText(g, cnt, badgeFont, badge, Entry.Muted ? mutedInk : ColorMath.OnColor(AccentColor),
                         TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
                     rx -= unreadW + gap;
                 }

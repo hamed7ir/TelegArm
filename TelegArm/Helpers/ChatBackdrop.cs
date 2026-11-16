@@ -60,7 +60,7 @@ namespace TelegArm.Helpers
             if (_specRev != _rev) { _specLight = _specDark = null; _specRev = _rev; }
             if (dark ? (_specDark != null && ReferenceEquals(_specPalDark, pal)) : (_specLight != null && ReferenceEquals(_specPalLight, pal)))
                 return dark ? _specDark : _specLight;
-            var s = Build(AppSettings.Instance.Theme.For(dark), pal, dark);
+            var s = Build(pal.HighContrast ? null : AppSettings.Instance.Theme.For(dark), pal, dark);   // R6: plain in high contrast
             if (dark) { _specDark = s; _specPalDark = pal; } else { _specLight = s; _specPalLight = pal; }
             return s;
         }

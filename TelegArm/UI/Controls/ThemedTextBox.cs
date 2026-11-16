@@ -234,7 +234,7 @@ namespace TelegArm.UI.Controls
         private sealed class CueTextBox : TextBox
         {
             public string Cue = "";
-            public Color CueColor = SystemColors.GrayText;
+            public Color CueColor = ThemeHelper.Palette.TextFaint;   // (the owner sets it from the palette before the first paint)
             public bool Dead;
             private bool _own;
             private const int WM_PAINT = 0x000F, WM_CONTEXTMENU = 0x007B;
