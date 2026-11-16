@@ -118,7 +118,8 @@ namespace TelegArm.Core
         /// file, so the caller exits next.</summary>
         public static void LaunchInstaller(string setupPath, string installDir)
         {
-            string args = "--update \"" + installDir + "\" --wait " + Process.GetCurrentProcess().Id;
+            string args = "--update \"" + installDir + "\" --wait " + Process.GetCurrentProcess().Id
+                          + (AppSettings.Instance.FastUpdates ? " --fast" : "");   // skip preparing for this device (Settings, Advanced)
             if (LaunchOverride != null) { LaunchOverride(setupPath, args); return; }
             Process.Start(new ProcessStartInfo(setupPath, args) { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(setupPath) });
             Log("installer started: " + args);

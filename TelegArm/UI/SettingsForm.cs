@@ -1322,6 +1322,12 @@ namespace TelegArm.UI
             };
             page.Section("Keyboard", keys);
 
+            // Owner 2026-11-16: when TelegArm was installed with "prepare it for this device", every update prepares it again
+            // (a few minutes, about 8 on a Surface RT). On: updates skip that and install fast (Updater: "--fast").
+            var fastUpd = new ToggleRow("Install updates fast", s.FastUpdates) { Subtitle = "Skip preparing for this device, which takes a few minutes" };
+            fastUpd.Changed += (snd, ev) => { s.FastUpdates = fastUpd.On; s.Save(); };
+            page.Section("Updates", fastUpd);
+
             // ── DIAGNOSTICS (LOG-TOGGLE+CRASH batch, amendment 2: per-session files) ──
             var rows = new List<Control>();
             var logSw = new ToggleRow("Enable diagnostic logging", s.FileLogging) { Subtitle = "Session logs for troubleshooting; off is fastest" };

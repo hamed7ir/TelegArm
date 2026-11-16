@@ -38,10 +38,16 @@
 //    --silent [dir] [--no-desktop] [--ngen]
 //                                       install without UI. exit 0 ok, 4 TelegArm is running, 1 error.
 //                                       --ngen: also queue the native images (needs admin: a UAC prompt otherwise)
-//    --update <dir> --wait <pid>        TelegArm's own update (2026-11-15): a small progress window waits for the
+//    --update <dir> --wait <pid> [--fast]
+//                                       TelegArm's own update (2026-11-15): a small progress window waits for the
 //                                       process <pid> (the TelegArm that downloaded this) to end, installs over <dir>
-//                                       (the desktop shortcut kept as it was) and starts TelegArm again.
-//                                       TELEGARM_SETUP_DRYRUN=1: no registry, no shortcuts, no start (the rig).
+//                                       (the desktop shortcut kept as it was) and starts TelegArm again. When the install
+//                                       was prepared for this device (NGen), it prepares the new build too and waits for
+//                                       it ("Don't wait" leaves it to finish in the background); --fast (TelegArm's
+//                                       "Install updates fast") skips that.
+//                                       TELEGARM_SETUP_DRYRUN=1: no registry, no shortcuts, no start (the rig);
+//                                       TELEGARM_SETUP_PREPARE_FAKE=<s>: preparing is a stand-in that runs <s> seconds;
+//                                       TELEGARM_SETUP_TEST="prepare;<dir>" or "quick;<dir>": the wizard installs by itself.
 //    --uninstall <dir> [--silent] [--purge]
 //                                       remove the install. Without --silent it asks, including whether to
 //                                       delete the user's data (default No). exit 0 ok/cancelled, 4 running, 1 error
@@ -119,7 +125,7 @@ namespace TelegArmSetup
                     int pid = 0;
                     for (int i = 0; i + 1 < args.Length; i++)
                         if (Eq(args[i], "--wait")) int.TryParse(args[i + 1], out pid);
-                    Application.Run(new UpdateForm(Clean(dir), pid));
+                    Application.Run(new UpdateForm(Clean(dir), pid, HasFlag(args, "--fast")));
                     return UpdateForm.ExitCode;
                 }
 
@@ -1229,16 +1235,16 @@ namespace TelegArmSetup
     }
 
     /// <summary>The install wizard, with an on-demand "Check requirements" report. The report only informs.</summary>
-    /// <summary>"--update dir --wait pid": TelegArm's own update. Waits for that TelegArm to end (it exits right after
-    /// starting this), installs over its folder and starts it again. Never kills it: still running after two minutes, it
-    /// asks to close it (Retry / Cancel).</summary>
     /// <summary>
     /// Owner 2026-11-15 ("use the installer way for ngen"): TelegArm's own code compiled for this device ahead of time.
     /// Measured on the Surface RT: the main window shows in 1.4 s instead of 3.2 s, a chat in 1.9 s instead of 4.4 s. It
-    /// needs admin (one UAC prompt: the install itself stays per-user) and has to be redone for every build, so the
-    /// installer and the update ask once each time. "/queue:1" hands it to Windows' native image service: the command
-    /// returns at once and the service compiles in the background (8 minutes on the Surface; TelegArm works meanwhile).
-    /// A declined prompt changes nothing: TelegArm runs as before. The 32-bit framework's ngen: TelegArm runs 32-bit.
+    /// needs admin (one UAC prompt: the install itself stays per-user) and has to be redone for every build.
+    /// Owner 2026-11-16: OFF by default, and a choice in the setup window: "Install fast" or "Install and prepare it for
+    /// this device", which runs `ngen install` and waits for it (about 8 minutes on the Surface; "Don't wait" leaves it
+    /// finishing in the background). An update does the same when it was chosen at install (the marker file), unless
+    /// TelegArm's "Install updates fast" setting is on (--fast). Silent installs with --ngen queue it ("/queue:1": Windows'
+    /// native image service compiles in the background). A declined prompt changes nothing: TelegArm runs as before.
+    /// The 32-bit framework's ngen: TelegArm runs 32-bit.
     /// </summary>
     internal static class NativeImages
     {
@@ -1261,8 +1267,40 @@ namespace TelegArmSetup
             string ngen = NgenPath();
             if (ngen == null) return false;
             if (!RunElevated(ngen, "install \"" + Path.Combine(dir, Program.ExeName) + "\" /queue:1 /nologo")) return false;
-            try { File.WriteAllText(Path.Combine(dir, Marker), DateTime.Now.ToString("s")); } catch { }
+            WriteMarker(dir);
             return true;
+        }
+
+        /// <summary>True when the user chose to prepare TelegArm in this folder before (an update repeats it).</summary>
+        internal static bool WasChosen(string dir) { return File.Exists(Path.Combine(dir, Marker)); }
+
+        /// <summary>Starts `ngen install` for TelegArm.exe in <paramref name="dir"/> now (a UAC prompt) and returns the running
+        /// process, to wait for; null when declined or not possible. Call it on the UI thread (the shell shows the prompt).</summary>
+        internal static Process StartPrepare(string dir)
+        {
+            if (Program.DryRun)
+            {
+                // rig: a stand-in that runs TELEGARM_SETUP_PREPARE_FAKE seconds (no admin, no ngen)
+                int secs;
+                if (!int.TryParse(Environment.GetEnvironmentVariable("TELEGARM_SETUP_PREPARE_FAKE"), out secs) || secs <= 0) return null;
+                try
+                {
+                    var fake = Process.Start(new ProcessStartInfo("ping", "-n " + (secs + 1) + " 127.0.0.1") { UseShellExecute = false, CreateNoWindow = true });
+                    if (fake != null) WriteMarker(dir);
+                    return fake;
+                }
+                catch { return null; }
+            }
+            string ngen = NgenPath();
+            if (ngen == null) return null;
+            var p = StartElevated(ngen, "install \"" + Path.Combine(dir, Program.ExeName) + "\" /nologo");
+            if (p != null) WriteMarker(dir);   // (uninstall removes the images even if setup stops waiting)
+            return p;
+        }
+
+        internal static void WriteMarker(string dir)
+        {
+            try { File.WriteAllText(Path.Combine(dir, Marker), DateTime.Now.ToString("s")); } catch { }
         }
 
         /// <summary>Removes them before an uninstall, only when they were queued (otherwise no prompt).</summary>
@@ -1276,46 +1314,59 @@ namespace TelegArmSetup
 
         private static bool RunElevated(string exe, string args)
         {
-            try
+            var p = StartElevated(exe, args);
+            if (p == null) return false;
+            using (p)
             {
-                var psi = new ProcessStartInfo(exe, args) { Verb = "runas", UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden };
-                using (var p = Process.Start(psi))
-                {
-                    if (p == null) return false;
-                    p.WaitForExit(120000);
-                    return p.HasExited && p.ExitCode == 0;
-                }
+                try { p.WaitForExit(120000); return p.HasExited && p.ExitCode == 0; }
+                catch { return false; }
             }
-            catch (System.ComponentModel.Win32Exception) { return false; }   // the prompt was declined
-            catch { return false; }
+        }
+
+        private static Process StartElevated(string exe, string args)
+        {
+            try { return Process.Start(new ProcessStartInfo(exe, args) { Verb = "runas", UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden }); }
+            catch (System.ComponentModel.Win32Exception) { return null; }   // the prompt was declined
+            catch { return null; }
         }
     }
 
+    /// <summary>"--update dir --wait pid": TelegArm's own update. Waits for that TelegArm to end (it exits right after
+    /// starting this), installs over its folder and starts it again. Never kills it: still running after two minutes, it
+    /// asks to close it (Retry / Cancel).</summary>
     internal sealed class UpdateForm : Form
     {
         private readonly string _dir;
+        private bool _chosen;            // "prepare it for this device" was chosen at install (read BEFORE the upgrade removes the marker)
+        private readonly bool _fast;     // --fast: TelegArm's "Install updates fast" is on
         private readonly int _pid;
         private readonly Label _status;
         private readonly ProgressBar _bar;
+        private readonly Button _noWait;
+        private bool _waiting;
+        private System.Windows.Forms.Timer _prepTimer;
         internal static int ExitCode = 1;   // 0 updated, 4 cancelled while TelegArm still ran, 1 failed
 
-        public UpdateForm(string dir, int pid)
+        public UpdateForm(string dir, int pid, bool fast)
         {
             _dir = dir;
             _pid = pid;
+            _fast = fast;
             Text = Program.AppName + " update";
             try { using (var s = Assembly.GetExecutingAssembly().GetManifestResourceStream("setup.icon.ico")) if (s != null) Icon = new Icon(s); } catch { }
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false; MinimizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(440, 124);
+            ClientSize = new Size(440, 136);
             BackColor = Color.White;
             Font = new Font("Segoe UI", 9f);
             var title = new Label { Left = 18, Top = 16, Width = 404, Height = 24, Font = new Font("Segoe UI", 11f, FontStyle.Bold),
                                     Text = "Updating " + Program.AppName + " to " + Info.AppVersion };
             _status = new Label { Left = 18, Top = 48, Width = 404, Height = 18, ForeColor = Color.Gray, Text = "Waiting for " + Program.AppName + " to close..." };
             _bar = new ProgressBar { Left = 18, Top = 76, Width = 404, Height = 14, Style = ProgressBarStyle.Marquee, MarqueeAnimationSpeed = 30 };
-            Controls.Add(title); Controls.Add(_status); Controls.Add(_bar);
+            _noWait = new Button { Left = 322, Top = 100, Width = 100, Height = 26, Text = "Don't wait", Visible = false };
+            _noWait.Click += (s, e) => StopWaiting();
+            Controls.Add(title); Controls.Add(_status); Controls.Add(_bar); Controls.Add(_noWait);
             Shown += (s, e) => { var t = new Thread(Work) { IsBackground = true }; t.Start(); };
         }
 
@@ -1340,6 +1391,7 @@ namespace TelegArmSetup
             try
             {
                 WaitForApp();
+                _chosen = NativeImages.WasChosen(_dir);
                 bool desktop = File.Exists(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), Program.AppName + ".lnk"));
                 Installer.Install(_dir, desktop, Say);
                 Log("installed");
@@ -1400,11 +1452,77 @@ namespace TelegArmSetup
                 return;
             }
             ExitCode = 0;
+            if (_chosen && !_fast) { BeginPrepare(); return; }
+            if (_chosen) NativeImages.WriteMarker(_dir);   // skipped this time; the choice stays for later updates
+            Log("native images: " + (!_chosen ? "not chosen at install" : "skipped (Install updates fast)"));
+            StartAndClose();
+        }
+
+        // ── preparing the new build for this device, as the install did (owner 2026-11-16: "updates do the same") ──
+        private void BeginPrepare()
+        {
+            _status.Text = "Asking permission to prepare " + Program.AppName + " for this device...";
+            _status.Refresh();
+            Process p = NativeImages.StartPrepare(_dir);   // the UAC prompt
+            if (p == null) { Log("native images: not prepared (no permission, or no ngen here)"); StartAndClose(); return; }
+            Log("native images: preparing");
+            _waiting = true;
+            _bar.Style = ProgressBarStyle.Marquee;
+            _noWait.Visible = true;
+            var sw = Stopwatch.StartNew();
+            Action tick = () => _status.Text = "Preparing it for this device: " + (int)sw.Elapsed.TotalMinutes + ":" + sw.Elapsed.Seconds.ToString("00")
+                                               + " (about 8 minutes on a Surface RT)";
+            tick();
+            _prepTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+            _prepTimer.Tick += (s, e) => tick();
+            _prepTimer.Start();
+            var t = new Thread(() =>
+            {
+                bool ok = false;
+                try { p.WaitForExit(); ok = p.ExitCode == 0; } catch { }
+                finally { try { p.Dispose(); } catch { } }
+                try { BeginInvoke((Action)(() => PrepareEnded(ok, sw.ElapsedMilliseconds))); } catch { }
+            }) { IsBackground = true };
+            t.Start();
+        }
+
+        private void PrepareEnded(bool ok, long ms)
+        {
+            if (!_waiting) return;   // "Don't wait" was pressed
+            EndWaiting();
+            Log("native images: " + (ok ? "prepared in " + ms + " ms" : "preparing failed after " + ms + " ms"));
+            StartAndClose();
+        }
+
+        /// <summary>"Don't wait": the preparing goes on by itself (its own process) and finishes in the background.</summary>
+        private void StopWaiting()
+        {
+            if (!_waiting) return;
+            EndWaiting();
+            Log("native images: stopped waiting, it finishes in the background");
+            StartAndClose();
+        }
+
+        private void EndWaiting()
+        {
+            _waiting = false;
+            if (_prepTimer != null) { _prepTimer.Stop(); _prepTimer.Dispose(); _prepTimer = null; }
+            _noWait.Enabled = false;
+        }
+
+        /// <summary>⚠ Not closable while preparing: the window's X would leave nobody to start TelegArm; "Don't wait" does that.</summary>
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            if (_waiting && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; return; }
+            base.OnFormClosing(e);
+        }
+
+        private void StartAndClose()
+        {
+            _bar.Style = ProgressBarStyle.Continuous;
+            _bar.Value = 100;
             if (!Program.DryRun)
             {
-                _status.Text = "Preparing it to start faster...";
-                bool q = NativeImages.Queue(_dir);
-                Log("native images " + (q ? "queued" : "not queued (no permission, or no ngen here)"));
                 _status.Text = "Starting " + Program.AppName + "...";
                 try { Process.Start(new ProcessStartInfo(Path.Combine(_dir, Program.ExeName)) { WorkingDirectory = _dir, UseShellExecute = true }); }
                 catch (Exception ex)
@@ -1420,7 +1538,8 @@ namespace TelegArmSetup
     internal sealed class InstallForm : Form
     {
         private readonly TextBox _path, _reqs;
-        private readonly CheckBox _desktop, _fast;
+        private readonly CheckBox _desktop;
+        private readonly RadioButton _quick, _prepare;
         private readonly Button _install, _cancel, _browse, _check;
         private readonly Label _status;
         private readonly ProgressBar _bar;
@@ -1434,7 +1553,7 @@ namespace TelegArmSetup
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false; MinimizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(560, 470);
+            ClientSize = new Size(560, 486);
             BackColor = Color.White;
             Font = new Font("Segoe UI", 9f);
 
@@ -1446,29 +1565,51 @@ namespace TelegArmSetup
             _path = new TextBox { Left = 18, Top = 100, Width = 430, Text = Program.DefaultDir() };
             _browse = new Button { Left = 458, Top = 98, Width = 84, Height = 26, Text = "Browse..." };
             _browse.Click += (s, e) => { using (var d = new FolderBrowserDialog()) { try { d.SelectedPath = _path.Text; } catch { } if (d.ShowDialog(this) == DialogResult.OK) _path.Text = Path.Combine(d.SelectedPath, Program.InstallFolderName); } };
-            _fast = new CheckBox { Left = 300, Top = 132, Width = 242, Text = "Start faster (asks permission once)", Checked = NativeImages.Available };
-            _fast.Enabled = NativeImages.Available;
-            _desktop = new CheckBox { Left = 18, Top = 132, Width = 270, Text = "Create a desktop shortcut", Checked = true };
+            _desktop = new CheckBox { Left = 18, Top = 132, Width = 524, Text = "Create a desktop shortcut", Checked = true };
+            // Owner 2026-11-16: a choice, "install fast" by default
+            _quick = new RadioButton { Left = 18, Top = 160, Width = 524, Text = "Install fast", Checked = true };
+            _prepare = new RadioButton { Left = 18, Top = 182, Width = 524, Text = "Install and prepare it for this device, so it starts about twice as fast", Enabled = NativeImages.Available };
+            var prepNote = new Label { Left = 35, Top = 204, Width = 507, Height = 48, ForeColor = Color.Gray,
+                                       Text = NativeImages.Available
+                                           ? "Preparing takes a while (about 8 minutes on a Surface RT) and asks permission. Every update prepares it again; "
+                                             + "to make updates install fast, turn on \"Install updates fast\" in Settings > Advanced."
+                                           : "Preparing is not available on this PC." };
 
-            var rl = new Label { Left = 18, Top = 164, Width = 524, Height = 18, Text = "Requirements (optional check - installing does not depend on it):" };
-            _reqs = new TextBox { Left = 18, Top = 184, Width = 524, Height = 150, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, BackColor = Color.White, Font = new Font("Consolas", 8.5f),
+            var rl = new Label { Left = 18, Top = 256, Width = 524, Height = 18, Text = "Requirements (optional check - installing does not depend on it):" };
+            _reqs = new TextBox { Left = 18, Top = 276, Width = 524, Height = 74, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, BackColor = Color.White, Font = new Font("Consolas", 8.5f),
                                   Text = "Press \"Check requirements\" to see whether this PC has what " + Program.AppName + " needs:\r\n.NET Framework 4.7, and the runtimes its bundled libraries use." };
-            _links = new FlowLayoutPanel { Left = 18, Top = 338, Width = 524, Height = 44, FlowDirection = FlowDirection.TopDown, WrapContents = false };
+            _links = new FlowLayoutPanel { Left = 18, Top = 354, Width = 524, Height = 44, FlowDirection = FlowDirection.TopDown, WrapContents = false };
 
-            _status = new Label { Left = 18, Top = 386, Width = 524, Height = 18, ForeColor = Color.Gray, Text = "" };
-            _bar = new ProgressBar { Left = 18, Top = 406, Width = 524, Height = 14, Style = ProgressBarStyle.Marquee, Visible = false, MarqueeAnimationSpeed = 30 };
-            _check = new Button { Left = 18, Top = 430, Width = 150, Height = 28, Text = "Check requirements" };
-            _install = new Button { Left = 380, Top = 430, Width = 84, Height = 28, Text = "Install" };
-            _cancel = new Button { Left = 468, Top = 430, Width = 74, Height = 28, Text = "Cancel" };
+            _status = new Label { Left = 18, Top = 402, Width = 524, Height = 18, ForeColor = Color.Gray, Text = "" };
+            _bar = new ProgressBar { Left = 18, Top = 422, Width = 524, Height = 14, Style = ProgressBarStyle.Marquee, Visible = false, MarqueeAnimationSpeed = 30 };
+            _check = new Button { Left = 18, Top = 446, Width = 150, Height = 28, Text = "Check requirements" };
+            _install = new Button { Left = 380, Top = 446, Width = 84, Height = 28, Text = "Install" };
+            _cancel = new Button { Left = 468, Top = 446, Width = 74, Height = 28, Text = "Cancel" };
+            // it gets the focus when the buttons are disabled for the install, and a TextBox then selects all its text (after
+            // GotFocus: hence the BeginInvoke)
+            _reqs.GotFocus += (s, e) => { try { BeginInvoke((Action)(() => _reqs.Select(0, 0))); } catch { } };
             _check.Click += (s, e) => RunCheck();
             _install.Click += OnInstall;
-            _cancel.Click += (s, e) => Close();
+            _cancel.Click += (s, e) => { if (_prepDir != null) StopWaiting(); else Close(); };
 
             Controls.Add(header);
-            Controls.Add(lbl); Controls.Add(_path); Controls.Add(_browse); Controls.Add(_desktop); Controls.Add(_fast);
+            Controls.Add(lbl); Controls.Add(_path); Controls.Add(_browse); Controls.Add(_desktop); Controls.Add(_quick); Controls.Add(_prepare); Controls.Add(prepNote);
             Controls.Add(rl); Controls.Add(_reqs); Controls.Add(_links);
             Controls.Add(_status); Controls.Add(_bar); Controls.Add(_check); Controls.Add(_install); Controls.Add(_cancel);
             AcceptButton = _install; CancelButton = _cancel;
+
+            // rig (dry run only): TELEGARM_SETUP_TEST = "prepare;<dir>", "prepare-nowait;<dir>" (presses "Don't wait" 3 s into
+            // preparing) or "quick;<dir>" picks the choice and installs into <dir> by itself
+            string test = Program.DryRun ? Environment.GetEnvironmentVariable("TELEGARM_SETUP_TEST") : null;
+            int semi = test != null ? test.IndexOf(';') : -1;
+            if (semi > 0)
+            {
+                string mode = test.Substring(0, semi);
+                bool prep = mode.StartsWith("prepare");
+                _testNoWait = mode == "prepare-nowait";
+                string testDir = test.Substring(semi + 1);
+                Shown += (s, e) => { _path.Text = testDir; _prepare.Checked = prep; _quick.Checked = !prep; OnInstall(this, EventArgs.Empty); };
+            }
         }
 
         private void RunCheck()
@@ -1555,9 +1696,76 @@ namespace TelegArmSetup
                 SetBusy(false);
                 return;
             }
+            if (_prepare.Checked && NativeImages.Available) { Prepare(dir); return; }
+            Done(dir, null);
+        }
+
+        // ── "prepare it for this device" (owner 2026-11-16): ngen install, waited for ──
+        private string _prepDir;            // non-null while waiting
+        private bool _testNoWait;           // rig: press "Don't wait" by itself
+        private System.Windows.Forms.Timer _prepTimer;
+
+        private void Prepare(string dir)
+        {
+            _status.ForeColor = Color.Gray;
+            _status.Text = "Asking permission to prepare " + Program.AppName + " for this device...";
+            _status.Refresh();
+            Process p = NativeImages.StartPrepare(dir);   // the UAC prompt
+            if (p == null) { Done(dir, "It was not prepared for this device (no permission was given). It works the same, it only starts slower."); return; }
+            _prepDir = dir;
+            _bar.Visible = true;
+            _cancel.Text = "Don't wait";
+            _cancel.Enabled = true;
+            var sw = Stopwatch.StartNew();
+            Action tick = () => _status.Text = "Preparing " + Program.AppName + " for this device: " + (int)sw.Elapsed.TotalMinutes + ":" + sw.Elapsed.Seconds.ToString("00")
+                                               + " (about 8 minutes on a Surface RT)";
+            tick();
+            _prepTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+            _prepTimer.Tick += (s, e) => tick();
+            _prepTimer.Start();
+            if (_testNoWait)
+            {
+                var nw = new System.Windows.Forms.Timer { Interval = 3000 };
+                nw.Tick += (s, e) => { nw.Stop(); nw.Dispose(); _cancel.PerformClick(); };
+                nw.Start();
+            }
+            var t = new Thread(() =>
+            {
+                bool ok = false;
+                try { p.WaitForExit(); ok = p.ExitCode == 0; } catch { }
+                finally { try { p.Dispose(); } catch { } }
+                try { BeginInvoke((Action)(() => PrepareEnded(dir, ok))); } catch { }
+            }) { IsBackground = true };
+            t.Start();
+        }
+
+        private void PrepareEnded(string dir, bool ok)
+        {
+            if (_prepDir == null) return;   // the user stopped waiting
+            EndWaiting();
+            Done(dir, ok ? null : "Preparing it for this device did not finish. It works the same, it only starts slower.");
+        }
+
+        /// <summary>"Don't wait": the preparing goes on by itself (it runs in its own process) and finishes in the background.</summary>
+        private void StopWaiting()
+        {
+            string dir = _prepDir;
+            EndWaiting();
+            Done(dir, "It keeps preparing in the background and starts faster once that is done.");
+        }
+
+        private void EndWaiting()
+        {
+            _prepDir = null;
+            if (_prepTimer != null) { _prepTimer.Stop(); _prepTimer.Dispose(); _prepTimer = null; }
+            _cancel.Enabled = false;
+        }
+
+        private void Done(string dir, string note)
+        {
             _busy = false;
-            if (_fast.Checked) NativeImages.Queue(dir);   // one permission prompt; Windows compiles it in the background
-            if (MessageBox.Show(this, Program.AppName + " was installed.\n\nLaunch it now?", "Setup",
+            _bar.Visible = false;
+            if (MessageBox.Show(this, Program.AppName + " was installed." + (note != null ? "\n\n" + note : "") + "\n\nLaunch it now?", "Setup",
                 MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes)
                 try { Process.Start(Path.Combine(dir, Program.ExeName)); } catch { }
             Close();
@@ -1576,7 +1784,8 @@ namespace TelegArmSetup
         private void SetBusy(bool busy)
         {
             _busy = busy;
-            _install.Enabled = _cancel.Enabled = _browse.Enabled = _path.Enabled = _desktop.Enabled = _check.Enabled = !busy;
+            _install.Enabled = _cancel.Enabled = _browse.Enabled = _path.Enabled = _desktop.Enabled = _check.Enabled = _quick.Enabled = !busy;
+            _prepare.Enabled = !busy && NativeImages.Available;
             _bar.Visible = busy;
         }
     }

@@ -146,6 +146,11 @@ namespace TelegArm.Core
         /// hours); a newer one shows an Update pill in the title bar. Settings, About.</summary>
         public bool CheckForUpdates { get; set; } = true;
 
+        /// <summary>Owner 2026-11-16: an update prepares TelegArm for this device again (NGen, a few minutes: about 8 on a
+        /// Surface RT) when that was chosen at install. On: the app asks the installer to skip it ("--fast"), so updates
+        /// install fast. Settings, Advanced.</summary>
+        public bool FastUpdates { get; set; } = false;
+
         /// <summary>FOLDER-SIDEBAR: folder navigation style. false = horizontal TAB bar above the chat list
         /// (default, today's exact layout); true = a vertical icon RAIL left of the chat list (Telegram-Desktop
         /// style). Read ONCE at construction (BuildLeftPanel) — restart to apply, like CompositedScroll, so the
